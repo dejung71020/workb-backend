@@ -295,7 +295,7 @@ pytest tests/domains/meeting
 
 ---
 
-### 1️⃣ 상태 중심 개발 (State-First)
+### 1️⃣ 상태 중심 개발 (State-First), 도메인 API 라우터 연결
 
 - 모든 `service.py`는 **SharedState를 입력으로 받는다**
 - 반환은 반드시 **수정된 필드만 dict 형태로 반환**
@@ -307,6 +307,21 @@ def analyst_service(state):
         "summary": "...",
         "decisions": ["..."]
     }
+```
+
+- 각 팀원이 router.py를 완성하면, 이를 중앙에서 합쳐야 합니다. app/api/v1/api_router.py를 다음과 같이 구성하여 팀원들에게 공지하세요.
+
+```python
+# app/api/v1/api_router.py
+from fastapi import APIRouter
+from app.domains.meeting.router import router as meeting_router
+from app.domains.knowledge.router import router as knowledge_router
+# ... 나머지 도메인 import
+
+api_router = APIRouter()
+api_router.include_router(meeting_router)
+api_router.include_router(knowledge_router)
+# ... 추가 연결
 ```
 
 - ❗ 타 도메인의 데이터는 **읽기(Read-only)**만 가능

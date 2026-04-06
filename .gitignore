@@ -81,3 +81,6 @@ pinecone_cache/
 ._*
 Thumbs.db
 desktop.ini
+
+# 그래프 구조 시각화 이미지
+*.png
