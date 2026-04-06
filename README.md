@@ -215,16 +215,6 @@ copy .env.example .env  # Windows
 
 ---
 
-#### 4. Linting & 코드 품질 설정
-
-```bash
-pre-commit install
-```
-
-👉 이후 commit 시 자동으로 코드 스타일 및 품질 검사가 실행됩니다.
-
----
-
 ## 🧪 테스트 방법
 
 ---

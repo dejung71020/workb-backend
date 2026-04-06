@@ -30,7 +30,4 @@ pymilvus
 # Utils & Formatting
 python-dotenv
 httpx
-black
-isort
-pre-commit
 pytest
