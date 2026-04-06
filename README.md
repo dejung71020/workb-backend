@@ -48,6 +48,8 @@ class DomainBase(BaseModel):
 class DomainCreate(DomainBase):
     pass
 
+# 출력은 이런식으로 Response를 클래스이름 뒤에 붙여주세요.
+# 입력은 Request를 클래스이름 뒤에 붙여주세요.
 class DomainResponse(DomainBase):
     id: int
     created_at: datetime
