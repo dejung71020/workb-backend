@@ -3,42 +3,38 @@ from typing import TypedDict, List, Optional, Annotated
 import operator
 
 class SharedState(TypedDict):
-    # 흐름 제어
+    # --- 1. 서비스 및 흐름 제어 (Control Plane) ---
     next_node: str               # 다음에 실행할 노드명
-    current_scenario: str        # 현재 진행 중인 시나리오 ID
+    current_scenario: str        # 현재 진행 중인 시나리오 ID (SCN-001 등)
+    workspace_id: str            # 웹 온보딩에서 생성된 워크스페이스 고유 ID
+    meeting_id: str              # 현재 세션의 회의 ID (기록 열람 및 저장용)
     
-    # Meeting 도메인 (Scribe)
+    # --- 2. Meeting 도메인 (Scribe) ---
+    # 실시간 발화 스트림 및 화자 정보를 누적 저장
     transcript: Annotated[List[dict], operator.add] # [{speaker: str, text: str, timestamp: str}]
+    agenda: List[dict]           # [회의 전] 설정된 안건 목록 [{"topic": str, "speaker": str}]
     
-    # Knowledge 도메인 (Researcher)
-    search_query: str            # 검색을 위한 쿼리
-    retrieved_docs: List[dict]   # 검색된 과거/외부 문서 리스트
-    chat_history: Annotated[List[dict], operator.add] # [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
-    user_question: str           # 사용자가 챗봇에게 던진 질문
+    # --- 3. Knowledge 도메인 (Researcher) ---
+    search_query: str            # RAG 검색 및 외부 지식 탐색을 위한 쿼리
+    retrieved_docs: List[dict]   # 검색된 과거 회의록 또는 외부 자료 리스트
+    chat_history: Annotated[List[dict], operator.add] # [챗봇] 대화 맥락 유지용 히스토리
+    user_question: str           # 사용자가 챗봇에게 던진 개별 질문
     chat_response: str           # 챗봇의 최종 답변
     
-    # Intelligence 도메인 (Analyst)
-    summary: str                 # 요약 결과
-    decisions: List[str]         # 결정된 사항들
+    # --- 4. Intelligence 도메인 (Analyst) ---
+    summary: str                 # 회의 전체 요약본 (초안 및 최종본)
+    decisions: List[str]         # 도출된 주요 결정사항 및 미결 이슈 목록
+    previous_context: str        # [회의 전] AI가 정리한 이전 회의 맥락 데이터
     
-    # Vision 도메인 (Interpreter)
-    screenshot_analysis: str     # 캡처 이미지 해석 텍스트
+    # --- 5. Vision 도메인 (Interpreter) ---
+    screenshot_analysis: str     # 공유 화면/이미지에서 추출된 OCR 및 맥락 해석 텍스트
     
-    # Action 도메인 (Architect)
-    wbs: List[dict]              # [{task: str, owner: str, due: str}]
-    external_links: dict         # Jira 티켓 번호, 엑셀 다운로드 링크 등
+    # --- 6. Action 도메인 (Architect) ---
+    wbs: List[dict]              # [회의 후] 생성된 WBS [{task: str, owner: str, due: str}]
+    realtime_actions: List[dict] # [회의 중] 실시간 감지된 액션 아이템 패널 데이터
+    external_links: dict         # Jira 티켓, Google Calendar 이벤트, 내보내기 링크 정보
     
-    # Quality 도메인 (QA/Ops)
-    accuracy_score: float        # 결과물 정확도 (0~1)
-    errors: List[str]            # 발생한 에러 로그
-
-
-    # 웹 컨텍스트 정보 추가
-    workspace_id: str            # 현재 워크스페이스 ID
-    meeting_id: str              # 현재 회의 고유 ID
-    agenda: List[dict]           # 웹에서 설정한 안건 목록 [{"topic": str, "speaker": str}]
-    integration_settings: dict   # 연동된 서비스 목록 및 권한 정보
-    
-    # AI 기능용 확장
-    previous_context: str        # [AI] 이전 회의 맥락 정리 데이터
-    realtime_actions: List[dict] # [AI] 실시간 감지된 액션 아이템
+    # --- 7. 연동 및 품질 관리 (Integration & Quality) ---
+    integration_settings: dict   # OAuth로 연결된 서비스 상태 (Jira, Slack, Calendar 등)
+    accuracy_score: float        # 결과물(요약, WBS)에 대한 품질 점수 (0~1)
+    errors: List[str]            # 각 노드 실행 중 발생한 에러 로그 누적

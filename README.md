@@ -278,14 +278,23 @@ pytest tests/domains/meeting
 각 담당자는 본인 도메인 폴더(`app/domains/{domain}/`) 내의 로직을 책임지며,
 **SharedState에서 본인 영역의 Key만 업데이트**합니다.
 
-| 도메인           | 담당자 역할 (핵심 구현 기능)                         | 담당 SharedState Key                                                               |
-| ---------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| **Meeting**      | 음성 → 텍스트 변환(STT) 및 화자 분리 로직 구현       | `transcript`                                                                       |
-| **Knowledge**    | 과거 문서 검색(RAG) 및 챗봇 대화 엔진 구현           | `search_query`, `retrieved_docs`, `chat_history`, `user_question`, `chat_response` |
-| **Intelligence** | 회의 내용 분석, 핵심 요약 및 주요 결정사항 추출      | `summary`, `decisions`                                                             |
-| **Vision**       | 회의 중 공유된 이미지/스크린샷 분석 및 텍스트 추출   | `screenshot_analysis`                                                              |
-| **Action**       | 분석 결과 기반 WBS 생성 및 외부 툴(Jira 등) 연동     | `wbs`, `external_links`                                                            |
-| **Quality**      | 에이전트 결과물의 정확도 검증 및 전체 에러 로그 관리 | `accuracy_score`, `errors`                                                         |
+| 도메인 | 핵심 기능 및 웹 서비스 역할 | 관리 데이터 (SharedState Key) |
+|--------|----------------------------|------------------------------|
+| System (Context) | [온보딩/설정]<br>워크스페이스 및 개별 회의 세션의 고유 식별자 관리.<br>외부 서비스(Jira, Slack 등)의 OAuth 연동 설정 정보 보유. | workspace_id, meeting_id, next_node, current_scenario |
+| Meeting (Scribe) | [회의 중]<br>실시간 음성-텍스트 변환(STT) 및 화자 분리 발화 스트림 생성.<br>웹에서 설정된 **안건(agenda)**을 기반으로 회의 흐름을 추적함. | transcript, agenda |
+| Knowledge (Researcher) | [웹 챗봇] [회의 중/후]<br>즉석 자료 검색 패널 대응 및 과거 회의록 RAG 검색.<br>사용자 질문에 대한 챗봇 답변 생성 및 맥락 유지. | search_query, retrieved_docs, chat_history, user_question, chat_response |
+| Intelligence (Analyst) | [회의 전/후]<br>이전 회의 맥락 요약 제공.<br>최종 회의록/결정사항 도출.<br>회의 전체 대화와 검색된 문서를 결합하여 분석 수행. | summary, decisions, previous_context |
+| Vision (Interpreter) | [회의 중]<br>공유된 화면이나 캡처.<br>이미지의 비전 분석 결과 제공.<br>OCR을 통해 화면 내 텍스트와 발표 맥락을 결합함. | screenshot_analysis |
+| Action (Architect) | [회의 중/후]<br>실시간 액션 아이템 감지.<br>최종 WBS/태스크 리스트 생성.<br>Jira, 캘린더 등 외부 서비스 연동용 데이터 링크 생성. | wbs, realtime_actions, external_links |
+| Quality (QA/Ops) | [시스템]<br>에이전트가 도출한 결과물(요약, WBS 등)의 정확도 검증 및 전체 프로세스 에러 모니터링. | integration_settings, accuracy_score, errors |                                                       |
+
+---
+
+1. State 파일 최종 확인: app/core/graph/state.py에 위에서 정의한 모든 키가 누락 없이 포함되어 있는지 확인합니다.
+
+2. Supervisor 라우팅 로직: app/core/graph/supervisor.py에서 next_node와 current_scenario를 활용해 각 시나리오별로 에이전트들을 적절히 호출하도록 로직을 구성합니다.
+
+3. 노드 등록: app/core/graph/workflow.py에 각 도메인의 서비스 함수를 노드로 등록하고, SharedState를 통해 데이터를 주고받도록 연결합니다.
 
 ---
 
