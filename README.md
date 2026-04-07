@@ -6,10 +6,11 @@
 
 ## 1. 폴더 구조 및 역할 (Layered Architecture)
 
-각 도메인은 `app/domains/{domain_name}/` 폴더 내에 아래 5개 파일을 기본으로 구성합니다.
+각 도메인은 `app/domains/{domain_name}/` 폴더 내에 아래 6개 파일을 기본으로 구성합니다.
 
 | 파일명          | 역할                       | 비고                                       |
 | :-------------- | :------------------------- | :----------------------------------------- |
+| `agent_utils.py`| **Prompt store**           | LLM Prompt를 정의        |
 | `models.py`     | **Database Entity**        | SQLAlchemy를 이용한 DB 테이블 정의         |
 | `schemas.py`    | **Data Contract (DTO)**    | Pydantic을 이용한 입출력 규격 정의         |
 | `repository.py` | **Data Access (Hand)**     | 순수 DB CRUD 로직 (비즈니스 로직 금지)     |
@@ -147,7 +148,7 @@ async def create_endpoint(data: schemas.DomainCreate, db: Session = Depends(get_
 
 ---
 
-## 5. Github 통일
+## 5. Github 통일 예시
 
 - 6명이 동시에 코드를 밀면 충돌이 잦습니다. 도메인별 영역을 확실히 나누는 규칙이 필요합니다.
   Branch: feature/meeting, feature/action, feature/core 등 도메인별 브랜치 사용.
@@ -174,8 +175,6 @@ Commit Message: feat(meeting): add speaker diarization logic 처럼 접두어를
 ---
 
 ## 8. 실행 방법, 테스트 방법
-
----
 
 ### 🚀 [초기 세팅 방법]
 
