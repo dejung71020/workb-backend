@@ -28,10 +28,14 @@ structure = {
             "quality": {}
         },
         "infra": {
-            "database": {},
-            "llm": {},
-            "vector_db": {},
-            "clients": {}
+            "clients": {
+                "google.py": "", # Google Calendar API 클라이언트
+                "jira.py": "",   # JIRA API 클라이언트
+                "slack.py": "",  # Slack API 클라이언트
+            },
+            "websocket": {
+                "manager.py": "" # 실시간 회의 스트리밍 관리자
+            }
         }
     },
     "tests": {},

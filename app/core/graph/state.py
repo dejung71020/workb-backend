@@ -31,3 +31,14 @@ class SharedState(TypedDict):
     # Quality 도메인 (QA/Ops)
     accuracy_score: float        # 결과물 정확도 (0~1)
     errors: List[str]            # 발생한 에러 로그
+
+
+    # 웹 컨텍스트 정보 추가
+    workspace_id: str            # 현재 워크스페이스 ID
+    meeting_id: str              # 현재 회의 고유 ID
+    agenda: List[dict]           # 웹에서 설정한 안건 목록 [{"topic": str, "speaker": str}]
+    integration_settings: dict   # 연동된 서비스 목록 및 권한 정보
+    
+    # AI 기능용 확장
+    previous_context: str        # [AI] 이전 회의 맥락 정리 데이터
+    realtime_actions: List[dict] # [AI] 실시간 감지된 액션 아이템
