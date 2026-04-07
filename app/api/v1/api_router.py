@@ -2,12 +2,14 @@
 from fastapi import APIRouter
 
 # 각 도메인별 라우터 임포트
-from app.domains.user.router import router as user_router
 from app.domains.meeting.router import router as meeting_router
 from app.domains.intelligence.router import router as intelligence_router
 from app.domains.knowledge.router import router as knowledge_router
 from app.domains.action.router import router as action_router
 from app.domains.vision.router import router as vision_router
+from app.domains.user.router import router as user_router
+from app.domains.workspace.router import router as workspace_router
+from app.domains.integration.router import router as integration_router
 
 api_router = APIRouter()
 
@@ -28,3 +30,12 @@ api_router.include_router(action_router, prefix="/actions", tags=["Actions"])
 
 # 6. 비전 도메인 (스크린샷 분석 결과 조회)
 api_router.include_router(vision_router, prefix="/vision", tags=["Vision"])
+
+# 7. 사용자 로그인, 회원가입 도메인
+api_router.include_router(user_router, prefix="/users", tags=["Users"])
+
+# 8. 워크스페이스 도메인
+api_router.include_router(workspace_router, prefix="/workspaces", tags=["Workspace"])
+
+# 9. API 연동 통합 도메인
+api_router.include_router(integration_router, prefix="/integrations", tags=["Integration"])
