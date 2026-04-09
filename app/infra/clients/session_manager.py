@@ -6,6 +6,8 @@ class ClientSessionManager:
     """
     애플리케이션 전역에서 httpx.AsyncClient 인스턴스를 하나만 생성하고 관리하는 싱글톤 클래스
     """
+    _client: Optional[httpx.AsyncClient] = None
+
     @classmethod
     async def get_client(cls) -> httpx.AsyncClient:
         """

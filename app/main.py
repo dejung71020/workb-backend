@@ -26,4 +26,4 @@ async def health_check():
     return {"status": "healthy"}
 
 # 통합 라우터 연결
-app.include_router(api_router, prefix="/api/v1")
+# app.include_router(api_router, prefix="/api/v1")
