@@ -2,8 +2,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.api_router import api_router
+from app.core.lifespan import lifespan
 
-app = FastAPI(title="Meeting Assistant Agent API")
+app = FastAPI(title="Meeting Assistant Agent API", lifespan=lifespan)
 
 # 웹 프론트엔드 통신 허용 (CORS)
 app.add_middleware(
