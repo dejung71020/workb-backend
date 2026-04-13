@@ -38,3 +38,5 @@ class SharedState(TypedDict):
     integration_settings: dict   # OAuth로 연결된 서비스 상태 (Jira, Slack, Calendar 등)
     accuracy_score: float        # 결과물(요약, WBS)에 대한 품질 점수 (0~1)
     errors: List[str]            # 각 노드 실행 중 발생한 에러 로그 누적
+
+    function_type: str           # "chat|search|summary|report|calendar"
