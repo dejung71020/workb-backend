@@ -24,8 +24,10 @@ pydantic-settings==2.13.1
 pydantic[email]==2.12.5
 
 # Vector DB
-pinecone-client==6.0.0
-pymilvus==2.6.11
+chromadb==1.0.7
+
+# MongoDB
+motor==3.7.0
 
 # Cache
 redis==7.4.0
