@@ -17,8 +17,8 @@ from app.domains.integration.models import Integration
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if settings.DEBUG:
-          Base.metadata.drop_all(bind=engine)
-          print("🗑️  [DEBUG] 전체 테이블 삭제 완료")
+        Base.metadata.drop_all(bind=engine)
+        print("🗑️  [DEBUG] 전체 테이블 삭제 완료")
 
     Base.metadata.create_all(bind=engine)
     print("✅  테이블 생성 완료")
