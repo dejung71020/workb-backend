@@ -1,0 +1,73 @@
+version: "3.9"
+
+services:
+
+  # ── MySQL ─────────────────────────────────────────────
+  mysql:
+    image: mysql:8.0
+    container_name: workb_mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: "1234"
+      MYSQL_DATABASE: meeting_assistant
+      MYSQL_CHARSET: utf8mb4
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+
+  # ── MongoDB ───────────────────────────────────────────
+  mongodb:
+    image: mongo:7.0
+    container_name: workb_mongodb
+    restart: always
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: "1234"
+      MONGO_INITDB_DATABASE: meeting_assistant
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  # ── Redis ─────────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: workb_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # ── ChromaDB ──────────────────────────────────────────
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: workb_chromadb
+    restart: always
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+
+  # ── n8n ───────────────────────────────────────────────
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: workb_n8n
+    restart: always
+    ports:
+      - "5678:5678"
+    environment:
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: admin
+      N8N_BASIC_AUTH_PASSWORD: admin1234
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+volumes:
+  mysql_data:
+  mongo_data:
+  redis_data:
+  chroma_data:
+  n8n_data:

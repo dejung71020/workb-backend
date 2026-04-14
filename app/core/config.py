@@ -14,8 +14,12 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "secret_key"
     ALGORITHM: str = "HS256"
     REDIS_URL: str = "redis://localhost:6379"
+    MONGODB_URL: str = "mongodb://localhost:27017"
+    CHROMA_HOST: str = "localhost"
+    CHROMA_PORT: int = 8000
     # 2. AI 
     OPENAI_API_KEY: Optional[str] = None
+    GEMINI_API_KEY: Optional[str] = None
     TAVILY_API_KEY: Optional[str] = None
 
     # 3. 외부 인프라

@@ -4,15 +4,13 @@ from langgraph.graph import StateGraph, END
 from app.core.graph.state import SharedState
 from app.core.graph.supervisor import supervisor_node
 from app.domains.knowledge.agent_utils import (
-    intent_classifier, chat_node, summary_node, 
-    search_node, db_query_node, report_node, calendar_node
+    classify_intent, knowledge_node,summary_node,
 )
 
 workflow = StateGraph(SharedState)
 
 # 1. 노드 등록 (Placeholder)
 workflow.add_node("supervisor", supervisor_node)
-
 workflow.add_node("meeting", lambda state: {"next_node": "supervisor"})
 workflow.add_node("knowledge", lambda state: {"next_node": "supervisor"})
 workflow.add_node("intelligence", lambda state: {"next_node": "supervisor"})
@@ -47,29 +45,21 @@ app_graph = workflow.compile()
 
 # knowledge 노드를 서브그래프로 교체
 knowledge_graph = StateGraph(SharedState)
-knowledge_graph.add_node("intent_classifier", intent_classifier)
-knowledge_graph.add_node("chat", chat_node)
+knowledge_graph.add_node("classifier", classify_intent)
+knowledge_graph.add_node("knowledge_agent", knowledge_node)
 knowledge_graph.add_node("summary", summary_node)
-knowledge_graph.add_node("search", search_node)
-knowledge_graph.add_node("db_query", db_query_node)
-knowledge_graph.add_node("report", report_node)
-knowledge_graph.add_node("calendar", calendar_node)
 
-knowledge_graph.set_entry_point("intent_classifier")
+knowledge_graph.set_entry_point("classifier")
 knowledge_graph.add_conditional_edges(
-    "intent_classifier",
+    "classifier",
     # state["function_type"] 값에 따라 해당 노드로 이동
     lambda state: state["function_type"],
     {
-        "chat": "chat",
         "summary": "summary",
-        "search": "search",
-        "db_query": "db_query",
-        "report": "report",
-        "calendar": "calendar",
+        "agent": "knowledge_agent",
     }
 )
-for node in ["chat", "summary", "search", "db_query", "report", "calendar"]:
-    knowledge_graph.add_edge(node, END)
+knowledge_graph.add_edge("knowledge_agent", END)
+knowledge_graph.add_edge("summary", END)
 
 knowledge_app = knowledge_graph.compile()
