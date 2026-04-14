@@ -26,9 +26,11 @@ class IntegrationListResponse(BaseModel):
 class IntegrationConnectRequest(BaseModel):
     """
     서비스 연동 등록 요청.
-    n8n -> webhook_url 직접 저장
+    n8n 서버 주소만 입력하면 백엔드가 webhook_url 자동 조합.
+    n8n_base_url = "http://localhost:5678"
+    -> "http://localhost:5678/webhook/google-calendar-ws1"
     """
-    webhook_url: str
+    n8n_base_url: str
 
 class WebhookTestRequest(BaseModel):
     """

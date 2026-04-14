@@ -48,7 +48,7 @@ async def connect_integration(
     """
     서비스 연동 등록 - webhook_url 저장
     """
-    item = service.connect_integration(db, workspace_id, service_name, body.webhook_url)
+    item = service.connect_integration(db, workspace_id, service_name, body.n8n_base_url)
     webhook_url = item.extra_config.get("webhook_url") if item.extra_config else None
     return IntegrationResponse(
         id=item.id,

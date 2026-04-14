@@ -91,16 +91,21 @@ external_links = {
 
 > 각 서비스의 연동 상태 + n8n webhook_url
 > 회의 시작 시 service.py가 DB `integrations` 테이블에서 로드하여 state에 올림
+>
+> **webhook_url 구조:**
+> `{n8n_base_url}/webhook/{서비스}-ws{workspace_id}`
+> 예: `http://localhost:5678/webhook/google-calendar-ws1`
+> 어드민이 n8n 서버 주소만 입력하면 백엔드가 자동 조합
 
 ```python
 integration_settings = {
     "jira": {
         "is_connected": True,
-        "webhook_url": "http://localhost:5678/webhook/abc111"
+        "webhook_url": "http://localhost:5678/webhook/jira-ws1"
     },
     "slack": {
         "is_connected": True,
-        "webhook_url": "http://localhost:5678/webhook/abc222"
+        "webhook_url": "http://localhost:5678/webhook/slack-ws1"
     },
     "notion": {
         "is_connected": False,
@@ -108,7 +113,7 @@ integration_settings = {
     },
     "google_calendar": {
         "is_connected": True,
-        "webhook_url": "http://localhost:5678/webhook/abc333"
+        "webhook_url": "http://localhost:5678/webhook/google-calendar-ws1"
     },
     "kakao": {
         "is_connected": False,

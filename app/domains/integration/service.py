@@ -10,6 +10,15 @@ from app.infra.clients.n8n import N8nClient
 
 logger= logging.getLogger(__name__)
 
+# 서비스별 n8n webhook path
+SERVICE_PATHS = {
+    ServiceType.google_calendar : "google-calendar",
+    ServiceType.jira            : "jira",
+    ServiceType.slack           : "slack",
+    ServiceType.kakao           : "kakao",
+    ServiceType.notion          : "notion",
+}
+
 # --- LangGraph Node ---
 
 async def load_integration_settings(state: SharedState, db: Session):
@@ -37,12 +46,18 @@ def get_integrations(db: Session, workspace_id: int) -> List[Integration]:
     return repository.get_integrations(db, workspace_id)
 
 def connect_integration(
-        db: Session, workspace_id: int, service: ServiceType, webhook_url: str
+        db: Session, workspace_id: int, service: ServiceType, n8n_base_url: str
 ) -> Integration:
     """
-    서비스 연동 등록
-    webhook_url 을 extra_config에 저장하고 is_connected=True로 변경.
+    n8n_base_url + service + workspace_id 조합
+    n8n_base_url = http://localhost:5678
+    service = slack
+    workspace_id = 1
+    -> http://localhost:5678/webhook/slack-wc1
     """
+    path = f"{SERVICE_PATHS[service]}-ws{workspace_id}"
+    webhook_url = f"{n8n_base_url.rstrip('/')}/webhook/{path}"
+    logger.info(f"webhook_url -> {webhook_url}")
     return repository.upsert_integration(db, workspace_id, service, webhook_url)
 
 def disconnect_integration(
