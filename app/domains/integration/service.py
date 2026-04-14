@@ -53,7 +53,7 @@ def connect_integration(
     n8n_base_url = http://localhost:5678
     service = slack
     workspace_id = 1
-    -> http://localhost:5678/webhook/slack-wc1
+    -> http://localhost:5678/webhook/slack-ws1
     """
     path = f"{SERVICE_PATHS[service]}-ws{workspace_id}"
     webhook_url = f"{n8n_base_url.rstrip('/')}/webhook/{path}"
@@ -84,3 +84,19 @@ async def test_webhook(webhook_url: str) -> bool:
         logger.error(f"테스트 실패 : {str(e)}")
         return False
 
+async def setup_n8n_workflows(workspace_id: int) -> None:
+    """
+    워크스페이스 생성 시 호출.
+    n8n에 서비스별 워크플로우 5개를 자동 생성하고 활성화.
+    이미 존재하면 스킵
+    """
+    n8n = N8nClient()
+    for service_type, path_prefix in SERVICE_PATHS.items():
+        path = f"{path_prefix}-ws{workspace_id}"
+        name = f"[ws{workspace_id}] {service_type.value}"
+        try:
+            await n8n.create_and_activate_workflow(name=name, path=path)
+            print(f"{name} 성공")
+        except Exception as e:
+            print(f"❌ {name} 실패: {e}")
+            logger.error(f"n8n 워크플로우 생성 실패 [{name}]: {e}")

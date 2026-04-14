@@ -47,7 +47,8 @@ class Settings(BaseSettings):
 
     # 8. n8n
     N8N_BASE_URL: str = "http://localhost:5678"
-
+    N8N_API_KEY: Optional[str] = None
+    
     model_config = SettingsConfigDict(
         env_file='.env',
         env_file_encoding='utf-8',

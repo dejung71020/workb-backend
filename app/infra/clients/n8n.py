@@ -1,7 +1,9 @@
 # app/infra/clinets/n8n.py
+import uuid
 import logging
 from typing import Dict, Any
 from .session_manager import ClientSessionManager
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -92,3 +94,75 @@ class N8nClient:
         except Exception as e:
             logger.error(f"n8n 웹훅 에러 : {str(e)}")
             raise e
+        
+    def _api_headers(self) -> Dict[str, str]:
+        return {
+            "X-N8N-API-KEY": settings.N8N_API_KEY or "",
+            "Content-Type": "application/json",
+        }
+
+    def _build_workflow(self, name: str, path: str) -> Dict[str, Any]:
+        """Webhook 단일 노드 — 수신 즉시 200 응답"""
+        return {
+            "name": name,
+            "nodes": [
+                {
+                    "id": str(uuid.uuid4()),
+                    "name": "Webhook",
+                    "type": "n8n-nodes-base.webhook",
+                    "typeVersion": 2,
+                    "position": [250, 300],
+                    "parameters": {
+                        "httpMethod": "POST",
+                        "path": path,
+                        "responseMode": "onReceived",
+                        "options": {},
+                    },
+                    "webhookId": str(uuid.uuid4()),
+                },
+            ],
+            "connections": {},
+            "settings": {"executionOrder": "v1"},
+            "staticData": None,
+        }
+
+    async def create_and_activate_workflow(self, name: str, path: str) -> str:
+        """
+        워크플로우 생성 후 활성화.
+        이미 존재하면 스킵 (idempotent).
+        Returns: workflow_id
+        """
+        client = await ClientSessionManager.get_client()
+        headers = self._api_headers()
+        base = settings.N8N_BASE_URL.rstrip("/")
+
+        # 기존 워크플로우 확인
+        res = await client.get(f"{base}/api/v1/workflows", headers=headers)
+        res.raise_for_status()
+        for wf in res.json().get("data", []):
+            if wf.get("name") == name:
+                logger.info(f"워크플로우 이미 존재, 스킵: {name}")
+                if not wf.get("active"):
+                    await client.post(
+                        f"{base}/api/v1/workflows/{wf['id']}/activate",
+                        headers=headers
+                    )
+                return wf["id"]
+
+        # 생성
+        body = self._build_workflow(name, path)
+        res = await client.post(f"{base}/api/v1/workflows", json=body, headers=headers)
+        if res.status_code >= 400:
+            logger.error(f"n8n 응답 상세: {res.text}")
+        res.raise_for_status()
+        workflow_id = res.json()["id"]
+        logger.info(f"워크플로우 생성 완료: {name} (id={workflow_id})")
+
+        # 활성화
+        await client.post(
+            f"{base}/api/v1/workflows/{workflow_id}/activate",
+            headers=headers
+        )
+        logger.info(f"워크플로우 활성화 완료: {name}")
+
+        return workflow_id
