@@ -6,7 +6,7 @@ from fastapi import APIRouter
 # from app.domains.intelligence.router import router as intelligence_router
 from app.domains.knowledge.router import router as knowledge_router
 # from app.domains.action.router import router as action_router
-# from app.domains.vision.router import router as vision_router
+from app.domains.vision.router import router as vision_router
 # from app.domains.user.router import router as user_router
 # from app.domains.workspace.router import router as workspace_router
 # from app.domains.integration.router import router as integration_router
@@ -23,13 +23,13 @@ api_router = APIRouter()
 # api_router.include_router(intelligence_router, prefix="/intelligence", tags=["Intelligence"])
 
 # 4. 지식 베이스 도메인 (과거 자료 검색, 챗봇 대화 엔드포인트)
-api_router.include_router(knowledge_router, prefix="", tags=["Knowledge"])
+api_router.include_router(knowledge_router, prefix="/knowledge", tags=["Knowledge"])
 
 # 5. 액션 도메인 (생성된 WBS 조회, 외부 툴 연동 상태 확인)
 # api_router.include_router(action_router, prefix="/actions", tags=["Actions"])
 
 # 6. 비전 도메인 (스크린샷 분석 결과 조회)
-# api_router.include_router(vision_router, prefix="/vision", tags=["Vision"])
+api_router.include_router(vision_router, prefix="/vision", tags=["Vision"])
 
 # 7. 사용자 로그인, 회원가입 도메인
 # api_router.include_router(user_router, prefix="/users", tags=["Users"])

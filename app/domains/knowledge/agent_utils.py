@@ -1,5 +1,4 @@
-from re import T
-import redis, json, os
+import json
 from langchain.tools import tool
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_openai import ChatOpenAI
@@ -11,9 +10,9 @@ import chromadb
 
 from app.core.config import settings
 from app.core.graph.state import SharedState
+from app.utils.redis_utils import get_meeting_context
 
 # --- 클라이언트 초기화 ---
-r = redis.from_url(settings.REDIS_URL)
 mongo_db = MongoClient(settings.MONGODB_URL)["workb"]
 chroma_client = chromadb.HttpClient(
     host=settings.CHROMA_HOST,
@@ -28,29 +27,6 @@ llm = ChatOpenAI(
     model="gpt-4o-mini",
     api_key=settings.OPENAI_API_KEY
 )
-
-# --- Redis reader ---
-def get_meeting_context(meeting_id: str) -> str:
-    # 발화 전체 읽기    
-    utterances_raw = r.lrange(f"meeting:{meeting_id}:utterances", 0, -1)
-    # 화자 정보 읽기
-    speakers = {
-        k.decode(): v.decode()
-        for k, v in r.hgetall(f"meeting:{meeting_id}:speakers").items()
-    }
-
-    print(f"[DEBUG] meeting_id: {meeting_id}")
-    print(f"[DEBUG] utterances count: {len(utterances_raw)}")
-    print(f"[DEBUG] speakers: {speakers}")
-
-    lines = []
-    for u in utterances_raw:
-        utterance = json.loads(u)
-        name = speakers.get(utterance["speaker_id"], utterance["speaker_id"])
-        lines.append(f"[{name}] {utterance['content']}")
-    context = "\n".join(lines)
-    print(f"[DEBUG] context:\n{context}")
-    return context
 
 # --- 도구 정의 ---
 @tool
@@ -199,9 +175,11 @@ def knowledge_node(state: SharedState) -> dict:
     당신은 회의 AI 어시스턴트입니다.
 
     현재 회의 발화 내용:
-    (meeting_context)
-
+    {meeting_context}
+    
     규칙:
+    - 회의 발화 데이터는 최대 약 30초 전까지의 내용만 반영됩니다. 가장 최근 발화는 포함되지 않을 수 있음을
+  답변에 명시하세요.
     - 회의 내용만으로 답할 수 있으면 도구 없이 답변하세요.
     - 정보가 불완전하더라도 회의에서 언급된 내용을 바탕으로 최대한 답변하세요.
     - 확실하지 않은 정보는 "~라고 언급됐습니다" 형식으로 답변하세요.
@@ -230,7 +208,8 @@ def knowledge_node(state: SharedState) -> dict:
 def summary_node(state: SharedState) -> dict:
     context = get_meeting_context(state["meeting_id"])
     prompt = f"""
-    다음은 현재까지의 회의 발화 내용입니다.
+    다음은 현재까지의 회의 발화 내용입니다. (STT 처리 딜레이로 인해 최근 약 30초 이내 발화는 포함되지 않을 수
+   있습니다.)
 
     {context}
 
