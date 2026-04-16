@@ -3,6 +3,7 @@ from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.infra.database.session import get_db
@@ -107,6 +108,14 @@ def create_workspace_meeting(
     - meetings + meeting_participants 를 단일 트랜잭션으로 저장
     - 생성자는 참석자에 포함되며 is_host=1
     """
-    return MeetingCreateService.create_meeting(
-        db, workspace_id, current_user_id, body
-    )
+    try:
+        return MeetingCreateService.create_meeting(
+            db, workspace_id, current_user_id, body
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"회의 생성 중 오류가 발생했습니다: {e}",
+        )

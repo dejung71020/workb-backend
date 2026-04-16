@@ -2,6 +2,7 @@
 from collections import defaultdict
 from datetime import datetime, time
 
+from fastapi import HTTPException, status
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
@@ -33,6 +34,17 @@ class MeetingCreateService:
         created_by: int,
         payload: CreateMeetingRequest,
     ) -> CreateMeetingResponse:
+        now = (
+            datetime.now(payload.scheduled_at.tzinfo)
+            if getattr(payload.scheduled_at, "tzinfo", None) is not None
+            else datetime.now()
+        )
+        if payload.scheduled_at < now:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="현재보다 이전 시간으로 회의를 예약할 수 없습니다.",
+            )
+
         meeting = Meeting(
             workspace_id=workspace_id,
             created_by=created_by,
