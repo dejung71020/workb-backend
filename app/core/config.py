@@ -46,11 +46,7 @@ class Settings(BaseSettings):
     # 7. 카카오
     KAKAO_REST_API_KEY: Optional[str] = None
 
-    # 8. n8n
-    N8N_BASE_URL: str = "http://localhost:5678"
-    N8N_API_KEY: Optional[str] = None
-
-    # 9. FRONTEND
+    # 8. FRONTEND
     FRONTEND_URL: str = "http://localhost:5173"
     
     model_config = SettingsConfigDict(

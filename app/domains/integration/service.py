@@ -15,15 +15,6 @@ from app.core.config import settings
 
 logger= logging.getLogger(__name__)
 
-# 서비스별 n8n webhook path
-SERVICE_PATHS = {
-    ServiceType.google_calendar : "google-calendar",
-    ServiceType.jira            : "jira",
-    ServiceType.slack           : "slack",
-    ServiceType.kakao           : "kakao",
-    ServiceType.notion          : "notion",
-}
-
 # --- state  인코딩, 디코딩 (OAuth state parameters) ---
 def _encode_state(workspace_id: int) -> str:
     return base64.urlsafe_b64encode(
@@ -56,21 +47,6 @@ async def load_integration_settings(state: SharedState, db: Session):
 # --- 비즈니스 로직 ---
 def get_integrations(db: Session, workspace_id: int) -> List[Integration]:
     return repository.get_integrations(db, workspace_id)
-
-def connect_integration(
-        db: Session, workspace_id: int, service: ServiceType
-) -> Integration:
-    """
-    settings.N8N_BASE_URL + service + workspace_id 조합
-    settings.N8N_BASE_URL = http://localhost:5678
-    service = slack
-    workspace_id = 1
-    -> http://localhost:5678/webhook/slack-ws1
-    """
-    path = f"{SERVICE_PATHS[service]}-ws{workspace_id}"
-    webhook_url = f"{settings.N8N_BASE_URL.rstrip('/')}/webhook/{path}"
-    logger.info(f"webhook_url -> {webhook_url}")
-    return repository.upsert_integration(db, workspace_id, service, webhook_url)
 
 def disconnect_integration(
         db: Session,
@@ -277,18 +253,3 @@ async def get_valid_google_token(db: Session, workspace_id: int) -> str:
         return tokens["access_token"]
 
     return integration.access_token
-
-
-# --- n8n 워크플로우 자동 생성 (워크스페이스 생성 시) ---
-
-async def setup_n8n_workflows(workspace_id: int) -> None:
-    n8n = N8nClient()
-    for service_type, path_prefix in SERVICE_PATHS.items():
-        path = f"{path_prefix}-ws{workspace_id}"
-        name = f"[ws{workspace_id}] {service_type.value}"
-        try:
-            await n8n.create_and_activate_workflow(name=name, path=path)
-            print(f"{name} 성공")
-        except Exception as e:
-            print(f"❌ {name} 실패: {e}")
-            logger.error(f"n8n 워크플로우 생성 실패 [{name}]: {e}")

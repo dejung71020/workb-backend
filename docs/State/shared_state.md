@@ -89,35 +89,36 @@ external_links = {
 
 ### `integration_settings` — `dict`
 
-> 각 서비스의 연동 상태 + n8n webhook_url
+> 각 서비스의 연동 상태 + 토큰 정보
 > 회의 시작 시 service.py가 DB `integrations` 테이블에서 로드하여 state에 올림
->
-> **webhook_url 구조:**
-> `{n8n_base_url}/webhook/{서비스}-ws{workspace_id}`
-> 예: `http://localhost:5678/webhook/google-calendar-ws1`
-> 어드민이 n8n 서버 주소만 입력하면 백엔드가 자동 조합
+> FastAPI가 DB에서 직접 토큰을 조회하여 외부 API 직접 호출 (n8n 제거)
 
 ```python
 integration_settings = {
     "jira": {
         "is_connected": True,
-        "webhook_url": "http://localhost:5678/webhook/jira-ws1"
+        "access_token": "api_token_value",
+        "extra_config": {"domain": "your-domain.atlassian.net", "email": "user@example.com", "project_key": "PROJ"}
     },
     "slack": {
         "is_connected": True,
-        "webhook_url": "http://localhost:5678/webhook/slack-ws1"
+        "access_token": "xoxb-bot-token",
+        "extra_config": {"team_id": "T0ASTG55C3V"}
     },
     "notion": {
         "is_connected": False,
-        "webhook_url": None
+        "access_token": None,
+        "extra_config": {}
     },
     "google_calendar": {
         "is_connected": True,
-        "webhook_url": "http://localhost:5678/webhook/google-calendar-ws1"
+        "access_token": "ya29.xxx",
+        "extra_config": {"token_expires_at": "2025-05-01T10:00:00"}
     },
     "kakao": {
         "is_connected": False,
-        "webhook_url": None
+        "access_token": None,
+        "extra_config": {}
     }
 }
 ```

@@ -73,23 +73,8 @@ services:
     volumes:
       - chroma_data:/chroma/chroma
 
-  # ── n8n ───────────────────────────────────────────────
-  n8n:
-    image: n8nio/n8n:latest
-    container_name: workb_n8n
-    restart: always
-    ports:
-      - "5678:5678"
-    environment:
-      N8N_BASIC_AUTH_ACTIVE: "true"
-      N8N_BASIC_AUTH_USER: admin
-      N8N_BASIC_AUTH_PASSWORD: admin1234
-    volumes:
-      - n8n_data:/home/node/.n8n
-
 volumes:
   mysql_data:
   mongo_data:
   redis_data:
   chroma_data:
-  n8n_data:

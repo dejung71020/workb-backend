@@ -6,7 +6,6 @@ from app.infra.database.base import Base
 from app.infra.database.session import engine
 from app.core.config import settings
 from scripts.seed import seed_test_data
-from app.domains.integration.service import setup_n8n_workflows
 
 # 모든 모델을 import해야 Base가 테이블을 인식함
 from app.domains.user.models import User
@@ -30,8 +29,6 @@ async def lifespan(app: FastAPI):
 
     if settings.DEBUG:
         seed_test_data()
-        await setup_n8n_workflows(1)
-    
     yield
 
     # [종료 시] 연결 닫기
