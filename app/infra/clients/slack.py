@@ -112,7 +112,7 @@ class SlackClient(BaseClient):
         ]
 
         if action_items:
-            action_text = "• \n".join(f"{item}" for item in action_items)
+            action_text = "\n".join(f"• {item}" for item in action_items)
             blocks += [
                 {
                     "type": "divider"

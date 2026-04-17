@@ -41,6 +41,7 @@ class WorkspaceMember(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     workspace_id = Column(BigInteger, ForeignKey("workspaces.id"), nullable=False)
     user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    department_id = Column(BigInteger, ForeignKey("departments.id"), nullable=True)
     role = Column(Enum(MemberRole), nullable=False)
 
     joined_at = Column(DateTime, default=func.now(), nullable=False)
@@ -54,4 +55,14 @@ class DeviceSetting(Base):
     webcam_device = Column(String(200), nullable=False)
     webcam_enabled = Column(Boolean, default=False)
 
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+
+class Department(Base):
+    __tablename__ = "departments"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    workspace_id = Column(BigInteger, ForeignKey("workspaces.id"), nullable=False)
+    name = Column(String(100), nullable=False)
+    
+    created_at = Column(DateTime, default=func.now(), nullable=False)
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
