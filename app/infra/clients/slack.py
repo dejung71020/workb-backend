@@ -27,6 +27,7 @@ class SlackClient(BaseClient):
             error_code = response_data.get("error", "unknown_error")
             logger.error(f"[Slack API Error] -> {error_code}")
             raise ValueError(f"Slack API Error -. {error_code}")
+        return response_data
         
     async def get_public_channels(self) -> List[Dict[str, str]]:
         """
@@ -34,11 +35,21 @@ class SlackClient(BaseClient):
         """
         result = await self._request(
             "GET", "/conversations.list",
-            parmas = {
+            params = {
                 "types": "public_channel",
                 "exclude_archived": "true"
             }
         )
+
+        result = await self._check_slack_error(result)
+
+        channels = []
+        for c in result.get('channels', []):
+            channels.append({
+                "id": c['id'],
+                "name": c['name']
+            })
+        return channels
 
     async def send_message(
             self, 
@@ -62,7 +73,7 @@ class SlackClient(BaseClient):
             payload['blocks'] = blocks
         
         result = await self._request("POST", "/chat.postMessage", json=payload)
-        return self._check_slack_error(result)
+        return await self._check_slack_error(result)
     
     async def get_user_id_by_email(self, email: str) -> str:
         """
@@ -72,6 +83,7 @@ class SlackClient(BaseClient):
         result = await self._request(
             "GET", "/users.lookupByEmail", params={"email": email}
         )
+        result = await self._check_slack_error(result)
         return result['user']['id']
     
     async def open_dm(self, user_id: str) -> str:
@@ -81,6 +93,7 @@ class SlackClient(BaseClient):
         result = await self._request(
             "POST", "/conversations.open", json={"users": user_id}
         )
+        result = await self._check_slack_error(result)
         return result['channel']['id']
     
     async def send_dm_by_email(self, email: str, text: str) -> Dict[str, Any]:
@@ -93,11 +106,11 @@ class SlackClient(BaseClient):
         """
         user_id = await self.get_user_id_by_email(email)
         channel_id = await self.open_dm(user_id)
-        return await self.send_message(channel=channel_id, text=text)
+        return await self.send_message(channel_id=channel_id, text=text)
     
     async def send_minutes(
             self,
-            channel: str,
+            channel_id: str,
             meeting_title: str,
             minutes_text: str,
             action_items: Optional[List[str]] = None,
@@ -165,7 +178,7 @@ class SlackClient(BaseClient):
             })
         
         return await self.send_message(
-            channel=channel,
+            channel_id=channel_id,
             text=f"[{meeting_title}] 회의록이 도착했습니다.",
             blocks=blocks
         )

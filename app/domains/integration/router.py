@@ -73,6 +73,14 @@ async def test_webhook(
         raise HTTPException(status_code=400, detail="연동 상태 확인 불가")
     return {"success": True, "message": "webhook 연결 성공"}
 
+
+#===============================================================
+#
+#                OAuth API
+#
+#===============================================================
+
+
 # --- Google Calendar OAuth ---
 
 @router.get("/google/auth", response_model=OAuthUrlResponse)
@@ -146,3 +154,23 @@ async def connect_kakao(
         id=item.id, service=item.service, is_connected=item.is_connected,
         updated_at=item.updated_at,
     )
+
+#===============================================================
+#
+#                   API service
+#
+#===============================================================
+
+# Slack API https://localhost:8000/api/v1/integrations/workspaces/1/slack/channels
+@router.get("/workspaces/{workspace_id}/slack/channels")
+async def list_slack_channels(workspace_id: int, db: Session = Depends(get_db)):
+    """
+    슬랙 채널 목록 조회
+    """
+    try:
+        channels = await service.get_slack_channel(db, workspace_id)
+        return {
+            "channels": channels
+        }
+    except ValueError as e:
+        raise HTTPException(status=400, detail=str(e))

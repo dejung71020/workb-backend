@@ -270,6 +270,8 @@ async def get_valid_google_token(db: Session, workspace_id: int) -> str:
 #                   API service
 #
 #===============================================================
+
+# Slack API
 from app.infra.clients.slack import SlackClient
 
 async def get_slack_channel(db: Session, workspace_id: int) -> List[dict]:
