@@ -10,7 +10,6 @@ from typing import List
 from app.core.graph.state import SharedState
 from app.domains.integration.models import Integration, ServiceType
 from app.domains.integration import repository
-from app.infra.clients.n8n import N8nClient
 from app.infra.clients.session_manager import ClientSessionManager
 from app.core.config import settings
 
@@ -147,7 +146,7 @@ def get_slack_auth_url(workspace_id: int) -> str:
     return (
         f"https://slack.com/oauth/v2/authorize"
         f"?client_id={settings.SLACK_CLIENT_ID}"
-        f"&scope=chat:write,channels:read,files:write"
+        f"&scope=chat:write,chat:write.public,channels:read,files:write"
         f"&redirect_uri={settings.SLACK_REDIRECT_URI}"
         f"&state={state}"
     )
