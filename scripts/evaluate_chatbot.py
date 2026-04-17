@@ -5,8 +5,8 @@ import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.rcParams['font.family'] = 'AppleGothic'
 import numpy as np
+from transformers import pipeline
 from langchain_openai import ChatOpenAI
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.graph import StateGraph, MessagesState, END
@@ -19,23 +19,32 @@ from app.domains.knowledge.agent_utils import (
 )
 
 MEETING_ID = "test-meeting-001"
-SAVE_MODELS = {"gpt-4o", "gpt-4o-mini"}
+WORKSPACE_ID = "workspace-001"
+SAVE_MODELS = {"gpt-4o", "gpt-4o-mini", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"}
 
 MODELS = {
     "gpt-4o": ChatOpenAI(model="gpt-4o", api_key=settings.OPENAI_API_KEY),
     "gpt-4o-mini": ChatOpenAI(model="gpt-4o-mini", api_key=settings.OPENAI_API_KEY),
-    "gemini-2.0-flash": ChatGoogleGenerativeAI(model="gemini-2.0-flash", api_key=settings.GEMINI_API_KEY),
-    "gemini-1.5-flash": ChatGoogleGenerativeAI(model="gemini-1.5-flash", api_key=settings.GEMINI_API_KEY),
+    "gpt-5.4":      ChatOpenAI(model="gpt-5.4",      api_key=settings.OPENAI_API_KEY),
+    "gpt-5.4-mini": ChatOpenAI(model="gpt-5.4-mini", api_key=settings.OPENAI_API_KEY),
+    "gpt-5.4-nano": ChatOpenAI(model="gpt-5.4-nano", api_key=settings.OPENAI_API_KEY),
 }
 
-UNCERTAINTY_PATTERNS = [
-    "언급됐습니다", "언급되었습니다",
-    "알 수 없습니다", "확인되지 않습니다",
-    "파악되지 않습니다", "명확하지 않습니다",
-    "것으로 보입니다", "것 같습니다",
-    "추정됩니다", "것으로 판단됩니다",
-    "포함되지 않을 수 있습니다", "확실하지 않습니다",
-]
+# -- Zero-shot NLI 불확실성 감지 --
+# 모듈 로드 시 한 번만 초기화 (추론마다 모델 로드하지 않음)
+_nli = pipeline(
+    "zero-shot-classification",
+    model="MortizLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7",
+)
+
+def uncertainty_score(answer: str) -> float:
+    """
+    답변이 불확실성을 표현하는 정도를 0~1로 반환.
+    키워드 매칭 대신 NLI로 의미 기반 판단.
+    """
+    result = _nli(answer, candidate_labels=['불확실한 표현', '확실한 표현'])
+    idx = result['labels'].index('불확실한 표현')
+    return round(result['scores'][idx], 4)
 
 TEST_CASES = [
     # ── 발화 기반 질문 ──────────────────────────────
@@ -199,8 +208,8 @@ def build_system_prompt() -> str:
 {context}
 
 규칙:
-- 회의 발화 데이터는 최대 약 30초 전까지의 내용만 반영됩니다. 가장 최근 발화는 포함되지 않을 수 있음을 답변에
-명시하세요.
+- 회의 발화 데이터는 최대 약 30초 전까지의 내용만 반영됩니다. 가장 최근 발화는 포함되지 않을 수 있음을
+답변에 명시하세요.
 - 회의 내용만으로 답할 수 있으면 도구 없이 답변하세요.
 - 정보가 불완전하더라도 회의에서 언급된 내용을 바탕으로 최대한 답변하세요.
 - 확실하지 않은 정보는 "~라고 언급됐습니다" 형식으로 답변하세요.
@@ -228,7 +237,6 @@ def evaluate_one(model_name: str, model, case: dict) -> dict:
         latency = time.time() - start
         answer = result["messages"][-1].content
 
-        # 도구 사용 추출
         tools_used = []
         for m in result["messages"]:
             if hasattr(m, "tool_calls") and m.tool_calls:
@@ -247,10 +255,9 @@ def evaluate_one(model_name: str, model, case: dict) -> dict:
     delay_notice = "30초" in answer or "최근 발화" in answer
 
     # 3. 불확실성 표현
-    uncertainty_expr = any(p in answer for p in UNCERTAINTY_PATTERNS)
-    uncertainty_score = None
+    u_score = None
     if case["requires_uncertainty"]:
-        uncertainty_score = 1.0 if uncertainty_expr else 0.0
+        u_score = uncertainty_score(answer)
 
     # 4. 한국어 어조
     formal_korean = "습니다" in answer or "입니다" in answer
@@ -297,7 +304,7 @@ def visualize(all_results: list[dict]):
     model_names = list(MODELS.keys())
 
     fig, axes = plt.subplots(2, 3, figsize=(18, 11))
-    fig.suptitle("챗봇 모델 비교 평가 (Knowledge 도메인)", fontsize=15)
+    fig.suptitle("챗봇 모델 비교 평가 (Knowledge 도메인) — 베이스라인", fontsize=15)
 
     # 1. 평균 응답 시간
     ax = axes[0][0]
@@ -379,7 +386,7 @@ def visualize(all_results: list[dict]):
             rule_score,
         ]
         ax.bar(x + i * width, values, width, label=model, color=colors[i])
-    ax.set_xticks(x + width * 1.5)
+    ax.set_xticks(x + width * 2)
     ax.set_xticklabels(categories, fontsize=8)
     ax.set_ylim(0, 1)
     ax.set_title("종합 비교")
@@ -402,7 +409,7 @@ def visualize(all_results: list[dict]):
                 print(f"    답변: {r['answer'][:120]}")
 
 if __name__ == "__main__":
-    print("챗봇 모델 평가 시작...\n")
+    print("챗봇 모델 베이스라인 평가 시작...\n")
     all_results = []
 
     for case in TEST_CASES:
@@ -418,7 +425,10 @@ if __name__ == "__main__":
 
     visualize(all_results)
 
-    # gpt-4o, gpt-4o-mini 결과만 저장
+    # 단계별 토큰 저장
+    from token_tracker import save_token_record
+    save_token_record("베이스라인", all_results)
+
     with open("scripts/eval_results_external.json", "w", encoding="utf-8") as f:
         json.dump(
             [r for r in all_results if r["model"] in SAVE_MODELS],

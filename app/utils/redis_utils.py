@@ -9,6 +9,14 @@ mongo_db = MongoClient(settings.MONGODB_URL)["workb"]
 
 r = redis.from_url(settings.REDIS_URL)
 
+def _resolve_speaker(speaker_id: str | None, speakers: dict, anon_map: dict) -> str:
+    """
+    speaker_id -> 표시 이름 변환. 화자분리 실패 케이스를 모두 처리한다.
+
+    케이스:
+        
+    """
+
 def get_meeting_context(meeting_id: str) -> str:
     """전체 발화 컨텍스트 문자열 반환"""
     utterances_raw = r.lrange(f"meeting:{meeting_id}:utterances", 0, -1)

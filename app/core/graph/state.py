@@ -22,7 +22,7 @@ class SharedState(TypedDict):
     chat_response: str           # 챗봇의 최종 답변
     
     # --- 4. Intelligence 도메인 (Analyst) ---
-    summary: str                 # 회의 전체 요약본 (초안 및 최종본)
+    summary: dict                 # 회의 전체 요약본 (초안 및 최종본)
     decisions: List[str]         # 도출된 주요 결정사항 및 미결 이슈 목록
     previous_context: str        # [회의 전] AI가 정리한 이전 회의 맥락 데이터
     

@@ -1,27 +1,26 @@
 import json
+import re
 from langchain.tools import tool
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_openai import ChatOpenAI
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.graph import StateGraph, MessagesState, END
 from pymongo import MongoClient
 import chromadb
+import redis
 
 from app.core.config import settings
 from app.core.graph.state import SharedState
 from app.utils.redis_utils import get_meeting_context
 
 # --- 클라이언트 초기화 ---
+# 모듈 로드 시 한 번만 연결. 요청마다 새로 연결하지 않음.
 mongo_db = MongoClient(settings.MONGODB_URL)["workb"]
 chroma_client = chromadb.HttpClient(
     host=settings.CHROMA_HOST,
     port=settings.CHROMA_PORT,
 )
-# llm = ChatGoogleGenerativeAI(
-#     model="models/gemini-2.5-flash-lite", 
-#     api_key=settings.GEMINI_API_KEY
-# )
+r = redis.from_url(settings.REDIS_URL)
 
 llm = ChatOpenAI(
     model="gpt-4o-mini",
@@ -29,6 +28,9 @@ llm = ChatOpenAI(
 )
 
 # --- 도구 정의 ---
+# react_agent에 bind되어 LLM이 필요에 따라 호출함.
+# @tool 데코레이터가 함수 시그니처와 docstring을 LLM용 tool_schema로 변환함.
+
 @tool
 def search_past_meetings(query: str) -> list:
     """이전 회의 내용에서 관련 정보를 검색한다."""
@@ -37,9 +39,7 @@ def search_past_meetings(query: str) -> list:
         cursor = mongo_db["meeting_contexts"].find(
             {"$text": {"$search": query}},
             {"score": {"$meta": "textScore"}}, # 점수를 'score' 필드에 저장
-        ).sort([("score", {"$meta": "textScore"})]) # 점수 순으로 정렬
-
-        cursor = cursor.limit(5)
+        ).sort([("score", {"$meta": "textScore"})]).limit(5) # 점수 순으로 정렬
 
         return [
             {
@@ -178,8 +178,7 @@ def knowledge_node(state: SharedState) -> dict:
     {meeting_context}
     
     규칙:
-    - 회의 발화 데이터는 최대 약 30초 전까지의 내용만 반영됩니다. 가장 최근 발화는 포함되지 않을 수 있음을
-  답변에 명시하세요.
+    - 회의 발화 데이터는 최대 약 30초 전까지의 내용만 반영됩니다. 가장 최근 발화는 포함되지 않을 수 있음을 답변에 명시하세요.
     - 회의 내용만으로 답할 수 있으면 도구 없이 답변하세요.
     - 정보가 불완전하더라도 회의에서 언급된 내용을 바탕으로 최대한 답변하세요.
     - 확실하지 않은 정보는 "~라고 언급됐습니다" 형식으로 답변하세요.

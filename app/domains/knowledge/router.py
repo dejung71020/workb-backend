@@ -33,7 +33,7 @@ async def chatbot_message(meeting_id: str, req: ChatbotMessageRequest):
         session_id=req.session_id,
         function_type=result["function_type"],
         answer=result["chat_response"],
-        result="{}",
+        result={},
         timestamp=datetime.now()
     )
 
