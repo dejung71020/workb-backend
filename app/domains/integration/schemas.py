@@ -31,6 +31,9 @@ class JiraConnectRequest(BaseModel):
 class KakaoConnectRequest(BaseModel):
     api_key: str        # kakao REST API Key
 
+class SlackChannelSelectRequest(BaseModel):
+    channel_id: str
+    
 # -- OAuth Response ---
 
 class OAuthUrlResponse(BaseModel):

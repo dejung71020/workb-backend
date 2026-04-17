@@ -284,3 +284,17 @@ async def get_slack_channel(db: Session, workspace_id: int) -> List[dict]:
     
     slack_client = SlackClient(integration.access_token)
     return await slack_client.get_public_channels()
+
+async def save_slack_channel(db: Session, workspace_id: int, channel_id: str) -> Integration:
+    """
+    유저가 선택한 Slack 채널 ID를 extra_config 에 저장
+    """
+    integration = repository.get_integration(db, workspace_id, ServiceType.slack)
+    if not integration or not integration.extra_config:
+        raise ValueError("Slack 연동이 안 되어있습니다.")
+    
+    channel_id = integration.extra_config.get("channel_id")
+    if not channel_id:
+        raise ValueError("Slack 채널 선택이 안 되어 있습니다.")
+    
+    return channel_id

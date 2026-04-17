@@ -12,6 +12,7 @@ from app.domains.integration.schemas import (
     JiraConnectRequest,
     KakaoConnectRequest,
     OAuthUrlResponse,
+    SlackChannelSelectRequest,
 )
 from app.domains.integration import service, repository
 from app.core.config import settings
@@ -174,3 +175,17 @@ async def list_slack_channels(workspace_id: int, db: Session = Depends(get_db)):
         }
     except ValueError as e:
         raise HTTPException(status=400, detail=str(e))
+    
+@router.patch("/slack/channel")
+def select_slack_channel(
+    workspace_id: int,
+    body: SlackChannelSelectRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    슬랙 채널 선택
+    """
+    service.save_slack_channel(db, workspace_id, body.channel_id)
+    return {
+        "status": "ok"
+    }
