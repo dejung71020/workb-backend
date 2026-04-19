@@ -177,7 +177,7 @@ async def list_slack_channels(workspace_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(e))
     
 @router.patch("/slack/channel")
-def select_slack_channel(
+async def select_slack_channel(
     workspace_id: int,
     body: SlackChannelSelectRequest,
     db: Session = Depends(get_db),
@@ -185,7 +185,7 @@ def select_slack_channel(
     """
     슬랙 채널 선택
     """
-    service.save_slack_channel(db, workspace_id, body.channel_id)
+    await service.save_slack_channel(db, workspace_id, body.channel_id)
     return {
         "status": "ok"
     }
