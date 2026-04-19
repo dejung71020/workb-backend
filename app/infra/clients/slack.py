@@ -290,3 +290,20 @@ class SlackClient(BaseClient):
                 text=f"담당 태스크가 배정되었습니다.\n• {task}\n• 기한: {due}"
             )
     
+    async def schedule_message(
+            self,
+            channel_id: str,
+            text: str,
+            post_at: int,
+    ) -> str:
+        """
+        메시지 예약 전송.
+
+        args:
+            channel_id: 채널 ID
+            text: 메세지
+            post_at: 전송 시각(Unix timestamp, 초단위)
+
+        returns:
+        sc
+        """

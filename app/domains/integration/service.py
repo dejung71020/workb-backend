@@ -133,7 +133,7 @@ def get_slack_auth_url(workspace_id: int) -> str:
     return (
         f"https://slack.com/oauth/v2/authorize"
         f"?client_id={settings.SLACK_CLIENT_ID}"
-        f"&scope=chat:write,chat:write.public,channels:read,users:read,users:read.email,im:write,files:write,pins:write"
+        f"&scope=chat:write,chat:write.public,channels:join,channels:read,users:read,users:read.email,im:write,files:write,pins:write"
         f"&redirect_uri={settings.SLACK_REDIRECT_URI}"
         f"&state={state}"
     )
@@ -293,8 +293,10 @@ async def save_slack_channel(db: Session, workspace_id: int, channel_id: str) ->
     if not integration or not integration.extra_config:
         raise ValueError("Slack 연동이 안 되어있습니다.")
     
-    channel_id = integration.extra_config.get("channel_id")
-    if not channel_id:
-        raise ValueError("Slack 채널 선택이 안 되어 있습니다.")
-    
-    return channel_id
+    extra_config = {**integration.extra_config, "channel_id": channel_id}
+    return repository.update_tokens(
+        db,
+        workspace_id=workspace_id,
+        service=ServiceType.slack,
+        extra_config=extra_config,
+    )

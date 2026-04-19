@@ -32,15 +32,24 @@ await slack.send_message(
 
 ---
 
-## 2. 채널에 회의록 전송
+## 2. 채널에 회의록 전송 + 스레드 활용
 
 ```python
-await slack.send_minutes(
+# 회의록 전송 → ts 반환
+ts = await slack.send_minutes(
     channel_id="C1234567",
     meeting_title="4월 스프린트 회의",
     minutes_text="오늘 회의에서는 A, B, C를 논의했습니다.",
     action_items=["API 문서 작성", "리뷰 요청"],        # 선택
     link_url="https://workb.app/meetings/1/minutes"    # 선택
+)
+# ts = "1716300000.123456" — 이 메시지의 고유 ID
+
+# WBS를 스레드 답글로 전송
+await slack.send_message(
+    channel_id="C1234567",
+    text="WBS 태스크 목록...",
+    thread_ts=ts
 )
 ```
 
@@ -118,13 +127,61 @@ info = await slack.get_user_info("U1234567")
 
 ---
 
+## 3. 핀 고정
+
+```python
+ts = await slack.send_minutes(channel_id, "회의 제목", minutes_text)
+await slack.pin_message(channel_id=channel_id, message_ts=ts)
+```
+
+---
+
+## 4. 액션아이템 스레드 멘션 + 담당자 DM
+
+> `slack_user_id`는 WorkB DB 이메일로 `get_user_info`를 통해 미리 조회해두어야 합니다.
+
+```python
+await slack.send_action_items(
+    channel_id="C1234567",
+    thread_ts=ts,    # send_minutes()가 반환한 ts
+    action_items=[
+        {"slack_user_id": "U1234567", "task": "로그인 기능 구현", "due": "5/10"},
+        {"slack_user_id": "U7654321", "task": "API 문서 작성", "due": "5/12"},
+    ]
+)
+# → 스레드에 @멘션, 각 담당자에게 DM 전송
+```
+
+---
+
+## 5. 예약 전송
+
+```python
+from datetime import datetime
+
+scheduled_at = datetime(2025, 5, 6, 14, 0, 0)
+post_at = int(scheduled_at.timestamp()) - 600  # 10분 전
+
+scheduled_id = await slack.schedule_message(
+    channel_id="C1234567",
+    text="10분 후 회의가 시작됩니다. 준비해주세요!",
+    post_at=post_at
+)
+# scheduled_id — 취소 시 chat.deleteScheduledMessage에 사용
+```
+
+---
+
 ## 주의사항
 
 - `channel_id`는 채널명(`#general`)이 아닌 **ID**(`C1234567`)를 사용합니다.
 - 봇이 채널에 없어도 `chat:write.public` 스코프로 전송 가능합니다.
 - `send_dm_to_workspace_member`는 채널 멤버 전체를 순회하므로 멤버가 많은 채널에서는 느릴 수 있습니다.
+- `send_action_items`는 `slack_user_id`(U로 시작하는 ID)를 직접 받습니다. 이메일 → user_id 변환은 service.py에서 미리 처리하세요.
+- `schedule_message`의 `post_at`은 **현재 시각보다 최소 60초 이후**여야 합니다. Slack 제한.
 - WorkB 미가입자도 Slack `user_id`를 알면 `open_dm` + `send_message`로 DM 전송 가능합니다.
 - Slack API 에러는 `ValueError`로 변환됩니다. `router.py`에서 `HTTPException(400)`으로 처리하세요.
+- **필요한 OAuth 스코프**: `chat:write`, `chat:write.public`, `channels:read`, `users:read`, `users:read.email`, `im:write`, `files:write`, `pins:write`
 
 ```python
 # router.py 패턴
