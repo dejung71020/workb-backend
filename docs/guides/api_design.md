@@ -89,3 +89,46 @@ action/
 **채택 이유:**
 - 도메인 router와 api_router.py 양쪽에 tags를 지정하면 Swagger에서 두 태그가 합산됨
 - 기존 integration_router 패턴과 일관성 유지
+
+---
+
+## 7. IntegrationResponse에 selected_channel_id 추가
+
+**결정:** `IntegrationResponse`에 `selected_channel_id: Optional[str]` 필드 추가
+
+**배경:**
+- Slack 연동 후 기본 채널을 선택하면 `integrations.extra_config.channel_id`에 저장됨
+- 프론트엔드 드롭다운이 페이지 새로고침 시 항상 "채널 선택"으로 초기화되는 UX 문제 발생
+- `IntegrationResponse`가 `extra_config`를 노출하지 않아 프론트에서 저장된 채널을 알 수 없음
+
+**채택 이유:**
+- `extra_config` 전체를 노출하면 불필요한 내부 데이터(team_id 등)가 노출됨
+- Slack에 필요한 값(channel_id)만 별도 필드로 추출해 응답에 포함하는 것이 적절
+- 다른 서비스 연동 시에도 동일 패턴 적용 가능 (notion의 workspace_name 등)
+
+```python
+# schemas.py
+class IntegrationResponse(BaseModel):
+    id: int
+    service: ServiceType
+    is_connected: bool
+    updated_at: datetime
+    selected_channel_id: Optional[str] = None  # extra_config.channel_id 추출
+
+# router.py
+IntegrationResponse(
+    ...
+    selected_channel_id=item.extra_config.get("channel_id") if item.extra_config else None,
+)
+```
+
+---
+
+## 8. export_slack — BackgroundTasks (Fire and Forget)
+
+**결정:** 에러를 router로 전파하지 않고 logger.error로만 기록
+
+**채택 이유:**
+- BackgroundTask는 이미 응답이 반환된 후 실행되므로 router에서 에러를 잡을 수 없음
+- 외부 API 장애가 서버 에러(500)로 노출되지 않아야 함
+- 에러 발생 시 로그로 추적, 향후 알림 시스템(Slack 에러 채널) 연동 가능

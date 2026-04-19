@@ -144,6 +144,7 @@ info = await slack.get_user_info("U1234567")
 ## 9. workspace_id로 채널 ID 조회
 
 > 어드민이 드롭다운에서 채널을 선택하면 `integrations.extra_config.channel_id`에 저장됩니다.
+> `IntegrationResponse.selected_channel_id`로 현재 선택된 채널을 프론트에 반환합니다.
 
 채널 목록 드롭다운용 조회 (`GET /integrations/workspaces/{id}/slack/channels`):
 
@@ -171,6 +172,10 @@ from app.domains.integration.models import ServiceType
 integration = get_integration(db, workspace_id, ServiceType.slack)
 channel_id = integration.extra_config.get("channel_id")
 ```
+
+> **⚠️ TODO:** `IntegrationResponse`에 `selected_channel_id` 필드 추가 필요.
+> 프론트 드롭다운이 저장된 채널을 pre-select하려면 `schemas.py`와 `router.py` 수정 필요.
+> 설계 근거: `docs/guides/api_design.md` 항목 7 참고.
 
 ---
 

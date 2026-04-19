@@ -527,6 +527,7 @@ scheduled_id = await slack.schedule_message(
 
 ```
 POST /actions/meetings/{id}/export/slack
+  │  BackgroundTasks로 즉시 {"status": "processing"} 반환
   │
   ├─ 1. integrations 테이블 → bot_token, channel_id 조회
   │
@@ -539,7 +540,7 @@ POST /actions/meetings/{id}/export/slack
   ├─ 4. pin_message(channel_id, ts)
   │       스코프: pins:write
   │
-  └─ 5. send_action_items(channel_id, ts, action_items)
+  └─ 5. send_action_items(channel_id, ts, action_items)  — slack_action_items 있을 때만
           ├─ send_message(thread_ts=ts)     스코프: chat:write.public  (멘션)
           └─ open_dm → send_message         스코프: im:write           (DM)
 ```
@@ -548,12 +549,23 @@ POST /actions/meetings/{id}/export/slack
 
 ## 에러 처리 패턴
 
-모든 `ValueError`는 `router.py`에서 `HTTPException(400)`으로 변환한다.
+`export_slack`은 BackgroundTask로 실행되므로 에러가 router로 전파되지 않는다.
+내부 try/except로 모든 에러를 잡아 logger.error로 기록한다.
 
 ```python
-# router.py
+# services/slack.py
 try:
-    await export_slack(db, workspace_id, meeting_id)
+    ...
+except Exception as e:
+    logger.error(f"[Slack Export] 실패 - meeting_id={meeting_id} : {e}")
+```
+
+채널 목록 조회 등 동기 API는 `ValueError`를 router에서 변환한다.
+
+```python
+# integration/router.py
+try:
+    channels = await service.get_slack_channel(db, workspace_id)
 except ValueError as e:
     raise HTTPException(status_code=400, detail=str(e))
 ```
