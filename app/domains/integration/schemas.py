@@ -10,6 +10,7 @@ class IntegrationResponse(BaseModel):
     id: int
     service: ServiceType
     is_connected: bool
+    selected_channel_id: Optional[str] = None
     
     updated_at: datetime
 

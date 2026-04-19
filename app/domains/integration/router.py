@@ -38,6 +38,7 @@ async def get_integrations(workspace_id: int, db: Session = Depends(get_db)):
                 service=item.service,
                 is_connected=item.is_connected,
                 updated_at=item.updated_at,
+                selected_channel_id=item.extra_config.get("channel_id") if item.extra_config else None,
             )
         )
     return IntegrationListResponse(integrations=integrations)

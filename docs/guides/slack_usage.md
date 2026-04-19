@@ -159,7 +159,7 @@ channels = await get_slack_channel(db, workspace_id)
 ```python
 from app.domains.integration.service import save_slack_channel
 
-save_slack_channel(db, workspace_id, channel_id="C1234567")
+await save_slack_channel(db, workspace_id, channel_id="C1234567")
 ```
 
 service.py에서 저장된 채널 ID 꺼내기:
@@ -183,7 +183,6 @@ channel_id = integration.extra_config.get("channel_id")
 - `send_action_items`는 `slack_user_id`(U로 시작하는 ID)를 직접 받습니다. 이메일 → user_id 변환은 service.py에서 미리 처리하세요.
 - WorkB 미가입자도 Slack `user_id`를 알면 `open_dm` + `send_message`로 DM 전송 가능합니다.
 - Slack API 에러는 `ValueError`로 변환됩니다. `router.py`에서 `HTTPException(400)`으로 처리하세요.
-- **⚠️ `save_slack_channel` 버그**: 파라미터 `channel_id`를 무시하고 기존 값을 읽는 버그 있음. 수정 필요.
 - **필요한 OAuth 스코프**: `chat:write`, `chat:write.public`, `channels:read`, `channels:join`, `users:read`, `users:read.email`, `im:write`, `files:write`, `pins:write`
 - 스코프 추가 후에는 반드시 워크스페이스 **재연동** 필요 (기존 토큰에 새 스코프 미포함).
 
