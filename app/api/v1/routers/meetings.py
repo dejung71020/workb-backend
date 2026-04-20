@@ -6,7 +6,14 @@ from datetime import date
 
 from app.api.v1.deps import get_current_user_id
 from app.infra.database.session import get_db
+from app.domains.meeting.agenda_service import AgendaService, agenda_item_to_out
 from app.domains.meeting.schemas import (
+    AgendaBulkCreateRequest,
+    AgendaBulkCreateResponse,
+    AgendaItemCreatedOut,
+    AgendaItemDeleteResponse,
+    AgendaItemPatch,
+    AgendaItemPatchResponse,
     CreateMeetingRequest,
     CreateMeetingResponse,
     MeetingHistoryResponse,
@@ -65,3 +72,88 @@ def get_workspace_meetings_history(
     - page/size 페이징
     """
     return MeetingHistoryService.get_history(db, workspace_id, keyword, page, size)
+
+
+@router.post(
+    "/{meeting_id}/agenda",
+    response_model=AgendaBulkCreateResponse,
+    status_code=201,
+)
+def create_meeting_agenda_items(
+    meeting_id: int,
+    body: AgendaBulkCreateRequest,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    """
+    회의에 아젠다 항목을 일괄 등록합니다.
+
+    - `meetings` 존재 검증
+    - `agendas` 부모가 없으면 생성 (`created_by` = 현재 사용자)
+    - `agenda_items` 벌크 삽입 (단일 트랜잭션)
+    """
+    try:
+        agenda_id, rows = AgendaService.bulk_create_items(
+            db, meeting_id, current_user_id, body
+        )
+        return AgendaBulkCreateResponse(
+            agenda_id=agenda_id,
+            items=[
+                AgendaItemCreatedOut(
+                    id=int(r.id), title=r.title, order_index=int(r.order_index)
+                )
+                for r in rows
+            ],
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"아젠다 등록 중 오류가 발생했습니다: {e}",
+        )
+
+
+@router.patch(
+    "/{meeting_id}/agenda/items/{item_id}",
+    response_model=AgendaItemPatchResponse,
+)
+def patch_meeting_agenda_item(
+    meeting_id: int,
+    item_id: int,
+    body: AgendaItemPatch,
+    db: Session = Depends(get_db),
+):
+    """아젠다 항목 부분 수정 (요청에 포함된 필드만 반영)."""
+    try:
+        row = AgendaService.patch_item(db, meeting_id, item_id, body)
+        return AgendaItemPatchResponse(data=agenda_item_to_out(row))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"아젠다 수정 중 오류가 발생했습니다: {e}",
+        )
+
+
+@router.delete(
+    "/{meeting_id}/agenda/items/{item_id}",
+    response_model=AgendaItemDeleteResponse,
+)
+def delete_meeting_agenda_item(
+    meeting_id: int,
+    item_id: int,
+    db: Session = Depends(get_db),
+):
+    """아젠다 항목 삭제 (hard delete)."""
+    try:
+        AgendaService.delete_item(db, meeting_id, item_id)
+        return AgendaItemDeleteResponse()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"아젠다 삭제 중 오류가 발생했습니다: {e}",
+        )

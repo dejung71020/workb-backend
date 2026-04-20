@@ -6,6 +6,7 @@ from app.domains.meeting.models import MeetingStatus
 from app.domains.workspace.repository import DashboardRepository
 from app.domains.workspace.schemas import (
     DashboardResponse,
+    DashboardParticipantItem,
     MeetingItem,
     MeetingsGroup,
     WeeklySummary,
@@ -19,6 +20,8 @@ class DashboardService:
     def get_dashboard(db: Session, workspace_id: int) -> DashboardResponse:
         # 1) 회의 목록을 상태별로 분류
         meetings = DashboardRepository.get_meetings_by_workspace(db, workspace_id)
+        meeting_ids = [int(m.id) for m in meetings]
+        participants_by = DashboardRepository.get_participants_for_meetings(db, meeting_ids)
 
         grouped: dict[str, list[MeetingItem]] = {
             "in_progress": [],
@@ -26,6 +29,7 @@ class DashboardService:
             "done": [],
         }
         for m in meetings:
+            plist = participants_by.get(int(m.id), [])
             item = MeetingItem(
                 id=m.id,
                 title=m.title,
@@ -33,6 +37,10 @@ class DashboardService:
                 scheduled_at=m.scheduled_at,
                 started_at=m.started_at,
                 ended_at=m.ended_at,
+                meeting_type=m.meeting_type,
+                participants=[
+                    DashboardParticipantItem(user_id=uid, name=name) for uid, name in plist
+                ],
             )
             if m.status == MeetingStatus.in_progress:
                 grouped["in_progress"].append(item)

@@ -1,7 +1,12 @@
 # app\domains\workspace\schemas.py
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import date, datetime
 from typing import Optional
+
+
+class DashboardParticipantItem(BaseModel):
+    user_id: int
+    name: str
 
 
 class MeetingItem(BaseModel):
@@ -11,6 +16,8 @@ class MeetingItem(BaseModel):
     scheduled_at: Optional[datetime] = None
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
+    meeting_type: Optional[str] = None
+    participants: list[DashboardParticipantItem] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
