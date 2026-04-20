@@ -293,7 +293,7 @@ async def save_slack_channel(db: Session, workspace_id: int, channel_id: str) ->
     if not integration or not integration.access_token:
         raise ValueError("Slack 연동이 안 되어있습니다.")
     
-    extra_config = {**integration.extra_config, "channel_id": channel_id}
+    extra_config = {**(integration.extra_config or {}) , "channel_id": channel_id}
     return repository.update_tokens(
         db,
         workspace_id=workspace_id,

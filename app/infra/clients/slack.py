@@ -148,7 +148,7 @@ class SlackClient(BaseClient):
         DM 채널 만들고, 채널 ID 반환
         """
         result = await self._request(
-            "POST", "/conversations.open", json={"users": user_id}
+            "POST", "/conversations.open", json={"users": [user_id]}
         )
         result = await self._check_slack_error(result)
         return result['channel']['id']

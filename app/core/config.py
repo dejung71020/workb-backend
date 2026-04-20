@@ -7,16 +7,13 @@ class Settings(BaseSettings):
     ENV: str = "dev"
     DEBUG: bool = False
     DATABASE_URL: Optional[str] = None
-    MONGODB_URL: Optional[str] = None
-    CHROMA_HOST: str = "localhost"
-    CHROMA_PORT: int = 8001
-
     SECRET_KEY: str = "secret_key"
     ALGORITHM: str = "HS256"
     REDIS_URL: str = "redis://localhost:6379"
     MONGODB_URL: str = "mongodb://localhost:27017"
     CHROMA_HOST: str = "localhost"
-    CHROMA_PORT: int = 8000
+    CHROMA_PORT: int = 8001
+
     # 2. AI 
     OPENAI_API_KEY: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None

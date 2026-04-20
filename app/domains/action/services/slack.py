@@ -25,7 +25,8 @@ async def export_slack(
             raise ValueError("Slack 연동이 필요합니다.")
         
         # 2. 채널 찾기
-        channel_id = channel_id or integration.extra_config.get("channel_id")
+        channel_id = channel_id or (integration.extra_config or {}).get("channel_id")
+        
         if not channel_id:
             raise ValueError("Slack 채널이 설정되지 않았습니다.")
         
