@@ -35,10 +35,13 @@ SET FOREIGN_KEY_CHECKS = 1;
 -- -------------------------------------------------------------------
 -- users (3)
 -- -------------------------------------------------------------------
-INSERT INTO users (id, email, password_hash, name, social_provider, social_id, created_at, updated_at) VALUES
-  (1, 'user1@example.com', '$2b$10$dummyhash.user1', 'User One',   'none',  NULL,       DATE_SUB(NOW(), INTERVAL 120 DAY), DATE_SUB(NOW(), INTERVAL 1 DAY)),
-  (2, 'user2@example.com', NULL,                    'User Two',   'google','google-2', DATE_SUB(NOW(), INTERVAL  90 DAY), DATE_SUB(NOW(), INTERVAL 2 DAY)),
-  (3, 'user3@example.com', NULL,                    'User Three', 'kakao', 'kakao-3',  DATE_SUB(NOW(), INTERVAL  60 DAY), DATE_SUB(NOW(), INTERVAL 3 DAY));
+INSERT INTO users (id, email, password_hash, name, department, social_provider, social_id, created_at, updated_at) VALUES
+  (1, 'user1@example.com', '$2b$10$dummyhash.user1', '김수민', '제품팀',   'none',  NULL,       DATE_SUB(NOW(), INTERVAL 120 DAY), DATE_SUB(NOW(), INTERVAL 1 DAY)),
+  (2, 'user2@example.com', NULL,                    '이지현', '디자인팀', 'google','google-2', DATE_SUB(NOW(), INTERVAL  90 DAY), DATE_SUB(NOW(), INTERVAL 2 DAY)),
+  (3, 'user3@example.com', NULL,                    '박준혁', '개발팀',   'kakao', 'kakao-3',  DATE_SUB(NOW(), INTERVAL  60 DAY), DATE_SUB(NOW(), INTERVAL 3 DAY)),
+  (4, 'user4@example.com', NULL,                    '최은영', '마케팅팀', 'none',  NULL,       DATE_SUB(NOW(), INTERVAL  50 DAY), DATE_SUB(NOW(), INTERVAL 4 DAY)),
+  (5, 'user5@example.com', NULL,                    '정민준', '개발팀',   'none',  NULL,       DATE_SUB(NOW(), INTERVAL  40 DAY), DATE_SUB(NOW(), INTERVAL 5 DAY)),
+  (6, 'user6@example.com', NULL,                    '오서연', '마케팅팀', 'none',  NULL,       DATE_SUB(NOW(), INTERVAL  30 DAY), DATE_SUB(NOW(), INTERVAL 6 DAY));
 
 -- -------------------------------------------------------------------
 -- workspaces (3)
@@ -55,6 +58,14 @@ INSERT INTO workspace_members (id, workspace_id, user_id, role, joined_at) VALUE
   (1, 1, 1, 'admin',  DATE_SUB(NOW(), INTERVAL 99 DAY)),
   (2, 2, 2, 'admin',  DATE_SUB(NOW(), INTERVAL 79 DAY)),
   (3, 3, 3, 'admin',  DATE_SUB(NOW(), INTERVAL 59 DAY));
+
+-- additional members for demo UI
+INSERT INTO workspace_members (workspace_id, user_id, role, joined_at) VALUES
+  (1, 2, 'member', DATE_SUB(NOW(), INTERVAL 30 DAY)),
+  (1, 3, 'member', DATE_SUB(NOW(), INTERVAL 30 DAY)),
+  (1, 4, 'member', DATE_SUB(NOW(), INTERVAL 30 DAY)),
+  (1, 5, 'member', DATE_SUB(NOW(), INTERVAL 30 DAY)),
+  (1, 6, 'member', DATE_SUB(NOW(), INTERVAL 30 DAY));
 
 -- -------------------------------------------------------------------
 -- device_settings (3)  (workspace_id is UNIQUE)

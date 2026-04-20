@@ -19,7 +19,20 @@ class DashboardService:
     @staticmethod
     def get_dashboard(db: Session, workspace_id: int) -> DashboardResponse:
         # 1) 회의 목록을 상태별로 분류
+        today = datetime.now()
+        # 금주 기준: 일(00:00) ~ 다음 일(00:00)
+        week_start = (today - timedelta(days=(today.weekday() + 1) % 7)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        week_end = week_start + timedelta(days=7)
+
         meetings = DashboardRepository.get_meetings_by_workspace(db, workspace_id)
+        # 홈 탭(진행/예정/완료)은 금주(일~토)만 표시
+        def _in_this_week(m) -> bool:
+            dt = m.started_at or m.scheduled_at or m.ended_at
+            return dt is not None and week_start <= dt < week_end
+
+        meetings = [m for m in meetings if _in_this_week(m)]
         meeting_ids = [int(m.id) for m in meetings]
         participants_by = DashboardRepository.get_participants_for_meetings(db, meeting_ids)
 
@@ -51,13 +64,7 @@ class DashboardService:
 
         meetings_group = MeetingsGroup(**grouped)
 
-        # 2) 주간 요약 — 이번 주(월~일) 기준 done 회의 집계
-        today = datetime.now()
-        week_start = (today - timedelta(days=today.weekday())).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
-        week_end = week_start + timedelta(days=7)
-
+        # 2) 주간 요약 — 금주(일~토) 기준 done 회의 집계
         done_this_week = DashboardRepository.get_done_meetings_this_week(
             db, workspace_id, week_start, week_end
         )

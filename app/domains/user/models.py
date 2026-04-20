@@ -18,6 +18,8 @@ class User(Base):
     email = Column(String(255), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=True)
     name = Column(String(100), nullable=False)
+    # 부서명 (목업 UI의 제품팀/개발팀/디자인팀/마케팅팀 등)
+    department = Column(String(100), nullable=True)
     social_provider = Column(Enum(SocialProvider), default=SocialProvider.none)
     social_id = Column(String(255), nullable=True)
     

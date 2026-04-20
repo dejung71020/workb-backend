@@ -3,6 +3,30 @@ from pydantic import BaseModel, Field
 from datetime import date, datetime
 from typing import Optional
 
+class WorkspaceListItem(BaseModel):
+    id: int
+    name: str
+    role: str
+
+    model_config = {"from_attributes": True}
+
+
+class WorkspaceListResponse(BaseModel):
+    success: bool = True
+    workspaces: list[WorkspaceListItem] = Field(default_factory=list)
+    message: str = "OK"
+
+class WorkspaceMemberItem(BaseModel):
+    user_id: int
+    name: str
+    department: Optional[str] = None
+    role: str
+
+class WorkspaceMembersResponse(BaseModel):
+    success: bool = True
+    members: list[WorkspaceMemberItem] = Field(default_factory=list)
+    message: str = "OK"
+
 
 class DashboardParticipantItem(BaseModel):
     user_id: int

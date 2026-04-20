@@ -11,6 +11,8 @@ from app.domains.meeting.schemas import (
     CreateMeetingRequest,
     CreateMeetingResponse,
     CreateMeetingResponseData,
+    DeleteMeetingResponse,
+    UpdateMeetingRequest,
     MeetingSearchData,
     MeetingSearchItemOut,
     MeetingSearchParams,
@@ -20,7 +22,9 @@ from app.domains.meeting.schemas import (
     MeetingHistoryResponse,
 )
 from app.domains.user.models import User
-from app.domains.intelligence.models import MeetingMinute
+from app.domains.intelligence.models import Decision, MeetingMinute, MinutePhoto, ReviewRequest
+from app.domains.action.models import ActionItem, Report, WbsEpic, WbsTask
+from app.domains.meeting.models import Agenda, AgendaItem
 from app.domains.meeting.repository import MeetingHistoryRepository
 
 
@@ -80,6 +84,180 @@ class MeetingCreateService:
 
             db.commit()
             db.refresh(meeting)
+        except Exception:
+            db.rollback()
+            raise
+
+        return CreateMeetingResponse(
+            success=True,
+            data=CreateMeetingResponseData(
+                meeting_id=int(meeting.id),
+                title=meeting.title,
+                scheduled_at=meeting.scheduled_at,
+                google_calendar_event_id=meeting.google_calendar_event_id,
+            ),
+            message="OK",
+        )
+
+
+class MeetingDeleteService:
+    """회의 삭제(연관 데이터 포함)."""
+
+    @staticmethod
+    def delete_meeting(
+        db: Session,
+        workspace_id: int,
+        meeting_id: int,
+        current_user_id: int,
+    ) -> DeleteMeetingResponse:
+        # NOTE: 권한 체크는 추후 워크스페이스 멤버십/role로 확장.
+        meeting = (
+            db.query(Meeting)
+            .filter(Meeting.id == meeting_id, Meeting.workspace_id == workspace_id)
+            .one_or_none()
+        )
+        if meeting is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="회의를 찾을 수 없습니다.",
+            )
+
+        try:
+            # 1) 회의록(분) + 하위 리소스
+            minute = (
+                db.query(MeetingMinute)
+                .filter(MeetingMinute.meeting_id == meeting_id)
+                .one_or_none()
+            )
+            if minute is not None:
+                db.query(MinutePhoto).filter(MinutePhoto.minute_id == minute.id).delete(
+                    synchronize_session=False
+                )
+                db.query(ReviewRequest).filter(
+                    ReviewRequest.minute_id == minute.id
+                ).delete(synchronize_session=False)
+                db.delete(minute)
+
+            # 2) decisions
+            db.query(Decision).filter(Decision.meeting_id == meeting_id).delete(
+                synchronize_session=False
+            )
+
+            # 3) agendas + items
+            agenda_ids = [
+                int(a.id)
+                for a in db.query(Agenda.id).filter(Agenda.meeting_id == meeting_id).all()
+            ]
+            if agenda_ids:
+                db.query(AgendaItem).filter(AgendaItem.agenda_id.in_(agenda_ids)).delete(
+                    synchronize_session=False
+                )
+                db.query(Agenda).filter(Agenda.id.in_(agenda_ids)).delete(
+                    synchronize_session=False
+                )
+
+            # 4) meeting participants
+            db.query(MeetingParticipant).filter(
+                MeetingParticipant.meeting_id == meeting_id
+            ).delete(synchronize_session=False)
+
+            # 5) action items / reports
+            db.query(ActionItem).filter(ActionItem.meeting_id == meeting_id).delete(
+                synchronize_session=False
+            )
+            db.query(Report).filter(Report.meeting_id == meeting_id).delete(
+                synchronize_session=False
+            )
+
+            # 6) wbs: tasks -> epics
+            epic_ids = [
+                int(e.id)
+                for e in db.query(WbsEpic.id).filter(WbsEpic.meeting_id == meeting_id).all()
+            ]
+            if epic_ids:
+                db.query(WbsTask).filter(WbsTask.epic_id.in_(epic_ids)).delete(
+                    synchronize_session=False
+                )
+                db.query(WbsEpic).filter(WbsEpic.id.in_(epic_ids)).delete(
+                    synchronize_session=False
+                )
+
+            # 7) finally meeting
+            db.delete(meeting)
+
+            db.commit()
+        except HTTPException:
+            db.rollback()
+            raise
+        except Exception:
+            db.rollback()
+            raise
+
+        return DeleteMeetingResponse(success=True, message="OK")
+
+
+class MeetingUpdateService:
+    """회의 수정(회의 + 참석자)."""
+
+    @staticmethod
+    def update_meeting(
+        db: Session,
+        workspace_id: int,
+        meeting_id: int,
+        current_user_id: int,
+        payload: UpdateMeetingRequest,
+    ) -> CreateMeetingResponse:
+        meeting = (
+            db.query(Meeting)
+            .filter(Meeting.id == meeting_id, Meeting.workspace_id == workspace_id)
+            .one_or_none()
+        )
+        if meeting is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="회의를 찾을 수 없습니다.",
+            )
+
+        now = (
+            datetime.now(payload.scheduled_at.tzinfo)
+            if getattr(payload.scheduled_at, "tzinfo", None) is not None
+            else datetime.now()
+        )
+        if payload.scheduled_at < now:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="현재보다 이전 시간으로 회의를 예약할 수 없습니다.",
+            )
+
+        try:
+            meeting.title = payload.title
+            meeting.meeting_type = payload.meeting_type
+            meeting.scheduled_at = payload.scheduled_at
+
+            # 참석자 갱신: 기존 제거 후 재삽입 (생성자는 host 유지)
+            db.query(MeetingParticipant).filter(
+                MeetingParticipant.meeting_id == meeting_id
+            ).delete(synchronize_session=False)
+
+            ordered_user_ids: list[int] = [meeting.created_by]
+            for uid in payload.participant_ids:
+                if uid != meeting.created_by and uid not in ordered_user_ids:
+                    ordered_user_ids.append(uid)
+
+            for uid in ordered_user_ids:
+                db.add(
+                    MeetingParticipant(
+                        meeting_id=meeting.id,
+                        user_id=uid,
+                        is_host=(uid == meeting.created_by),
+                    )
+                )
+
+            db.commit()
+            db.refresh(meeting)
+        except HTTPException:
+            db.rollback()
+            raise
         except Exception:
             db.rollback()
             raise

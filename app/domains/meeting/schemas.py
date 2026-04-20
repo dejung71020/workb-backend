@@ -24,6 +24,16 @@ class CreateMeetingResponse(BaseModel):
     data: CreateMeetingResponseData
     message: str = "OK"
 
+class UpdateMeetingRequest(BaseModel):
+    title: str
+    meeting_type: str
+    scheduled_at: datetime
+    participant_ids: list[int] = Field(default_factory=list)
+
+class DeleteMeetingResponse(BaseModel):
+    success: bool = True
+    message: str = "OK"
+
 
 # ── Meeting search (GET /api/v1/knowledge/workspaces/{id}/meetings/search) ─
 

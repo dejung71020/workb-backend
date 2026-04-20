@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import date
 
-from app.api.v1.deps import get_current_user_id
+from app.api.v1.deps import get_current_user_id, require_workspace_admin
 from app.infra.database.session import get_db
 from app.domains.meeting.agenda_service import AgendaService, agenda_item_to_out
 from app.domains.meeting.schemas import (
@@ -16,9 +16,16 @@ from app.domains.meeting.schemas import (
     AgendaItemPatchResponse,
     CreateMeetingRequest,
     CreateMeetingResponse,
+  DeleteMeetingResponse,
+    UpdateMeetingRequest,
     MeetingHistoryResponse,
 )
-from app.domains.meeting.service import MeetingCreateService, MeetingHistoryService
+from app.domains.meeting.service import (
+    MeetingCreateService,
+    MeetingDeleteService,
+    MeetingUpdateService,
+    MeetingHistoryService,
+)
 
 router = APIRouter()
 
@@ -32,7 +39,7 @@ def create_workspace_meeting(
     workspace_id: int,
     body: CreateMeetingRequest,
     db: Session = Depends(get_db),
-    current_user_id: int = Depends(get_current_user_id),
+    current_user_id: int = Depends(require_workspace_admin),
 ):
     """
     워크스페이스에 회의를 예약·생성합니다.
@@ -72,6 +79,62 @@ def get_workspace_meetings_history(
     - page/size 페이징
     """
     return MeetingHistoryService.get_history(db, workspace_id, keyword, page, size)
+
+
+@router.delete(
+    "/workspaces/{workspace_id}/{meeting_id}",
+    response_model=DeleteMeetingResponse,
+)
+def delete_workspace_meeting(
+    workspace_id: int,
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(require_workspace_admin),
+):
+    """회의 및 연관 데이터 삭제."""
+    try:
+        return MeetingDeleteService.delete_meeting(
+            db=db,
+            workspace_id=workspace_id,
+            meeting_id=meeting_id,
+            current_user_id=current_user_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"회의 삭제 중 오류가 발생했습니다: {e}",
+        )
+
+
+@router.patch(
+    "/workspaces/{workspace_id}/{meeting_id}",
+    response_model=CreateMeetingResponse,
+)
+def patch_workspace_meeting(
+    workspace_id: int,
+    meeting_id: int,
+    body: UpdateMeetingRequest,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(require_workspace_admin),
+):
+    """회의 정보 수정."""
+    try:
+        return MeetingUpdateService.update_meeting(
+            db=db,
+            workspace_id=workspace_id,
+            meeting_id=meeting_id,
+            current_user_id=current_user_id,
+            payload=body,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"회의 수정 중 오류가 발생했습니다: {e}",
+        )
 
 
 @router.post(
