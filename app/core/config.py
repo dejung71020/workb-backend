@@ -21,7 +21,6 @@ class Settings(BaseSettings):
     TAVILY_API_KEY: Optional[str] = None
 
     # 3. Slack
-    SLACK_BOT_TOKEN: Optional[str] = None
     SLACK_CLIENT_ID: Optional[str] = None
     SLACK_CLIENT_SECRET: Optional[str] = None
     SLACK_REDIRECT_URI: Optional[str] = "http://localhost:8000/api/v1/integrations/slack/callback"

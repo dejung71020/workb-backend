@@ -11,18 +11,17 @@ services:
       - "443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./certbot/conf:/etc/letsencrypt:ro
-      - ./certbot/www:/var/www/certbot:ro
-    depends_on:
-      - certbot
+      - ./nginx/certs:/etc/nginx/certs:ro
+    # depends_on:
+    #   - certbot
 
   # ── Certbot (Let's Encrypt SSL) ───────────────────────
-  certbot:
-    image: certbot/certbot
-    container_name: workb_certbot
-    volumes:
-      - ./certbot/conf:/etc/letsencrypt
-      - ./certbot/www:/var/www/certbot
+  # certbot:
+  #   image: certbot/certbot
+  #   container_name: workb_certbot
+  #   volumes:
+  #     - ./certbot/conf:/etc/letsencrypt
+  #     - ./certbot/www:/var/www/certbot
 
   # ── MySQL ─────────────────────────────────────────────
   mysql:
