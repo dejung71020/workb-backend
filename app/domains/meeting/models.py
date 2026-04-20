@@ -20,6 +20,7 @@ class Meeting(Base):
     title = Column(String(200), nullable=False)
     meeting_type = Column(String(100), nullable=True)
     status = Column(Enum(MeetingStatus), default=MeetingStatus.scheduled)
+    room_name = Column(String(100), nullable=False, default="미지정")
     scheduled_at = Column(DateTime, nullable=True)
     started_at = Column(DateTime, nullable=True)
     ended_at = Column(DateTime, nullable=True)
