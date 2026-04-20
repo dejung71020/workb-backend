@@ -4,7 +4,7 @@ uvicorn[standard]==0.44.0
 python-multipart==0.0.24
 
 # AI & Agents
-langchain>=1.2.15
+langchain>=0.3.0,<0.4.0
 langchain-text-splitters>=0.3.0
 langchain-openai==1.1.12
 langchain-anthropic==1.4.0
