@@ -140,5 +140,12 @@ class GoogleCalendarClient(BaseClient):
             calendar_id: str = "primary",
     ) -> Dict[str, Any]:
         """
-        기존 이벤트의 description 만 PATCH
+        기존 이벤트의 description 만 PATCH 하여
+        일정의 설명만 바꾸는 함수.
         """
+        return await self._request(
+            "PATCH", f"/calendars/{calendar_id}/events/{event_id}",
+            json={
+                "description": description
+            },
+        )
