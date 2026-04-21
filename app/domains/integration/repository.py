@@ -1,48 +1,41 @@
 """
-외부 연동(integration) 도메인의 데이터베이스 접근 로직을 담당하는 파일입니다.
+외부 연동(integration) 도메인의 데이터베이스 접근 로직입니다.
 
-현재는 워크스페이스 생성 직후 기본 연동 상태 row를 자동으로 만들고,
-워크스페이스별 연동 상태를 조회하는 기능부터 구현합니다.
+워크스페이스 생성 직후 기본 연동 row를 보강하는 기능과
+OAuth/API Key 방식의 실제 연동 저장 기능을 함께 제공합니다.
 """
+
+from datetime import datetime
+from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.domains.integration.models import Integration
+from app.domains.integration.models import Integration, ServiceType
 
 
 DEFAULT_INTEGRATION_SERVICES = [
-    "jira",
-    "slack",
-    "notion",
-    "google_calendar",
-    "kakao",
+    ServiceType.jira,
+    ServiceType.slack,
+    ServiceType.notion,
+    ServiceType.google_calendar,
+    ServiceType.kakao,
 ]
 
 
+def _normalize_service(service: ServiceType | str) -> ServiceType:
+    if isinstance(service, ServiceType):
+        return service
+    return ServiceType(service.replace("-", "_"))
+
+
 def create_default_integrations(db: Session, workspace_id: int) -> list[Integration]:
-    """
-    워크스페이스 생성 직후 기본 integration row 5개를 생성합니다.
-
-    현재는 각 서비스에 대해 연결 전 상태(False)로 기본 데이터를 넣습니다.
-    이후 실제 OAuth 연결이 되면 is_connected를 True로 변경하는 흐름으로 확장할 수 있습니다.
-
-    Args:
-        db: 데이터베이스 세션입니다.
-        workspace_id: 기본 integration row를 생성할 워크스페이스 ID입니다.
-
-    Returns:
-        저장된 Integration 객체 리스트를 반환합니다.
-    """
     return ensure_default_integrations(db, workspace_id)
 
 
 def ensure_default_integrations(db: Session, workspace_id: int) -> list[Integration]:
-    """
-    워크스페이스에 기본 integration row가 없거나 일부 누락된 경우 보강합니다.
-    """
-    existing_integrations = get_integrations_by_workspace_id(db, workspace_id)
+    existing_integrations = get_integrations(db, workspace_id)
     existing_services = {
-        integration.service
+        _normalize_service(integration.service)
         for integration in existing_integrations
     }
 
@@ -52,44 +45,21 @@ def ensure_default_integrations(db: Session, workspace_id: int) -> list[Integrat
         if service not in existing_services
     ]
 
-    if not missing_services:
-        return existing_integrations
+    if missing_services:
+        db.add_all([
+            Integration(
+                workspace_id=workspace_id,
+                service=service,
+                is_connected=False,
+            )
+            for service in missing_services
+        ])
+        db.commit()
 
-    integrations = [
-        Integration(
-            workspace_id=workspace_id,
-            service=service,
-            is_connected=False,
-        )
-        for service in missing_services
-    ]
-
-    # 여러 row를 한 번에 DB 세션에 추가합니다.
-    db.add_all(integrations)
-
-    # INSERT 내용을 실제 DB에 반영합니다.
-    db.commit()
-
-    # 각 row의 id 등 최신 상태를 다시 반영합니다.
-    for integration in integrations:
-        db.refresh(integration)
-
-    return get_integrations_by_workspace_id(db, workspace_id)
+    return get_integrations(db, workspace_id)
 
 
-def get_integrations_by_workspace_id(db: Session, workspace_id: int) -> list[Integration]:
-    """
-    특정 워크스페이스에 연결된 전체 integration row를 조회합니다.
-
-    연동 관리 페이지에서 워크스페이스별 외부 서비스 연결 상태를 한 번에 보여줄 때 사용합니다.
-
-    Args:
-        db: 데이터베이스 세션입니다.
-        workspace_id: 조회할 워크스페이스 ID입니다.
-
-    Returns:
-        해당 워크스페이스에 속한 Integration 객체 리스트를 반환합니다.
-    """
+def get_integrations(db: Session, workspace_id: int) -> list[Integration]:
     return (
         db.query(Integration)
         .filter(Integration.workspace_id == workspace_id)
@@ -98,39 +68,127 @@ def get_integrations_by_workspace_id(db: Session, workspace_id: int) -> list[Int
     )
 
 
-def get_integration_by_service(
+def get_integrations_by_workspace_id(db: Session, workspace_id: int) -> list[Integration]:
+    return get_integrations(db, workspace_id)
+
+
+def get_integration(
     db: Session,
     workspace_id: int,
-    service: str,
-) -> Integration | None:
-    """
-    워크스페이스와 서비스 이름 기준으로 integration row를 조회합니다.
-    """
+    service: ServiceType | str,
+) -> Optional[Integration]:
+    normalized_service = _normalize_service(service)
     return (
         db.query(Integration)
         .filter(
             Integration.workspace_id == workspace_id,
-            Integration.service == service,
+            Integration.service == normalized_service,
         )
         .first()
     )
 
 
+def get_integration_by_service(
+    db: Session,
+    workspace_id: int,
+    service: ServiceType | str,
+) -> Optional[Integration]:
+    return get_integration(db, workspace_id, service)
+
+
+def upsert_integration(
+    db: Session,
+    workspace_id: int,
+    service: ServiceType | str,
+    webhook_url: str,
+) -> Integration:
+    normalized_service = _normalize_service(service)
+    integration = get_integration(db, workspace_id, normalized_service)
+
+    if integration:
+        integration.extra_config = {"webhook_url": webhook_url}
+        integration.is_connected = True
+    else:
+        integration = Integration(
+            workspace_id=workspace_id,
+            service=normalized_service,
+            extra_config={"webhook_url": webhook_url},
+            is_connected=True,
+        )
+        db.add(integration)
+
+    db.commit()
+    db.refresh(integration)
+    return integration
+
+
+def disconnect_integration(
+    db: Session,
+    workspace_id: int,
+    service: ServiceType | str,
+) -> Optional[Integration]:
+    integration = get_integration(db, workspace_id, service)
+
+    if integration:
+        integration.extra_config = None
+        integration.is_connected = False
+        integration.access_token = None
+        integration.refresh_token = None
+        integration.token_expires_at = None
+        db.commit()
+        db.refresh(integration)
+
+    return integration
+
+
 def update_integration_connection(
     db: Session,
     workspace_id: int,
-    service: str,
+    service: ServiceType | str,
     is_connected: bool,
-) -> Integration | None:
-    """
-    특정 외부 서비스의 연결 상태를 변경합니다.
-    """
-    integration = get_integration_by_service(db, workspace_id, service)
+) -> Optional[Integration]:
+    normalized_service = _normalize_service(service)
+    integration = get_integration(db, workspace_id, normalized_service)
     if not integration:
         return None
 
     integration.is_connected = is_connected
+    if not is_connected:
+        integration.extra_config = None
+        integration.access_token = None
+        integration.refresh_token = None
+        integration.token_expires_at = None
+
     db.commit()
     db.refresh(integration)
+    return integration
 
+
+def update_tokens(
+    db: Session,
+    workspace_id: int,
+    service: ServiceType | str,
+    access_token: str,
+    refresh_token: Optional[str] = None,
+    token_expires_at: Optional[datetime] = None,
+    extra_config: Optional[dict] = None,
+) -> Integration:
+    normalized_service = _normalize_service(service)
+    integration = get_integration(db, workspace_id, normalized_service)
+    if not integration:
+        integration = Integration(
+            workspace_id=workspace_id,
+            service=normalized_service,
+        )
+        db.add(integration)
+
+    integration.access_token = access_token
+    integration.refresh_token = refresh_token
+    integration.token_expires_at = token_expires_at
+    integration.is_connected = True
+    if extra_config:
+        integration.extra_config = extra_config
+
+    db.commit()
+    db.refresh(integration)
     return integration

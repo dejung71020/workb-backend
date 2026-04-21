@@ -4,7 +4,9 @@ uvicorn[standard]==0.44.0
 python-multipart==0.0.24
 
 # AI & Agents
-langchain==1.2.15
+langchain>=1.2.15
+langchain-community>=0.4.0
+langchain-text-splitters>=0.3.0
 langchain-openai==1.1.12
 langchain-anthropic==1.4.0
 langgraph==1.1.6
@@ -28,6 +30,7 @@ chromadb==1.0.7
 
 # MongoDB
 motor==3.7.0
+pymongo>=4.10.0
 
 # Cache
 redis==7.4.0
@@ -36,3 +39,14 @@ redis==7.4.0
 python-dotenv==1.2.2
 httpx==0.28.1
 pytest==9.0.2
+pdf2image==1.17.0
+python-pptx==1.0.2
+pypdf==6.10.2
+beautifulsoup4==4.12.3
+
+# Scripts & Evaluation
+matplotlib>=3.8.0
+numpy>=1.26.0
+transformers>=5.5.4
+torch>=2.2.0
+sentencepiece>=0.2.0

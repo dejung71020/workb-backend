@@ -1,1 +1,12 @@
 # app\domains\action\router.py
+from fastapi import APIRouter
+from app.domains.action.routers import slack, notion, jira, kakao, google
+
+# http://localhost:8000/api/v1/actions/
+router = APIRouter(prefix="/meetings/{meeting_id}")
+
+router.include_router(slack.router)
+router.include_router(notion.router)
+router.include_router(jira.router)
+router.include_router(kakao.router)
+router.include_router(google.router)

@@ -30,26 +30,6 @@ def create_meeting_start_blocks(meeting_id: str, title: str) -> List[Dict[str, A
         }
     ]
 
-def create_action_item_blocks(task_name: str, assignee: str) -> List[Dict[str, Any]]:
-    """
-    [SCN-SLK-002] 실시간 액션 아이템 알림용 디자인
-    회의 중 할 일이 결정되었을 때 담당자와 태스크를 보여줍니다.
-    """
-    return [
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"📍 *새로운 액션 아이템이 등록되었습니다:*\n>{task_name}"
-            }
-        },
-        {
-            "type": "context",
-            "elements": [
-                {"type": "mrkdwn", "text": f"👤 *담당자:* {assignee}"}
-            ]
-        }
-    ]
 
 def create_review_request_blocks(meeting_title: str, file_type: str, file_url: str) -> List[Dict[str, Any]]:
     """
@@ -81,43 +61,6 @@ def create_review_request_blocks(meeting_title: str, file_type: str, file_url: s
                     "style": "primary"
                 }
             ]
-        }
-    ]
-
-def create_summary_blocks(summary_text: str, wbs_link: str) -> List[Dict[str, Any]]:
-    """
-    [SCN-SLK-004] 회의 요약 및 WBS 공유용 디자인
-    회의가 끝나고 결과를 한눈에 보여줄 때 사용합니다.
-    """
-    return [
-        {
-            "type": "header",
-            "text": {
-                "type": "plain_text",
-                "text": "📝 회의 요약 및 결과 보고",
-                "emoji": True
-            }
-        },
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"*핵심 요약:*\n{summary_text}"
-            }
-        },
-        {"type": "divider"},
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": "🔗 *상세 WBS 및 결과 문서 보기*"
-            },
-            "accessory": {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "문서 바로가기"},
-                "url": wbs_link,
-                "action_id": "button-action"
-            }
         }
     ]
 
@@ -196,30 +139,6 @@ def create_error_notification_blocks(node_name: str, error_msg: str) -> List[Dic
             "fields": [
                 {"type": "mrkdwn", "text": f"*발생 위치:*\n{node_name}"},
                 {"type": "mrkdwn", "text": f"*오류 내용:*\n`{error_msg}`"}
-            ]
-        }
-    ]
-
-def create_action_bundle_blocks(actions: List[Dict[str, str]]) -> List[Dict[str, Any]]:
-    """
-    [SCN-SLK-008] 실시간 액션 아이템 묶음 배송 디자인
-    여러 개의 할 일을 불렛 포인트로 묶어서 한 번에 보여줍니다.
-    """
-    # 리스트를 예쁜 마크다운 문자열로 변환합니다.
-    action_list = "\n".join([f"• *{a['task']}* (담당: {a['assignee']})" for a in actions])
-    
-    return [
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"📌 *실시간으로 결정된 할 일 목록입니다:*\n{action_list}"
-            }
-        },
-        {
-            "type": "context",
-            "elements": [
-                {"type": "mrkdwn", "text": "💡 회의 흐름을 방해하지 않도록 결정된 사항들을 모아서 알려드립니다."}
             ]
         }
     ]
