@@ -11,7 +11,7 @@ router = APIRouter()
 
 @router.post("/meetings/{meeting_id}/screen-share/analyze", response_model=ScreenShareAnalyzeResponse)
 async def analyze_screen(
-    meeting_id: str,
+    meeting_id: int,
     file: UploadFile = File(...),
     related_utterance_seq: Optional[int] = Form(None),
 ):
@@ -26,13 +26,13 @@ async def analyze_screen(
     )
 
 @router.get("/meetings/{meeting_id}/screen-share/analyses")
-async def get_analyses(meeting_id: str):
+async def get_analyses(meeting_id: int):
     analyses = await service.get_analyses(meeting_id)
     return {"meeting_id": meeting_id, "analyses": analyses}
 
 @router.post("/meetings/{meeting_id}/screen-share/upload-ppt", response_model=PptUploadResponse)
 async def upload_ppt(
-    meeting_id: str,
+    meeting_id: int,
     file: UploadFile = File(...)
 ):
     ppt_bytes = await file.read()

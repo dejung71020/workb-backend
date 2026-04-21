@@ -45,7 +45,7 @@ async def get_meeting_context(meeting_id: str) -> str:
     utterances_raw = await r.lrange(f"meeting:{meeting_id}:utterances", 0, -1)
     speakers = {
         k.decode(): v.decode()
-        for k, v in await r.hgetall(f"meeting:{meeting_id}:speakers").items()
+        for k, v in (await r.hgetall(f"meeting:{meeting_id}:speakers")).items()
     }
     anon_map: dict = {} # 미명명 화자 순번 공유용 - 루프 전체에서 재사용
     lines = []
@@ -73,7 +73,7 @@ async def get_related_utterance(meeting_id: str, seq: int | None) -> str:
     
     speakers = {
         k.decode(): v.decode()
-        for k, v in await r.hgetall(f"meeting:{meeting_id}:speakers").items()
+        for k, v in (await r.hgetall(f"meeting:{meeting_id}:speakers")).items()
     }
 
     utterance = json.loads(utterances_raw[seq])

@@ -208,6 +208,7 @@ async def knowledge_node(state: SharedState) -> dict:
     - 회의 내용만으로 답할 수 있으면 도구 없이 답변하세요.
     - 정보가 불완전하더라도 회의에서 언급된 내용을 바탕으로 최대한 답변하세요.
     - 확실하지 않은 정보는 "~라고 언급됐습니다" 형식으로 답변하세요.
+    - 특정 문서·파일·자료·브리프·보고서 내용이 필요하면 search_internal_db를 먼저 사용하세요. workspace_id는 반드시 "{workspace_id}"로 전달하세요.
     - 외부 자료가 필요하면 web_search를 사용하세요.
     - 이전 회의 내용이 필요하면 search_past_meetings를 사용하세요.
     - 회사 내부 문서가 필요하면 search_internal_db를 사용하세요. workspace_id는 반드시 "{workspace_id}"로 전달하세요.
@@ -449,15 +450,20 @@ def _format_summary_markdown(s: dict) -> str:
 async def classify_intent(state: SharedState) -> dict:
     """summary 여부만 판단 - 나머지는 전부 knowledge_node로"""
     prompt = f"""
-    사용자 입력이 회의 내용 요약 요청인지 판단하세요. 단어 하나만 출력하세요
-
-    - summary: 요약해줘, 정리해줘, 중간 정리 등 명시적 요약 요청
-    - agent: 그 외 모든 입력
-
-    입력: {state['user_question']}
+    사용자 입력이 "현재 진행 중인 회의 전체 내용을 요약해달라"는 요청인지 판단하세요. 단어 하나만 출력하세요.
+                                                                                                                         
+    - summary: 현재 회의 내용 요약/정리 요청. 예) "오늘 회의 요약해줘", "지금까지 논의 정리해줘", "중간 정리해줘"      
+    - agent: 특정 문서/자료 검색, 외부 정보 조회, 일정 관련, 특정 주제에 대한 질문 등 그 외 모든 입력.                 
+            예) "AI 브리프 내용 요약해줘", "지난 회의에서 결정된 거 알려줘", "~~문서 찾아줘"                         
+                                                                                                                        
+    입력: {state['user_question']} 
     """
     result = await llm.ainvoke(prompt)
-    return {"function_type": result.content.strip()}
+    function_type = result.content.strip().lower()                                                                     
+    # LLM이 예상 밖의 값을 반환하면 agent로 fallback
+    if function_type not in ("summary", "agent"):                                                                      
+        function_type = "agent"
+    return {"function_type": function_type}
 
 def get_collection(workspace_id: str):
     f"""

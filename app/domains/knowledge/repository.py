@@ -60,7 +60,7 @@ async def save_meeting_summary(meeting_id: str, summary: dict) -> None:
 # -------------------------------------------------------------
 # MySQL
 # -------------------------------------------------------------
-def get_meeting_participants(meeting_id: str) -> list[str]:
+def get_meeting_participants(meeting_id: int) -> list[str]:
     """
     meeting_participants JOIN users로 참석자 이름 목록 반환
 
@@ -80,5 +80,20 @@ def get_meeting_participants(meeting_id: str) -> list[str]:
             {"meeting_id": int(meeting_id)}
         ).fetchall()
         return [row.name for row in rows]
+    finally:
+        db.close()
+
+def get_workspace_id(meeting_id: int) -> int:
+    db = SessionLocal()
+    try:
+        row = db.execute(
+            text("""
+                SELECT workspace_id
+                FROM meetings
+                WHERE id = :meeting_id
+            """),
+            {"meeting_id": int(meeting_id)}
+        ).fetchone()
+        return row.workspace_id if row else None
     finally:
         db.close()

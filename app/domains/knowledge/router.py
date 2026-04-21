@@ -26,17 +26,19 @@ _EXT_MAP = {
 }
 
 @router.post("/meetings/{meeting_id}/chatbot/message")
-async def chatbot_message(meeting_id: str, req: ChatbotMessageRequest):
+async def chatbot_message(meeting_id: int, req: ChatbotMessageRequest):
+    workspace_id = repository.get_workspace_id(meeting_id)
     state = {
         "meeting_id": meeting_id,
+        "workspace_id": workspace_id,
         "user_question": req.message,
         "function_type": "",
         "chat_response": ""
     }
-    result = knowledge_app.ainvoke(state)
+    result = await knowledge_app.ainvoke(state)
 
-    repository.save_chat_log(meeting_id, req.session_id, "user", req.message, "")
-    repository.save_chat_log(
+    await repository.save_chat_log(meeting_id, req.session_id, "user", req.message, "")
+    await repository.save_chat_log(
         meeting_id, req.session_id, "assistant", 
         result["chat_response"], result["function_type"]
     )
@@ -50,7 +52,7 @@ async def chatbot_message(meeting_id: str, req: ChatbotMessageRequest):
     )
 
 @router.get("/meetings/{meeting_id}/chatbot/history", response_model=ChatbotHistoryResponse)
-async def chatbot_history(meeting_id: str, session_id: str):
+async def chatbot_history(meeting_id: int, session_id: str):
     logs = await repository.get_chat_history(meeting_id, session_id)
     return ChatbotHistoryResponse(
         messages=[
@@ -64,7 +66,7 @@ async def chatbot_history(meeting_id: str, session_id: str):
     )
 
 @router.post("/meetings/{meeting_id}/chatbot/summary", response_model=ChatbotSummaryResponse)
-async def chatbot_summary(meeting_id: str):
+async def chatbot_summary(meeting_id: int):
     state = {
         "meeting_id": meeting_id,
         "user_question": "",
@@ -81,7 +83,7 @@ async def chatbot_summary(meeting_id: str):
 
 @router.post("/workspaces/{workspace_id}/documents", response_model=DocumentUploadResponse)
 async def upload_document(
-    workspace_id: str,
+    workspace_id: int,
     file: UploadFile = File(...),
     title: Optional[str] = Form(None),
 ):
