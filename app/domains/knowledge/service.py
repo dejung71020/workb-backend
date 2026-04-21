@@ -89,7 +89,7 @@ def _extract_html(file_bytes: bytes) -> str:
     return re.sub(fr"\n{3,}", "\n\n", text).strip()
 
 def ingest_document(
-    workspace_id: str,
+    workspace_id: int,
     filename: str,
     file_bytes: bytes,
     file_type: str,
