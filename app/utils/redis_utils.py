@@ -1,4 +1,5 @@
 # app/utils/redis_utils.py
+from numpy._core.numerictypes import int32
 import redis
 import json
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -35,7 +36,7 @@ def _resolve_speaker(speaker_id: str | None, speakers: dict, anon_map: dict) -> 
         anon_map[speaker_id] = f"화자{len(anon_map) + 1}"
     return anon_map[speaker_id]
 
-async def get_meeting_context(meeting_id: str) -> str:
+async def get_meeting_context(meeting_id: int) -> str:
     """
     전체 발화를 "[이름] 내용" 형태 문자열로 반환.
     
@@ -57,7 +58,7 @@ async def get_meeting_context(meeting_id: str) -> str:
     return "\n".join(lines)
 
 
-async def get_related_utterance(meeting_id: str, seq: int | None) -> str:
+async def get_related_utterance(meeting_id: int, seq: int | None) -> str:
     """
     seq 기준 단일 발화 반환. vision 캡처 시점 맥락용.
     
@@ -81,7 +82,7 @@ async def get_related_utterance(meeting_id: str, seq: int | None) -> str:
     name = _resolve_speaker(utterance.get("speaker_id"), speakers, {})
     return f"[{name}] {utterance['content']}"
 
-async def get_past_meeting_context(meeting_id: str) -> str:
+async def get_past_meeting_context(meeting_id: int) -> str:
     """MongoDB meeting_contexts에서 이전 회의 컨텍스트 가져오기"""
     doc = await mongo_db["meeting_contexts"].find_one({"meeting_id": meeting_id})
     if doc:

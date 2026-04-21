@@ -28,7 +28,7 @@ def encode_image(image_bytes: bytes) -> str:
     return base64.b64encode(image_bytes).decode("utf-8")
 
 # --- 이미지 캡처 분석 ---
-async def analyze_image(image_bytes: bytes, meeting_id: str, seq: int | None = None) -> dict:
+async def analyze_image(image_bytes: bytes, meeting_id: int, seq: int | None = None) -> dict:
     """화면 캡처 이미지 OCR + 차트 분석"""
     context = (
         await get_related_utterance(meeting_id, seq) 
@@ -96,7 +96,7 @@ def convert_pptx_to_images(ppt_bytes: bytes) -> list[bytes]:
             result.append(buf.getvalue())
         return result
 
-async def analyze_ppt_slide_image(image_bytes: bytes, slide_number: int, meeting_id: str) -> dict:
+async def analyze_ppt_slide_image(image_bytes: bytes, slide_number: int, meeting_id: int) -> dict:
     """슬라이드 이미지 전체를 Gemini Vision으로 분석"""
     context = await get_meeting_context(meeting_id) or await get_past_meeting_context(meeting_id)
     context_section = f"현재 회의 발화 내용:\n{context}\n" if context else ""

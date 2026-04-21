@@ -46,11 +46,12 @@ async def search_past_meetings(query: str) -> list:
     """이전 회의 내용에서 관련 정보를 검색한다."""
     try:
         # $meta 연산자를 사용하여 텍스트 검색 결과를 점수 순으로 정렬
-        cursor = await mongo_db["meeting_contexts"].find(
+        cursor = mongo_db["meeting_contexts"].find(
             {"$text": {"$search": query}},
             {"score": {"$meta": "textScore"}}, # 점수를 'score' 필드에 저장
         ).sort([("score", {"$meta": "textScore"})]).limit(5) # 점수 순으로 정렬
 
+        docs = await cursor.to_list(length=5)
         return [
             {
                 "source": "past_meetings",
@@ -59,7 +60,7 @@ async def search_past_meetings(query: str) -> list:
                 "url": None,
                 "relevance_score": doc.get("score", 0.5)
             }
-            for doc in cursor
+            for doc in docs
         ]
     except Exception:
         return []
@@ -194,7 +195,8 @@ async def knowledge_node(state: SharedState) -> dict:
     system_prompt에 현재 회의 발화 전체를 컨텍스트로 주입해
     LLM이 회의 내용을 기반으로 답변하거나 필요한 도구를 선택하게 한다.
     """
-    meeting_context = await get_meeting_context(state["meeting_id"])
+    meeting_id = state.get("meeting_id", "")
+    meeting_context = await get_meeting_context(meeting_id)
     workspace_id = state.get("workspace_id", "")
 
     system_prompt = f"""
@@ -241,20 +243,22 @@ async def summary_node(state: SharedState) -> dict:
         4. LLM 호출 - SummaryResponse 구조 강제
         5. 할루시네이션 검증 - 발화 키워드 겹침률로 신뢰도 판정
     """
-
-    meeting_id = state["meeting_id"]
+    meeting_id = state.get("meeting_id")
 
     # 1단계: 컨텍스트 로드
     # partial_summary가 있으면 이미 요약된 앞부분은 재처리하지 않고 재사용.
     # 없으면 Redis에서 전체 발화를 가져온다.
-    cached = await r.get(f"meeting:{meeting_id}:partial_summary")
-    if cached:
-        # 이전 partial_summary + 새 발화만 이어붙여 중분 처리
-        prev_summary = cached.decode()
-        new_utterances = await get_meeting_context(meeting_id)
-        context = f"[이전 요약]\n(prev_summary)\n\n[추가 발화]\n{new_utterances}"
+    if not meeting_id:
+        context = ""
     else:
-        context = await get_meeting_context(meeting_id)
+        cached = await r.get(f"meeting:{meeting_id}:partial_summary")
+        if cached:
+            # 이전 partial_summary + 새 발화만 이어붙여 중분 처리
+            prev_summary = cached.decode()
+            new_utterances = await get_meeting_context(meeting_id)
+            context = f"[이전 요약]\n(prev_summary)\n\n[추가 발화]\n{new_utterances}"
+        else:
+            context = await get_meeting_context(meeting_id)
 
     # 2단계: 이전 회의 데이터 조회
     # 발화 앞부분 200자를 쿼리로 사용해 관련 이전 회의를 검색
@@ -363,7 +367,7 @@ async def summary_node(state: SharedState) -> dict:
     #   발화에서 추출하면 실제 참석자 누락/오인식 가능                                                                   
     #   DB가 정확한 소스이므로 DB에서 직접 가져옴                                                                        
     from app.domains.knowledge.repository import get_meeting_participants                                                
-    summary_dict["attendees"] = get_meeting_participants(state["meeting_id"]) 
+    summary_dict["attendees"] = get_meeting_participants(meeting_id) if meeting_id else []
 
     # partial_summary 캐시 갱신
     # 다음 요약 호출 시 이미 처리한 내용을 재처리하지 않기 위해 저장.

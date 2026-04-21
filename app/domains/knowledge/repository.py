@@ -11,9 +11,9 @@ mongo_db = AsyncIOMotorClient(settings.MONGODB_URL)["workb"]
 # -------------------------------------------------------------
 # MongoDB
 # -------------------------------------------------------------
-async def save_chat_log(meeting_id: str, session_id: str, role: str, content: str, function_type: str) -> None:
+async def save_chat_log(workspace_id: int, session_id: str, role: str, content: str, function_type: str) -> None:
     await mongo_db["chatbot_logs"].insert_one({
-        "meeting_id": meeting_id,
+        "workspace_id": workspace_id,
         "session_id": session_id,
         "role": role,
         "content": content,
@@ -21,15 +21,15 @@ async def save_chat_log(meeting_id: str, session_id: str, role: str, content: st
         "timestamp": datetime.now()
     })
 
-async def get_chat_history(meeting_id: str, session_id: str) -> list[dict]:
-    cursor = await mongo_db["chatbot_logs"].find(
-        {"meeting_id": meeting_id, "session_id": session_id},
+async def get_chat_history(workspace_id: int, session_id: str) -> list[dict]:
+    cursor = mongo_db["chatbot_logs"].find(
+        {"workspace_id": workspace_id, "session_id": session_id},
         {"_id": 0}
     ).sort("timestamp", 1)
-    return list(cursor)
+    return await cursor.to_list(length=None)
 
 
-async def save_meeting_summary(meeting_id: str, summary: dict) -> None:
+async def save_meeting_summary(workspace_id: int, meeting_id: int, summary: dict) -> None:
     """
     회의 요약을 meeting_summaries 컬렉션에 저장.
 
@@ -46,6 +46,7 @@ async def save_meeting_summary(meeting_id: str, summary: dict) -> None:
         {"meeting_id": meeting_id},
         {
             "$set": {
+                "workspace_id": workspace_id,
                 "summary": summary,
                 "attendees": summary.get("attendees", []),
                 "updated_at": now,

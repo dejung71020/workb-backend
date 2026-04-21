@@ -8,15 +8,15 @@ from app.domains.vision.agent_utils import (
 )
 from app.domains.vision import repository
 
-async def analyze_screen_share(image_bytes: bytes, meeting_id: str, seq: int | None) -> dict:
+async def analyze_screen_share(image_bytes: bytes, meeting_id: int, seq: int | None) -> dict:
     analysis = await analyze_image(image_bytes, meeting_id, seq)
     repository.save_analysis(meeting_id=meeting_id, data=analysis)
     return {"timestamp": datetime.now(), **analysis}
 
-async def get_analyses(meeting_id: str) -> list[dict]:
+async def get_analyses(meeting_id: int) -> list[dict]:
     return repository.get_analyses(meeting_id)
 
-async def analyze_ppt(ppt_bytes: bytes, meeting_id: str) -> list[dict]:
+async def analyze_ppt(ppt_bytes: bytes, meeting_id: int) -> list[dict]:
     # convert_pptx_to_images는 subprocess + 파일 I/O -> executor에서 실행
     loop = asyncio.get_event_loop()
     images = await loop.run_in_executor(

@@ -9,7 +9,7 @@ from app.domains.vision.schemas import (
 
 router = APIRouter()
 
-@router.post("/meetings/{meeting_id}/screen-share/analyze", response_model=ScreenShareAnalyzeResponse)
+@router.post("/workspace/{workspace_id}/screen-share/analyze", response_model=ScreenShareAnalyzeResponse)
 async def analyze_screen(
     meeting_id: int,
     file: UploadFile = File(...),
@@ -25,12 +25,12 @@ async def analyze_screen(
         timestamp=result["timestamp"],
     )
 
-@router.get("/meetings/{meeting_id}/screen-share/analyses")
+@router.get("/workspace/{workspace_id}/screen-share/analyses")
 async def get_analyses(meeting_id: int):
     analyses = await service.get_analyses(meeting_id)
     return {"meeting_id": meeting_id, "analyses": analyses}
 
-@router.post("/meetings/{meeting_id}/screen-share/upload-ppt", response_model=PptUploadResponse)
+@router.post("/workspace/{workspace_id}/screen-share/upload-ppt", response_model=PptUploadResponse)
 async def upload_ppt(
     meeting_id: int,
     file: UploadFile = File(...)

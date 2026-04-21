@@ -6,6 +6,7 @@ from typing import Optional, Literal
 class ChatbotMessageRequest(BaseModel):
     message: str
     session_id: str
+    meeting_id: Optional[int] = None
 
 class ChatbotMessageResponse(BaseModel):
     session_id: str
@@ -22,6 +23,9 @@ class ChatbotHistoryMessage(BaseModel):
 
 class ChatbotHistoryResponse(BaseModel):
     messages: list[ChatbotHistoryMessage]
+
+class ChatbotSummaryRequest(BaseModel):
+    meeting_id: Optional[int] = None
 
 # ── 요약 구조화 스키마 (신규) ─────────────────────────────────────────────
 class MeetingOverview(BaseModel):
@@ -91,7 +95,7 @@ class SummaryResponse(BaseModel):
     summary_node() 반환 타입.
     내용 없는 섹션은 [] 또는 None으로 명시 = "없음" 텍스트 금지.
     """
-    attnedees: list[str] = []
+    attendees: list[str] = []
     overview: MeetingOverview
     discussion_items: list[DiscussionItem] = []
     decisions: list[Decision] = []

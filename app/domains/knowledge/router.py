@@ -5,7 +5,7 @@ from typing import Optional
 
 from app.core.graph.workflow import knowledge_app
 from app.domains.knowledge.schemas import (
-    ChatbotMessageRequest, ChatbotMessageResponse, 
+    ChatbotMessageRequest, ChatbotMessageResponse, ChatbotSummaryRequest,
     ChatbotSummaryResponse, ChatbotHistoryMessage, ChatbotHistoryResponse
 )
 from app.domains.knowledge import repository
@@ -25,9 +25,9 @@ _EXT_MAP = {
     "htm": "htm",
 }
 
-@router.post("/meetings/{meeting_id}/chatbot/message")
-async def chatbot_message(meeting_id: int, req: ChatbotMessageRequest):
-    workspace_id = repository.get_workspace_id(meeting_id)
+@router.post("/workspace/{workspace_id}/chatbot/message")
+async def chatbot_message(workspace_id: int, req: ChatbotMessageRequest):
+    meeting_id = req.meeting_id
     state = {
         "meeting_id": meeting_id,
         "workspace_id": workspace_id,
@@ -51,9 +51,9 @@ async def chatbot_message(meeting_id: int, req: ChatbotMessageRequest):
         timestamp=datetime.now()
     )
 
-@router.get("/meetings/{meeting_id}/chatbot/history", response_model=ChatbotHistoryResponse)
-async def chatbot_history(meeting_id: int, session_id: str):
-    logs = await repository.get_chat_history(meeting_id, session_id)
+@router.get("/workspace/{workspace_id}/chatbot/history", response_model=ChatbotHistoryResponse)
+async def chatbot_history(workspace_id: int, session_id: str):
+    logs = await repository.get_chat_history(workspace_id, session_id)
     return ChatbotHistoryResponse(
         messages=[
             ChatbotHistoryMessage(
@@ -65,16 +65,17 @@ async def chatbot_history(meeting_id: int, session_id: str):
         ]
     )
 
-@router.post("/meetings/{meeting_id}/chatbot/summary", response_model=ChatbotSummaryResponse)
-async def chatbot_summary(meeting_id: int):
+@router.post("/workspace/{workspace_id}/chatbot/summary", response_model=ChatbotSummaryResponse)
+async def chatbot_summary(workspace_id: int, req: ChatbotSummaryRequest):
     state = {
-        "meeting_id": meeting_id,
+        "meeting_id": req.meeting_id,
+        "workspace_id": workspace_id,
         "user_question": "",
         "function_type": "",
         "chat_response": ""
     }
     result = await summary_node(state)
-    await repository.save_meeting_summary(meeting_id, result["summary"])
+    await repository.save_meeting_summary(workspace_id, req.meeting_id, result["summary"])
 
     return ChatbotSummaryResponse(
         summary=result["summary"],
