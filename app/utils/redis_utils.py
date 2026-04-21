@@ -1,13 +1,13 @@
 # app/utils/redis_utils.py
 import redis
 import json
-from pymongo import MongoClient
+from motor.motor_asyncio import AsyncIOMotorClient
 
 from app.core.config import settings
 
-mongo_db = MongoClient(settings.MONGODB_URL)["workb"]
+mongo_db = AsyncIOMotorClient(settings.MONGODB_URL)["workb"]
 
-r = redis.from_url(settings.REDIS_URL)
+r = redis.asyncio.from_url(settings.REDIS_URL)
 
 def _resolve_speaker(speaker_id: str | None, speakers: dict, anon_map: dict) -> str:
     """
@@ -35,17 +35,17 @@ def _resolve_speaker(speaker_id: str | None, speakers: dict, anon_map: dict) -> 
         anon_map[speaker_id] = f"화자{len(anon_map) + 1}"
     return anon_map[speaker_id]
 
-def get_meeting_context(meeting_id: str) -> str:
+async def get_meeting_context(meeting_id: str) -> str:
     """
     전체 발화를 "[이름] 내용" 형태 문자열로 반환.
     
     화자 분리가 불안전한 발화도 "알 수 없음" / "화자N"으로 표기해
     summary_node가 내용 중심으로 처리할 수 있게 한다.
     """
-    utterances_raw = r.lrange(f"meeting:{meeting_id}:utterances", 0, -1)
+    utterances_raw = await r.lrange(f"meeting:{meeting_id}:utterances", 0, -1)
     speakers = {
         k.decode(): v.decode()
-        for k, v in r.hgetall(f"meeting:{meeting_id}:speakers").items()
+        for k, v in await r.hgetall(f"meeting:{meeting_id}:speakers").items()
     }
     anon_map: dict = {} # 미명명 화자 순번 공유용 - 루프 전체에서 재사용
     lines = []
@@ -57,7 +57,7 @@ def get_meeting_context(meeting_id: str) -> str:
     return "\n".join(lines)
 
 
-def get_related_utterance(meeting_id: str, seq: int | None) -> str:
+async def get_related_utterance(meeting_id: str, seq: int | None) -> str:
     """
     seq 기준 단일 발화 반환. vision 캡처 시점 맥락용.
     
@@ -67,13 +67,13 @@ def get_related_utterance(meeting_id: str, seq: int | None) -> str:
     if seq is None:
         return ""
 
-    utterances_raw = r.lrange(f"meeting:{meeting_id}:utterances", 0, -1)
+    utterances_raw = await r.lrange(f"meeting:{meeting_id}:utterances", 0, -1)
     if seq >= len(utterances_raw):
         return ""
     
     speakers = {
         k.decode(): v.decode()
-        for k, v in r.hgetall(f"meeting:{meeting_id}:speakers").items()
+        for k, v in await r.hgetall(f"meeting:{meeting_id}:speakers").items()
     }
 
     utterance = json.loads(utterances_raw[seq])
@@ -81,9 +81,9 @@ def get_related_utterance(meeting_id: str, seq: int | None) -> str:
     name = _resolve_speaker(utterance.get("speaker_id"), speakers, {})
     return f"[{name}] {utterance['content']}"
 
-def get_past_meeting_context(meeting_id: str) -> str:
+async def get_past_meeting_context(meeting_id: str) -> str:
     """MongoDB meeting_contexts에서 이전 회의 컨텍스트 가져오기"""
-    doc = mongo_db["meeting_contexts"].find_one({"meeting_id": meeting_id})
+    doc = await mongo_db["meeting_contexts"].find_one({"meeting_id": meeting_id})
     if doc:
         return doc.get("summary", "")
     return ""

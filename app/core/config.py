@@ -7,10 +7,6 @@ class Settings(BaseSettings):
     ENV: str = "dev"
     DEBUG: bool = False
     DATABASE_URL: Optional[str] = None
-    MONGODB_URL: Optional[str] = None
-    CHROMA_HOST: str = "localhost"
-    CHROMA_PORT: int = 8001
-
     SECRET_KEY: str = "secret_key"
     ALGORITHM: str = "HS256"
     REDIS_URL: str = "redis://localhost:6379"

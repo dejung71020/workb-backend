@@ -91,6 +91,7 @@ class SummaryResponse(BaseModel):
     summary_node() 반환 타입.
     내용 없는 섹션은 [] 또는 None으로 명시 = "없음" 텍스트 금지.
     """
+    attnedees: list[str] = []
     overview: MeetingOverview
     discussion_items: list[DiscussionItem] = []
     decisions: list[Decision] = []
@@ -99,6 +100,13 @@ class SummaryResponse(BaseModel):
     next_meeting: Optional[str] = None
     previous_followups: list[PreviousMeetingFollowUp] = [] # 이전 회의 follow-up 추적
     hallucination_flags: list[HallucinationFlag] = [] # 발화 근거 검증 결과
+
+class DocumentUploadResponse(BaseModel):
+    """문서 업로드 성공 응답."""
+    doc_id: str         # "{workspace_id}_{filename}" — 재업로드 시 동일 ID로 덮어씀
+    chunks: int         # 분할된 청크 수 (임베딩 저장 단위)
+    title: str
+    uploaded_at: datetime
 
 class ChatbotSummaryResponse(BaseModel):
     summary: SummaryResponse

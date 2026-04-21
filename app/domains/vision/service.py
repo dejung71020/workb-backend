@@ -8,29 +8,36 @@ from app.domains.vision.agent_utils import (
 )
 from app.domains.vision import repository
 
-def analyze_screen_share(image_bytes: bytes, meeting_id: str, seq: int | None) -> dict:
-    analysis = analyze_image(image_bytes, meeting_id, seq)
+async def analyze_screen_share(image_bytes: bytes, meeting_id: str, seq: int | None) -> dict:
+    analysis = await analyze_image(image_bytes, meeting_id, seq)
     repository.save_analysis(meeting_id=meeting_id, data=analysis)
     return {"timestamp": datetime.now(), **analysis}
 
-def get_analyses(meeting_id: str) -> list[dict]:
+async def get_analyses(meeting_id: str) -> list[dict]:
     return repository.get_analyses(meeting_id)
 
-def analyze_ppt(ppt_bytes: bytes, meeting_id: str) -> list[dict]:
-    images = convert_pptx_to_images(ppt_bytes)
+async def analyze_ppt(ppt_bytes: bytes, meeting_id: str) -> list[dict]:
+    # convert_pptx_to_images는 subprocess + 파일 I/O -> executor에서 실행
+    loop = asyncio.get_event_loop()
+    images = await loop.run_in_executor(
+        None,
+        convert_pptx_to_images,
+        ppt_bytes
+    )
 
-    def analyze_one(args):
-        i, image_bytes = args
-        analysis = analyze_ppt_slide_image(image_bytes, i + 1, meeting_id)
-        results.append({
+    # 슬라이드 분석은 LLM 호출 -> asyncio.gather로 병렬 처리
+    analyses = await asyncio.gather(*[
+        analyze_ppt_slide_image(image_bytes, i + 1, meeting_id)
+        for i, image_bytes in enumerate(images)
+    ])
+    
+    return [
+        {
             "slide_number": i + 1,
-            "text": analysis.get("ocr_text", ""),
-            "chart_description": analysis.get("chart_description", ""),
-            "key_points": analysis.get("key_points", []),
-            "summary": analysis.get("summary", ""),
-        })
-
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        results = list(executor.map(analyze_one, enumerate(images)))
-
-    return results
+            "text": a.get("ocr_text", ""),
+            "chart_description": a.get("chart_description", ""),
+            "key_points": a.get("key_points", []),
+            "summary": a.get("summary", ""),
+        }
+        for i, a in enumerate(analyses)
+    ]

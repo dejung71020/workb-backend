@@ -16,7 +16,7 @@ async def analyze_screen(
     related_utterance_seq: Optional[int] = Form(None),
 ):
     image_bytes = await file.read()
-    result = service.analyze_screen_share(image_bytes, meeting_id, related_utterance_seq)
+    result = await service.analyze_screen_share(image_bytes, meeting_id, related_utterance_seq)
     return ScreenShareAnalyzeResponse(
         meeting_id=meeting_id,
         ocr_text=result.get("ocr_text", ""),
@@ -27,7 +27,7 @@ async def analyze_screen(
 
 @router.get("/meetings/{meeting_id}/screen-share/analyses")
 async def get_analyses(meeting_id: str):
-    analyses = service.get_analyses(meeting_id)
+    analyses = await service.get_analyses(meeting_id)
     return {"meeting_id": meeting_id, "analyses": analyses}
 
 @router.post("/meetings/{meeting_id}/screen-share/upload-ppt", response_model=PptUploadResponse)
@@ -36,7 +36,7 @@ async def upload_ppt(
     file: UploadFile = File(...)
 ):
     ppt_bytes = await file.read()
-    slides = service.analyze_ppt(ppt_bytes, meeting_id)
+    slides = await service.analyze_ppt(ppt_bytes, meeting_id)
     return PptUploadResponse(
         meeting_id=meeting_id,
         total_slides=len(slides),

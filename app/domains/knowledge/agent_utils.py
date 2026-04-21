@@ -5,22 +5,32 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.graph import StateGraph, MessagesState, END
-from pymongo import MongoClient
+from motor.motor_asyncio import AsyncIOMotorClient
 import chromadb
 import redis
 
 from app.core.config import settings
 from app.core.graph.state import SharedState
 from app.utils.redis_utils import get_meeting_context
+from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 
 # --- 클라이언트 초기화 ---
 # 모듈 로드 시 한 번만 연결. 요청마다 새로 연결하지 않음.
-mongo_db = MongoClient(settings.MONGODB_URL)["workb"]
+mongo_db = AsyncIOMotorClient(settings.MONGODB_URL)["workb"]
 chroma_client = chromadb.HttpClient(
     host=settings.CHROMA_HOST,
     port=settings.CHROMA_PORT,
 )
-r = redis.from_url(settings.REDIS_URL)
+r = redis.asyncio.from_url(settings.REDIS_URL)
+
+# ── OpenAI 임베딩 함수 ────────────────────────────────────────────────────────
+# 저장(service.py)과 검색(search_internal_db) 양쪽에서 동일한 EF를 써야
+# 벡터 공간이 일치해 올바른 유사도 계산이 가능함.
+# ChromaDB는 EF를 영속 저장하지 않으므로 get할 때마다 명시해야 함.
+_openai_ef = OpenAIEmbeddingFunction(
+    api_key=settings.OPENAI_API_KEY,
+    model_name="text-embedding-3-small",
+)
 
 llm = ChatOpenAI(
     model="gpt-4o-mini",
@@ -32,11 +42,11 @@ llm = ChatOpenAI(
 # @tool 데코레이터가 함수 시그니처와 docstring을 LLM용 tool_schema로 변환함.
 
 @tool
-def search_past_meetings(query: str) -> list:
+async def search_past_meetings(query: str) -> list:
     """이전 회의 내용에서 관련 정보를 검색한다."""
     try:
         # $meta 연산자를 사용하여 텍스트 검색 결과를 점수 순으로 정렬
-        cursor = mongo_db["meeting_contexts"].find(
+        cursor = await mongo_db["meeting_contexts"].find(
             {"$text": {"$search": query}},
             {"score": {"$meta": "textScore"}}, # 점수를 'score' 필드에 저장
         ).sort([("score", {"$meta": "textScore"})]).limit(5) # 점수 순으로 정렬
@@ -55,10 +65,14 @@ def search_past_meetings(query: str) -> list:
         return []
 
 @tool
-def search_internal_db(query: str) -> list:
-    """회사 내부 문서에서 관련 정보를 시멘틱 검색한다."""
+def search_internal_db(query: str, workspace_id: str) -> list:
+    """
+    회사 내부 문서에서 관련 정보를 시멘틱 검색한다.
+    workspace_id: 현재 워크스페이스 ID
+    """
     try:
-        collection = chroma_client.get_or_create_collection("internal_docs")
+        # get_collection()이 저장 때와 동일한 EF를 사용 → 벡터 공간 일치
+        collection = get_collection(workspace_id)
         results = collection.query(
             query_texts=[query],
             n_results=5
@@ -173,14 +187,15 @@ react_agent = agent_graph.compile()
 # SharedState를 받아 처리 후 업데이트할 필드만 dict로 반환.
 # LangGraph가 반환값을 state에 머지(merge)한다.
 
-def knowledge_node(state: SharedState) -> dict:
+async def knowledge_node(state: SharedState) -> dict:
     """
     사용자 질문을 react_agent로 처리하는 메인 Q&A 노드.
 
     system_prompt에 현재 회의 발화 전체를 컨텍스트로 주입해
     LLM이 회의 내용을 기반으로 답변하거나 필요한 도구를 선택하게 한다.
     """
-    meeting_context = get_meeting_context(state["meeting_id"])
+    meeting_context = await get_meeting_context(state["meeting_id"])
+    workspace_id = state.get("workspace_id", "")
 
     system_prompt = f"""
     당신은 회의 AI 어시스턴트입니다.
@@ -195,14 +210,14 @@ def knowledge_node(state: SharedState) -> dict:
     - 확실하지 않은 정보는 "~라고 언급됐습니다" 형식으로 답변하세요.
     - 외부 자료가 필요하면 web_search를 사용하세요.
     - 이전 회의 내용이 필요하면 search_past_meetings를 사용하세요.
-    - 회사 내부 문서가 필요하면 search_internal_db를 사용하세요.
+    - 회사 내부 문서가 필요하면 search_internal_db를 사용하세요. workspace_id는 반드시 "{workspace_id}"로 전달하세요.
     - 일정 등록 요청이면 register_calendar를 사용하세요.
     - 일정 수정 요청이면 update_calendar_event를 사용하세요.
     - 일정 삭제 요청이면 delete_calendar_event를 사용하세요.
     - 특정 날짜나 일정에 대해 물어보면 get_calendar_events를 사용하세요.
     """
 
-    result = react_agent.invoke({
+    result = await react_agent.ainvoke({
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": state["user_question"]}
@@ -214,7 +229,7 @@ def knowledge_node(state: SharedState) -> dict:
         "function_type": "agent"
     }
 
-def summary_node(state: SharedState) -> dict:
+async def summary_node(state: SharedState) -> dict:
     """
     회의 발화 전체를 구조화된 JSON 요약으로 변환하는 노드.
 
@@ -231,19 +246,19 @@ def summary_node(state: SharedState) -> dict:
     # 1단계: 컨텍스트 로드
     # partial_summary가 있으면 이미 요약된 앞부분은 재처리하지 않고 재사용.
     # 없으면 Redis에서 전체 발화를 가져온다.
-    cached = r.get(f"meeting:{meeting_id}:partial_summary")
+    cached = await r.get(f"meeting:{meeting_id}:partial_summary")
     if cached:
         # 이전 partial_summary + 새 발화만 이어붙여 중분 처리
         prev_summary = cached.decode()
-        new_utterances = get_meeting_context(meeting_id)
+        new_utterances = await get_meeting_context(meeting_id)
         context = f"[이전 요약]\n(prev_summary)\n\n[추가 발화]\n{new_utterances}"
     else:
-        context = get_meeting_context(meeting_id)
+        context = await get_meeting_context(meeting_id)
 
     # 2단계: 이전 회의 데이터 조회
     # 발화 앞부분 200자를 쿼리로 사용해 관련 이전 회의를 검색
     # search_past_meetings는 @tool이므로 .invoke()로 직접 호출.
-    past_meetings = search_past_meetings.invoke({"query": context[:200]})
+    past_meetings = await search_past_meetings.ainvoke({"query": context[:200]})
     past_context = "\n".join(
         m.get("snippet", "") for m in past_meetings if m.get("snippet")
     )
@@ -305,7 +320,7 @@ def summary_node(state: SharedState) -> dict:
     """
 
     # 4단계: LLM 호출
-    result = llm.invoke(prompt)
+    result = await llm.ainvoke(prompt)
     content = result.content
 
     # JSON 블록만 추출 (LLM이 설명 텍스트를 앞뒤에 붙이는 경우 대비)
@@ -343,6 +358,12 @@ def summary_node(state: SharedState) -> dict:
 
     summary_dict["hallucination_flags"] = flags
 
+    # 참석자 명단 직접 주입 — LLM에게 맡기지 않는 이유:
+    #   발화에서 추출하면 실제 참석자 누락/오인식 가능                                                                   
+    #   DB가 정확한 소스이므로 DB에서 직접 가져옴                                                                        
+    from app.domains.knowledge.repository import get_meeting_participants                                                
+    summary_dict["attendees"] = get_meeting_participants(state["meeting_id"]) 
+
     # partial_summary 캐시 갱신
     # 다음 요약 호출 시 이미 처리한 내용을 재처리하지 않기 위해 저장.
     # TTL 3600초(1시간) — 회의 종료 후 자동 만료.
@@ -351,7 +372,7 @@ def summary_node(state: SharedState) -> dict:
         partial_text = overview.get("purpose", "") or json.dumps(
             summary_dict.get("discussion_items", [])[:2], ensure_ascii=False
         )
-        r.set(f"meeting:{meeting_id}:partial_summary", partial_text, ex=3600)
+        await r.set(f"meeting:{meeting_id}:partial_summary", partial_text, ex=3600)
     except Exception:
         pass  # 캐시 저장 실패는 요약 결과에 영향 없음
 
@@ -370,6 +391,11 @@ def _format_summary_markdown(s: dict) -> str:
     lines.append(f"## 📋 {purpose}")
     if overview.get("datetime_str"):
         lines.append(f"**일시:** {overview['datetime_str']}")
+
+    # 참석자 — overview 바로 아래                                                                                        
+    attendees = s.get("attendees", [])
+    if attendees:                                                                                                        
+        lines.append(f"**참석자:** {', '.join(attendees)}")
 
     discussion = s.get("discussion_items", [])
     if discussion:
@@ -420,7 +446,7 @@ def _format_summary_markdown(s: dict) -> str:
 
     return "\n".join(lines)
 
-def classify_intent(state: SharedState) -> dict:
+async def classify_intent(state: SharedState) -> dict:
     """summary 여부만 판단 - 나머지는 전부 knowledge_node로"""
     prompt = f"""
     사용자 입력이 회의 내용 요약 요청인지 판단하세요. 단어 하나만 출력하세요
@@ -430,5 +456,17 @@ def classify_intent(state: SharedState) -> dict:
 
     입력: {state['user_question']}
     """
-    result = llm.invoke(prompt)
+    result = await llm.ainvoke(prompt)
     return {"function_type": result.content.strip()}
+
+def get_collection(workspace_id: str):
+    f"""
+    ws_{workspace_id}_docs 컬렉션 반환.
+    service.py(저장)와 search_internal_db(검색) 양쪽에서 호출.
+    항상 동일한 _openai_ef를 넘겨 벡터 공간 일치 보장.
+    """
+    return chroma_client.get_or_create_collection(
+        name=f"ws_{workspace_id}_docs",
+        embedding_function=_openai_ef,
+        metadata={"workspace_id": workspace_id}
+    )
