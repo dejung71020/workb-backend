@@ -25,7 +25,7 @@ class Meeting(Base):
     started_at = Column(DateTime, nullable=True)
     ended_at = Column(DateTime, nullable=True)
     google_calendar_event_id = Column(String(255), nullable=True)
-    
+
     created_at = Column(DateTime, default=func.now(), nullable=False)
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
