@@ -111,12 +111,12 @@ async def suggest_next_meeting(
 
     attendee_emails = []
     for uid in member_ids:
-        user_email = await slack_client.get_user_info(uid)
-        if user_email:
-            attendee_emails.append(user_email)
+        id_name_email = await slack_client.get_user_info(uid)
+        if id_name_email:
+            attendee_emails.append(id_name_email.get("email", ""))
     
-    if not user_email:
-        raise ValueError("Slack 채널에서 수집된 구글 이메일이 없습니다.")
+    if not id_name_email:
+        raise ValueError("Slack 채널에서 수집된 이메일이 없습니다.")
     
     access_token = await get_valid_google_token(db, workspace_id)
     client = GoogleCalendarClient(access_token)
@@ -135,6 +135,12 @@ async def suggest_next_meeting(
     for cal in freebusy.get("calendars", {}).values():
         for slot in cal.get("busy", []):
             start = datetime.fromisoformat(slot['start'].replace("Z", "+00:00"))
+            end = datetime.fromisoformat(slot["end"].replace("Z", "+00:00"))
+            busy_intervals.append((start, end))
+    
+    suggestions: List[str] = []
+    
+    
 
 async def register_next_meeting(
         db: Session,
