@@ -46,13 +46,13 @@ async def export_google_calendar(
 
         if decisions:
             lines.append("\n[결정 사항]")
-            lines.extend(f"- {d.get("decision", '')}" for d in decisions)
+            lines.extend(f"- {d.get('decision', '')}" for d in decisions)
 
         if action_items:
             lines.append("\n[액션 아이템]")
             for a in action_items:
-                deadline = f"(~{a.get("deadline", '')})" if a.get("deadline") else ""
-                lines.append(f"- [{a.get("assignee", '')}] {a.get('content', '')} {deadline}")
+                deadline = f"(~{a.get('deadline', '')})" if a.get("deadline") else ""
+                lines.append(f"- [{a.get('assignee', '')}] {a.get('content', '')} {deadline}")
         
         if attendees:
             lines.append(f"\n[참석자] {', '.join(attendees)}")
