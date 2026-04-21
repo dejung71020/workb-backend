@@ -1,10 +1,11 @@
 # app/domains/action/services/google.py
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List
 
 from sqlalchemy.orm import Session
 
+from app.utils.time_utils import now_kst, KST
 from app.domains.integration.models import ServiceType
 from app.domains.integration import repository as integration_repo
 from app.domains.integration.service import get_valid_google_token
@@ -66,7 +67,7 @@ async def export_google_calendar(
             )
         
         else:
-            started = meeting.started_at or meeting.scheduled_at or datetime.now()
+            started = meeting.started_at or meeting.scheduled_at or now_kst()
             ended = meeting.ended_at or (started + timedelta(hours=1))
             await client.create_event(
                 title=meeting.title,
@@ -107,23 +108,24 @@ async def suggest_next_meeting(
         raise ValueError("Slack 기본 채널이 설정되지 않았습니다.")
     
     slack_client = SlackClient(slack_integration.access_token)
-    member_ids = slack_client.get_channel_members(channel_id=channel_id)
+    member_ids = await slack_client.get_channel_members(channel_id=channel_id)
 
     attendee_emails = []
     for uid in member_ids:
-        id_name_email = await slack_client.get_user_info(uid)
-        if id_name_email:
-            attendee_emails.append(id_name_email.get("email", ""))
+        info = await slack_client.get_user_info(uid)
+        email = info.get("email", "")
+        if email:
+            attendee_emails.append(email)
     
-    if not id_name_email:
+    if not attendee_emails:
         raise ValueError("Slack 채널에서 수집된 이메일이 없습니다.")
     
     access_token = await get_valid_google_token(db, workspace_id)
     client = GoogleCalendarClient(access_token)
 
-    now = datetime.now()
+    now = now_kst()
     time_min = now.strftime("%Y-%m-%dT%H:%M:%S+09:00")
-    time_max = (now + timedelta(days=14)).strftime("%Y-%M-%dT%H:%M:%s+09:00")
+    time_max = (now + timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%S+09:00")
 
     freebusy = await client.get_free_slots(
         calendar_ids=attendee_emails,
@@ -134,11 +136,32 @@ async def suggest_next_meeting(
     busy_intervals: List[tuple] = []
     for cal in freebusy.get("calendars", {}).values():
         for slot in cal.get("busy", []):
-            start = datetime.fromisoformat(slot['start'].replace("Z", "+00:00"))
-            end = datetime.fromisoformat(slot["end"].replace("Z", "+00:00"))
+            start = datetime.fromisoformat(slot['start'].replace("Z", "+00:00")).astimezone(KST)
+            end = datetime.fromisoformat(slot["end"].replace("Z", "+00:00")).astimezone(KST)
             busy_intervals.append((start, end))
     
     suggestions: List[str] = []
+    cursor = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+
+    while len(suggestions) < 3 and cursor < now + timedelta(days=14):
+        if cursor.weekday() >= 5:
+            cursor += timedelta(days=1)
+            continue
+
+        slot_end = cursor + timedelta(minutes=duration_minutes)
+        if slot_end.hour > 18:
+            cursor = cursor.replace(hour=9, minute=0) + timedelta(days=1)
+            continue
+
+        overlaps = any(
+            not (slot_end <= b_start or cursor >= b_end)
+            for b_start, b_end in busy_intervals
+        )
+        if not overlaps:
+            suggestions.append(cursor.strftime("%Y-%m-%dT%H:%M:%S"))
+        cursor += timedelta(minutes=30)
+
+    return suggestions
     
     
 
@@ -146,9 +169,46 @@ async def register_next_meeting(
         db: Session,
         workspace_id: int,
         meeting_id: int,
+        title: str,
+        scheduled_at: str,
         duration_minutes: int = 60,
-) -> List[str]:
+) -> None:
     """
+    확정된 다음 회의 시간을 캘린더에 이벤트로 등록한다.
 
+    args:
+        workspace_id: 워크스페이스 ID
+        meeting_id: 회의 ID
+        title: 회의 제목
+        scheduled_at: 회의 시작 시간
+        duration_minutes: 회의 소요 시간 (기본 60분)
+    return:
+        등록 잘 됬나 안됬나
     """
-    pass
+    try:
+        # 1. 토큰 갱신
+        access_token = await get_valid_google_token(db, workspace_id)
+        if not access_token:
+            raise ValueError(f"[Google Calendar] {workspace_id} - 구글 연동이 되지 않았습니다.")
+        
+        # 2. 구글 캘린더 클라이언트
+        client = GoogleCalendarClient(access_token)
+
+        # 3. 시작 일정
+        start_at = datetime.fromisoformat(scheduled_at)
+
+        # 4. 종료 일정
+        end_at = start_at + timedelta(minutes=duration_minutes)
+
+        # 5. 이벤트 생성
+        await client.create_event(
+            title=title,
+            start_datetime=start_at.strftime("%Y-%m-%dT%H:%M:%S"),
+            end_datetime=end_at.strftime("%Y-%m-%dT%H:%M:%S"),
+        )
+
+        # 6. 로깅
+        logger.info(f"[Google Calendar] {workspace_id}-{meeting_id} 다음 회의 등록 완료\n제목 : {title}\n시작시간 : {scheduled_at}")
+
+    except Exception as e:
+        logger.error(f"[Google Calendar].{meeting_id} - 일정 등록 실패 : {e}")
