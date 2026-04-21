@@ -8,6 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     ENV: str = "dev"
     DEBUG: bool = False
+    RESET_DB_ON_STARTUP: bool = False
     DATABASE_URL: Optional[str] = None
     SECRET_KEY: str = "secret_key"
     ALGORITHM: str = "HS256"

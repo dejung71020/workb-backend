@@ -40,6 +40,7 @@ class User(Base):
     # 사용자의 원본 비밀번호 대신 해시된 비밀번호를 저장합니다.
     # 로그인 시에는 사용자가 입력한 비밀번호를 해시 비교하여 검증합니다.
     hashed_password: Mapped[str] = mapped_column(
+        "password_hash",
         String(255),
         nullable=False,
     )
