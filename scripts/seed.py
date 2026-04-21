@@ -38,7 +38,7 @@ def seed_test_data():
         # 1. 유저
         user = User(
             email="test@workb.com",
-            password_hash="placeholder",
+            hashed_password="placeholder",
             name="테스트유저",
         )
         db.add(user)

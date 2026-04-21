@@ -90,31 +90,62 @@ class GoogleCalendarClient(BaseClient):
             f"/calendars/{calendar_id}/events",
             params=params
         )
-    
-    async def refresh_access_token(
-            self, 
-            refresh_token: str, 
-            client_id: str, 
-            client_secret: str
+
+    async def get_free_slots (
+            self,
+            calendar_ids: List[str],
+            time_min: str,
+            time_max: str,
     ) -> Dict[str, Any]:
         """
-        google_calendar_access_token을 갱신하는 함수
+        Freebusy API - 해당 workspace에 사용자들의 일정이 비는 시간을 캐치하는 API
+        
+        args: 
+            calendar_ids: 구글 캘린더의 ID -> 워크스페이드에 1대1 매치
+            time_min/time_max: ISO 8601 -> 2026-04-20T09:21:30
 
-        return : {
-            "access_token": "...",
-            "expires_in": 3599
+        return: {
+            "calendars": {
+                "email": {
+                    "busy": [
+                        {
+                            "start": "2026-4-24T09:50:00",
+                            "end": "2026-4-24T11:50:00"
+                        }
+                    ]
+                }
+            }
         }
         """
-        import httpx
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://oauth2.googleapis.com/token",
-                data = {
-                    "grant_type": "refresh_token",
-                    "refresh_token": refresh_token,
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                }
-            )
-            response.raise_for_status()
-            return response.json()
+        body = {
+            "timeMin": time_min,
+            "timeMax": time_max,
+            "timeZone": "Asia/Seoul",
+            "items": [
+                {
+                    "id": cid
+                } for cid in calendar_ids
+            ]
+        }
+
+        return await self._request(
+            "POST", "/freeBusy",
+            json=body,
+        )
+    
+    async def update_event_description(
+            self,
+            event_id: str,
+            description: str,
+            calendar_id: str = "primary",
+    ) -> Dict[str, Any]:
+        """
+        기존 이벤트의 description 만 PATCH 하여
+        일정의 설명만 바꾸는 함수.
+        """
+        return await self._request(
+            "PATCH", f"/calendars/{calendar_id}/events/{event_id}",
+            json={
+                "description": description
+            },
+        )

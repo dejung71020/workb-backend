@@ -15,6 +15,6 @@ class NotionClient(BaseClient):
             headers={
                 "Authorization": f"Bearer {access_token}",
                 "Notion-Version": "2022-06-28",
-                "Cotent-Type": "application/json",
+                "Content-Type": "application/json",
             }
         )

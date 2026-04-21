@@ -12,6 +12,6 @@ class KakaoClient(BaseClient):
             base_url="https://kapi.kakao.com",
             headers={
                 "Authorization": f"KakaoAK {api_key}",
-                "Content_Type": "application/x-www-form-urlencoded",
+                "Content-Type": "application/x-www-form-urlencoded",
             }
         )

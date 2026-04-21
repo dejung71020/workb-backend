@@ -11,7 +11,7 @@ class JiraClient(BaseClient):
     JIRA 연동
     """
     def __init__(self, domain: str, email: str, api_token: str):
-        token = base64.b64encode(f"{email}:{api_token}".encdoe()).decode()
+        token = base64.b64encode(f"{email}:{api_token}".encode()).decode()
         super().__init__(
             base_url=f"https://{domain}/rest/api/3",
             headers={
