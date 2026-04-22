@@ -9,7 +9,7 @@ from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
 from app.core.config import settings
-from app.domains.vision.agent_utils import convert_pptx_to_images, encode_image
+from app.domains.vision.agent_utils import encode_image
 
 # --- 테스트 케이스 ---
 # 직접 준비한 이미지/PPT 경로 + 예상 결과 설정
@@ -37,11 +37,39 @@ TEST_CASES = [
     },
 ]
 
+# ── 모델 정의 ─────────────────────────────────────────────────────────────────
+# o-시리즈는 temperature 미지원 → 파라미터 제외
+# max_completion_tokens: o-시리즈 전용 파라미터 (reasoning 토큰 포함한 최대값)
 MODELS = {
-    "gemini-2.0-flash": ChatGoogleGenerativeAI(model="gemini-2.5-flash", api_key=settings.GEMINI_API_KEY),
-    "gemini-1.5-flash": ChatGoogleGenerativeAI(model="gemini-3.0-flash", api_key=settings.GEMINI_API_KEY),
-    "gpt-4o-mini": ChatOpenAI(model="gpt-4o-mini", api_key=settings.OPENAI_API_KEY),
-    "gpt-4o": ChatOpenAI(model="gpt-4o", api_key=settings.OPENAI_API_KEY),
+    "o3": ChatOpenAI(
+        model="o3",
+        api_key=settings.OPENAI_API_KEY,
+        max_completion_tokens=4096,
+    ),
+    "o4-mini": ChatOpenAI(
+        model="o4-mini",
+        api_key=settings.OPENAI_API_KEY,
+        max_completion_tokens=4096,
+    ),
+    "gpt-5.4": ChatOpenAI(
+        model="gpt-5.4",
+        api_key=settings.OPENAI_API_KEY,
+        temperature=0,
+    ),
+    "gpt-5.4-mini": ChatOpenAI(
+        model="gpt-5.4-mini",
+        api_key=settings.OPENAI_API_KEY,
+        temperature=0,
+    ),
+}
+
+# -- 모델별 토큰 단가 (USD / 1M tokens) ─────────────────────────────────────────────────────
+# o-시리즈는 reasoning_tokens도 output 단가로 청구됨
+COST_PER_1M = {                                                                                                          
+    "o3":           {"input": 2.00,  "cached_input": 0.50, "output": 8.00},
+    "o4-mini":      {"input": 1.10,  "cached_input": 0.28, "output": 4.40},                                              
+    "gpt-5.4":      {"input": 2.50,  "cached_input": 0.25, "output": 15.00},                                             
+    "gpt-5.4-mini": {"input": 0.75,  "cached_input": 0.08, "output": 4.50},                                              
 }
 
 PROMPT_TEMPLATE = """다음 슬라이드를 분석해주세요.

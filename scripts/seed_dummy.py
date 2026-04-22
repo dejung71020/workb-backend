@@ -27,7 +27,7 @@ r = redis.from_url(settings.REDIS_URL)
 mongo_db = MongoClient(settings.MONGODB_URL)["workb"]
 
 # 테스트에 쓸 meeting_id. --meeting-id 인자로 변경 가능.
-DEFAULT_MEETING_ID = "test-001"
+DEFAULT_MEETING_ID = "1"
 
 # ------------------------------------------------------------------
 # 더미 발화 데이터
@@ -69,7 +69,7 @@ SPEAKERS = {
 # search_past_meetings()가 $text 인덱스로 검색하므로
 # summary 필드에 키워드가 충분히 있어야 검색에 걸린다.
 PAST_MEETING = {
-    "meeting_id": "test-000",
+    "meeting_id": "1",
     "title": "2026-04-10 백엔드 아키텍처 사전 논의",
     "summary": (
         "FastAPI 도메인 구조 개편 필요성에 대해 논의함. "
@@ -81,7 +81,7 @@ PAST_MEETING = {
     "created_at": datetime(2026, 4, 10, 10, 0, 0),
 }
 
-def seed_redis(meeting_id: str, flush: bool):
+def seed_redis(meeting_id: int, flush: bool):
     """
     Redis에 발화 리스트와 화자 해시를 삽입.
 

@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional
 
 class ScreenShareAnalyzeResponse(BaseModel):
-    meeting_id: str
+    meeting_id: int
     ocr_text: str
     chart_description: str
     key_points: list[str]
@@ -18,6 +18,6 @@ class PptSlideResult(BaseModel):
     summary: str
 
 class PptUploadResponse(BaseModel):
-    meeting_id: str
+    meeting_id: int
     total_slides: int
     slides: list[PptSlideResult]

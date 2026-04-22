@@ -5,7 +5,7 @@ from app.core.config import settings
 
 mongo_db = MongoClient(settings.MONGODB_URL)["workb"]
 
-def save_analysis(meeting_id: str, data: dict) -> None:
+def save_analysis(meeting_id: int, data: dict) -> None:
     mongo_db["screen_share_analyses"].insert_one({
         "meeting_id": meeting_id,
         "ocr_text": data.get("ocr_text", ""),
@@ -14,7 +14,7 @@ def save_analysis(meeting_id: str, data: dict) -> None:
         "timestamp": datetime.now()
     })
 
-def get_analyses(meeting_id: str) -> list[dict]:
+def get_analyses(meeting_id: int) -> list[dict]:
     cursor = mongo_db["screen_share_analyses"].find(
         {"meeting_id": meeting_id},
         {"_id": 1}
