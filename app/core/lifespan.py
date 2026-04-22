@@ -43,11 +43,13 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     print("✅  테이블 생성 완료")
 
+    # [시작 시] HTTP 클라이언트 세션 초기화
     await ClientSessionManager.get_client()
 
     if should_reset_db:
         seed_test_data()
 
     yield
-
+    
+    # [종료 시] 연결 닫기
     await ClientSessionManager.close_client()

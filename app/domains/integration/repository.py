@@ -93,3 +93,15 @@ def update_tokens(
     db.commit()
     db.refresh(integration)
     return integration
+
+def create_default_integrations(db: Session, workspace_id: int) -> None:
+    """워크스페이스 생성 시 5개 서비스 기본 row 생성"""
+    for service in ServiceType:
+        existing = get_integration(db, workspace_id, service)
+        if not existing:
+            db.add(Integration(
+                workspace_id=workspace_id,
+                service=service,
+                is_connected=False,
+            ))
+    db.commit()
