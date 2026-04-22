@@ -57,6 +57,18 @@ secrets.json
 .project
 .pydevproject
 .settings/
+.cursorignore
+
+# =================================================================
+# [에이전트/도구 설정] - 로컬 개인 설정 파일
+# =================================================================
+/.cursor/
+/.claude/
+/.vsxode/
+/.cursorrules
+/AGENTS.md
+/docs/
+CLAUDE.md
 
 # =================================================================
 # [데이터베이스 및 로그] - AI 에이전트 실행 시 생성되는 로컬 데이터
@@ -75,6 +87,9 @@ data/
 chroma/
 pinecone_cache/
 
+# code-review-graph (코드 리뷰 그래프 MCP/CLI — 로컬 그래프 DB·캐시·인덱스)
+.code-review-graph/
+
 # =================================================================
 # [OS 관련] - 맥/윈도우 시스템 파일
 # =================================================================
@@ -89,14 +104,6 @@ desktop.ini
 
 #---------개인 폴더----------
 dj/
-CLAUDE.md
-# code-review-graph (코드 리뷰 그래프 MCP/CLI — 로컬 그래프 DB·캐시·인덱스)
-.code-review-graph/
-.cursorignore
 .vscode/settings.json
 a.txt
 scripts/slack_test.py
-.cursor
-.claude
-.cursorrules
-AGENTS.md
