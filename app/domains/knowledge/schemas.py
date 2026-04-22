@@ -5,8 +5,8 @@ from typing import Optional, Literal
 
 class ChatbotMessageRequest(BaseModel):
     message: str
-    session_id: str
-    meeting_id: Optional[int] = None
+    session_id: Optional[str] = None # None이면 서버가 새 UUID 발급, 있으면 기존 세션 계속
+    meeting_id: Optional[int] = None # 회의 중일 때만 전달 - 없으면 이전 회의 검색만
 
 class ChatbotMessageResponse(BaseModel):
     session_id: str
@@ -44,8 +44,7 @@ class DiscussionItem(BaseModel):
 class Decision(BaseModel):
     """결정 사항 1개. rationale/opposing_opinion은 발화에 언급됐을 때만 채워짐."""
     decision: str
-    rationale: Optional[str] = None # 결정 근거 ("~라서 결정")
-    opposing_opinion: Optional[str] = None # 반대 의견이 발화에 있었을 때
+    citiation: Optional[str] = None
 
 class ActionItem(BaseModel):
     """
@@ -67,6 +66,7 @@ class ActionItem(BaseModel):
     deadline: Optional[str] = None
     priority: Literal["high", "normal"] = "normal"
     urgency: Literal["urgent", "normal", "low"] = "low"
+    citiation: Optional[str] = None # 근거 발화 원문 - hallucination 검증용, 사용자 미표시
 
 class PendingItem(BaseModel):
     """미결 사항 1개. 이전 회의에서도 미결이었던 경우 연속 여부 표시."""

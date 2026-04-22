@@ -88,3 +88,13 @@ async def get_past_meeting_context(meeting_id: int) -> str:
     if doc:
         return doc.get("summary", "")
     return ""
+
+async def is_meeting_live(meeting_id: int) -> bool:
+    """
+    Redis에 utterances가 있으면 회의 중(True), 없으면 회의 후(False)
+    
+    STT 딜레이 고지 여부를 결정하는데 사용.
+    회의 종료 후 Redis TTL 만료되면 자동으로 False 반환.    
+    """
+    count = await r.llen(f"meeting:{meeting_id}:utterances")
+    return count > 0

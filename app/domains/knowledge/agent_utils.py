@@ -11,7 +11,7 @@ import redis
 
 from app.core.config import settings
 from app.core.graph.state import SharedState
-from app.utils.redis_utils import get_meeting_context
+from app.utils.redis_utils import get_meeting_context, is_meeting_live
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 
 # --- 클라이언트 초기화 ---
@@ -192,11 +192,19 @@ async def knowledge_node(state: SharedState) -> dict:
     """
     사용자 질문을 react_agent로 처리하는 메인 Q&A 노드.
 
-    system_prompt에 현재 회의 발화 전체를 컨텍스트로 주입해
-    LLM이 회의 내용을 기반으로 답변하거나 필요한 도구를 선택하게 한다.
+    흐름:
+        1. 회의 중 여부 확인 (is_live) - STT 딜레이 고지 여부 결정
+        2. 현재 회의 발화 로드 (meeting_id 있을 때만)
+        3. react_agent 호출
+        4. 도구 사용 여부에 따라 분기:
+            - 도구 사용 (웹검색/캘린더/내부문서) -> citiation 검증 생략
+            - 회의 내용 기반 -> citiation이 원문에 실제 존재하는지 검증
+        5. STT 딜레이 고지 prepend (회의 중일 때만)
     """
-    meeting_id = state.get("meeting_id", "")
-    meeting_context = await get_meeting_context(meeting_id)
+    meeting_id = state.get("meeting_id")
+    # Redis utterances 존재 여부로 회의 중/후 판단
+    is_live = await is_meeting_live(meeting_id) if meeting_id else False
+    meeting_context = await get_meeting_context(meeting_id) if meeting_id else ""
     workspace_id = state.get("workspace_id", "")
 
     system_prompt = f"""
@@ -206,7 +214,6 @@ async def knowledge_node(state: SharedState) -> dict:
     {meeting_context}
     
     규칙:
-    - 회의 발화 데이터는 최대 약 30초 전까지의 내용만 반영됩니다. 가장 최근 발화는 포함되지 않을 수 있음을 답변에 명시하세요.
     - 회의 내용만으로 답할 수 있으면 도구 없이 답변하세요.
     - 정보가 불완전하더라도 회의에서 언급된 내용을 바탕으로 최대한 답변하세요.
     - 확실하지 않은 정보는 "~라고 언급됐습니다" 형식으로 답변하세요.
@@ -218,6 +225,20 @@ async def knowledge_node(state: SharedState) -> dict:
     - 일정 수정 요청이면 update_calendar_event를 사용하세요.
     - 일정 삭제 요청이면 delete_calendar_event를 사용하세요.
     - 특정 날짜나 일정에 대해 물어보면 get_calendar_events를 사용하세요.
+
+    최종 답변은 반드시 아래 JSON 형식으로만 출력하세요.
+    {{
+        "answer": "사용자 질문에 대한 답변",
+        "confidence": "high" | "medium" | "low"
+        "hedge_note": "근거 있음 | 근거 불충분 | 근거 없음",
+        "citations": ["근거가 된 발화를 [화자명] 내용 형식 그대로 복사. 요약・재서술 금지. 최대 3개."]
+    }}
+
+    confidence 기준:
+    - high: 발화에 명확한 근거 있음
+    - medium: 발화에 간접적으로 언급됨
+    - Low: 발화에 근거 없거나 추측
+    citations: 도구 사용 결과나 외부 정보면 []. 회의 내용 기반이면 반드시 원문 발췌.
     """
 
     result = await react_agent.ainvoke({
@@ -227,8 +248,64 @@ async def knowledge_node(state: SharedState) -> dict:
         ]
     })
 
+    # 도구 사용 여부 확인 - tool_calls 있으면 웹검색/캘린더 등 외부 도구 사용한 것
+    tool_used = any(
+        getattr(msg, "tool_calls", None)
+        for msg in result["messages"]
+    )
+
+    # LLM이 앞뒤에 설명 텍스트를 붙이는 경우를 대비해 JSON 블록만 추출
+    raw = result["messages"][-1].content
+    json_match = re.search(r"\{.*\}", raw, re.DOTALL)
+    try:
+        parsed = json.loads(json_match.group()) if json_match else {}
+    except json.JSONDecodeError:
+        parsed = {}
+
+    answer = parsed.get("answer", raw) # JSON 파싱 실패 시 원문 그대로 사용
+    confidence = parsed.get("confidence", "low")
+    citations = parsed.get("citations", [])
+
+    if tool_used:
+        # 외부 도구 사용 결과 -> 발화 원문과 대조 불필요, 검증 생략
+        pass
+    else:
+        # 회의 내용 기반 답변 -> citation이 실제 발화 원문에 존재하는지 검증
+        context_words = set(re.findall(r"[가-힣a-zA-Z0-9]+", meeting_context))
+        verified_citations = []
+        citation_failed = False
+
+        for c in citations:
+            citation_words = set(re.findall(r"[가-힣a-zA-Z0-9]+", c))
+            overlap = len(citation_words & context_words) / len(citation_words) if citation_words else 0
+            if overlap >= 0.6:
+                verified_citations.append(c)
+            else:
+                # citation이 원문에 없음 -> LLM이 인용을 조작(fabrication)한 케이스
+                citation_failed = True
+
+        if citation_failed or (not citations and confidence == "low"):
+            # 불일치 또는 근거 없음 -> 답변 자체를 대체
+            answer = "해당 내용은 회의에서 확인되지 않았습니다."
+        else:
+            # 검증 통과한 citations만 표시
+            if verified_citations:
+                citation_block = "\n\n**📎 근거 발화:**\n" + "\n".join(f"> {c}" for c in verified_citations)
+                answer += citation_block
+            
+            # medium이면 간접 근거 고지
+            if confidence == "medium":
+                answer += "\n\n※ 간접적으로 언급된 내용을 바탕으로 한 답변입니다."
+
+    # STT 딜레이 고지 - Redis utterances 있는 경우(회의 중)에만 prepend
+    if is_live:
+        answer = (
+            "※ 아래는 약 30초 전까지 반영된 발화 기준이며, 가장 최근 발화는 포함되지 않을 수 있습니다.\n\n"                
+            + answer 
+        )
+
     return {
-        "chat_response": result["messages"][-1].content,
+        "chat_response": answer,
         "function_type": "agent"
     }
 
@@ -244,6 +321,7 @@ async def summary_node(state: SharedState) -> dict:
         5. 할루시네이션 검증 - 발화 키워드 겹침률로 신뢰도 판정
     """
     meeting_id = state.get("meeting_id")
+    is_live = await is_meeting_live(meeting_id) if meeting_id else False
 
     # 1단계: 컨텍스트 로드
     # partial_summary가 있으면 이미 요약된 앞부분은 재처리하지 않고 재사용.
@@ -315,7 +393,7 @@ async def summary_node(state: SharedState) -> dict:
     {{
         "overview": {{"purpose": "...", "datetime_str": "..."}},
         "discussion_items": [{{"topic": "...", "content": "..."}}],
-        "decisions": [{{"decision": "...", "rationale": "...", "opposing_opinion": "..."}}],
+        "decisions": [{{"decision": "...", "citiation": "..."}}],
         "action_items": [{{"assignee": "...", "content": "...", "deadline": "...", "priority": "high|normal", "urgency": "urgent|normal|low"}}],
         "pending_items": [{{"content": "...", "carried_over": false, "first_mentioned_meeting": null}}],
         "next_meeting": "...",
@@ -381,9 +459,16 @@ async def summary_node(state: SharedState) -> dict:
     except Exception:
         pass  # 캐시 저장 실패는 요약 결과에 영향 없음
 
+    formatted = _format_summary_markdown(summary_dict)
+    if is_live:
+        formatted = (
+            "※ 아래는 약 30초 전까지 반영된 발화 기준이며, 가장 최근 발화는 포함되지 않을 수 있습니다.\n\n"                
+            + formatted 
+        )
+
     return {
         "summary": summary_dict,
-        "chat_response": _format_summary_markdown(summary_dict),
+        "chat_response": formatted,
         "function_type": "summary"
     }
 
@@ -414,10 +499,6 @@ def _format_summary_markdown(s: dict) -> str:
         lines.append("\n### ✅ 결정 사항")
         for d in decisions:
             lines.append(f"- {d.get('decision', '')}")
-            if d.get("rationale"):
-                lines.append(f"  - 근거: {d['rationale']}")
-            if d.get("opposing_opinion"):
-                lines.append(f"  - 반대 의견: {d['opposing_opinion']}")
 
     actions = s.get("action_items", [])
     if actions:
