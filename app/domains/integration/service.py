@@ -2,7 +2,8 @@
 import json
 import base64
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from app.utils.time_utils import now_kst
 
 from sqlalchemy.orm import Session
 from typing import List
@@ -113,7 +114,7 @@ async def handle_google_callback(db: Session, code: str, state: str) -> int:
     res.raise_for_status()
     tokens = res.json()
 
-    expires_at = datetime.now() + timedelta(seconds=tokens.get("expires_in", 3600))
+    expires_at = now_kst() + timedelta(seconds=tokens.get("expires_in", 3600))
 
     repository.update_tokens(
         db,
@@ -241,7 +242,7 @@ async def get_valid_google_token(db: Session, workspace_id: int) -> str:
     if not integration or not integration.access_token:
         raise ValueError("Google Calendar 연동이 필요합니다.")
 
-    if integration.token_expires_at and integration.token_expires_at < datetime.now() + timedelta(minutes=5):
+    if integration.token_expires_at and integration.token_expires_at < now_kst() + timedelta(minutes=5):
         client = await ClientSessionManager.get_client()
         res = await client.post(
             "https://oauth2.googleapis.com/token",
@@ -254,7 +255,7 @@ async def get_valid_google_token(db: Session, workspace_id: int) -> str:
         )
         res.raise_for_status()
         tokens = res.json()
-        expires_at = datetime.now() + timedelta(seconds=tokens.get("expires_in", 3600))
+        expires_at = now_kst() + timedelta(seconds=tokens.get("expires_in", 3600))
         repository.update_tokens(
             db, workspace_id, ServiceType.google_calendar,
             access_token=tokens["access_token"],

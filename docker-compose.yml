@@ -6,24 +6,24 @@ services:
     image: nginx:alpine
     container_name: workb_nginx
     restart: always
+    environment:
+      TZ: Asia/Seoul
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro
-      - ./certbot/conf:/etc/letsencrypt:ro
-      - ./certbot/www:/var/www/certbot:ro
-    depends_on:
-      - certbot
+    # depends_on:
+    #   - certbot
 
   # ── Certbot (Let's Encrypt SSL) ───────────────────────
-  certbot:
-    image: certbot/certbot
-    container_name: workb_certbot
-    volumes:
-      - ./certbot/conf:/etc/letsencrypt
-      - ./certbot/www:/var/www/certbot
+  # certbot:
+  #   image: certbot/certbot
+  #   container_name: workb_certbot
+  #   volumes:
+  #     - ./certbot/conf:/etc/letsencrypt
+  #     - ./certbot/www:/var/www/certbot
 
   # ── MySQL ─────────────────────────────────────────────
   mysql:
@@ -34,6 +34,7 @@ services:
       MYSQL_ROOT_PASSWORD: "1234"
       MYSQL_DATABASE: meeting_assistant
       MYSQL_CHARSET: utf8mb4
+      TZ: Asia/Seoul
     ports:
       - "3306:3306"
     volumes:
@@ -49,6 +50,7 @@ services:
       MONGO_INITDB_ROOT_USERNAME: root
       MONGO_INITDB_ROOT_PASSWORD: "1234"
       MONGO_INITDB_DATABASE: meeting_assistant
+      TZ: Asia/Seoul
     ports:
       - "27017:27017"
     volumes:
@@ -59,6 +61,8 @@ services:
     image: redis:7.2-alpine
     container_name: workb_redis
     restart: always
+    environment:
+      TZ: Asia/Seoul
     ports:
       - "6379:6379"
     volumes:
@@ -69,6 +73,8 @@ services:
     image: chromadb/chroma:latest
     container_name: workb_chromadb
     restart: always
+    environment:
+      TZ: Asia/Seoul
     ports:
       - "8001:8000"
     volumes:
