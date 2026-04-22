@@ -1,21 +1,19 @@
 # app\domains\knowledge\router.py
-from datetime import date, datetime
-from typing import Optional
+from fastapi import APIRouter
+from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
-
-from app.db.session import get_db
 from app.core.graph.workflow import knowledge_app
 from app.domains.knowledge.schemas import (
-    ChatbotMessageRequest, ChatbotMessageResponse,
-    ChatbotSummaryResponse, ChatbotHistoryMessage, ChatbotHistoryResponse,
+    ChatbotMessageRequest, ChatbotMessageResponse, 
+    ChatbotSummaryResponse, ChatbotHistoryMessage, ChatbotHistoryResponse
 )
 from app.domains.meeting.schemas import MeetingSearchParams, MeetingSearchResponse
 from app.domains.meeting.service import MeetingSearchService
 from app.domains.knowledge import repository
 from app.utils.redis_utils import get_meeting_context
 from app.domains.knowledge.agent_utils import summary_node
+from app.domains.knowledge.service import ingest_document
+from app.domains.knowledge.schemas import DocumentUploadResponse
 
 router = APIRouter()
 
@@ -46,18 +44,29 @@ def search_workspace_meetings(
     return MeetingSearchService.search(db, workspace_id, params)
 
 
-@router.post("/meetings/{meeting_id}/chatbot/message")
-async def chatbot_message(meeting_id: str, req: ChatbotMessageRequest):
+# 지원 확장자 -> file_type 매핑
+_EXT_MAP = {
+    "pdf": "pdf",
+    "pptx": "pptx",
+    "ppt": "ppt",
+    "html": "html",
+    "htm": "htm",
+}
+
+@router.post("/workspace/{workspace_id}/chatbot/message")
+async def chatbot_message(workspace_id: int, req: ChatbotMessageRequest):
+    meeting_id = req.meeting_id
     state = {
         "meeting_id": meeting_id,
+        "workspace_id": workspace_id,
         "user_question": req.message,
         "function_type": "",
         "chat_response": ""
     }
-    result = knowledge_app.invoke(state)
+    result = await knowledge_app.ainvoke(state)
 
-    repository.save_chat_log(meeting_id, req.session_id, "user", req.message, "")
-    repository.save_chat_log(
+    await repository.save_chat_log(meeting_id, req.session_id, "user", req.message, "")
+    await repository.save_chat_log(
         meeting_id, req.session_id, "assistant", 
         result["chat_response"], result["function_type"]
     )
@@ -70,9 +79,9 @@ async def chatbot_message(meeting_id: str, req: ChatbotMessageRequest):
         timestamp=datetime.now()
     )
 
-@router.get("/meetings/{meeting_id}/chatbot/history", response_model=ChatbotHistoryResponse)
-async def chatbot_history(meeting_id: str, session_id: str):
-    logs = repository.get_chat_history(meeting_id, session_id)
+@router.get("/workspace/{workspace_id}/chatbot/history", response_model=ChatbotHistoryResponse)
+async def chatbot_history(workspace_id: int, session_id: str):
+    logs = await repository.get_chat_history(workspace_id, session_id)
     return ChatbotHistoryResponse(
         messages=[
             ChatbotHistoryMessage(
@@ -84,16 +93,55 @@ async def chatbot_history(meeting_id: str, session_id: str):
         ]
     )
 
-@router.post("/meetings/{meeting_id}/chatbot/summary", response_model=ChatbotSummaryResponse)
-async def chatbot_summary(meeting_id: str):
+@router.post("/workspace/{workspace_id}/chatbot/summary", response_model=ChatbotSummaryResponse)
+async def chatbot_summary(workspace_id: int, req: ChatbotSummaryRequest):
     state = {
-        "meeting_id": meeting_id,
+        "meeting_id": req.meeting_id,
+        "workspace_id": workspace_id,
         "user_question": "",
         "function_type": "",
         "chat_response": ""
     }
-    result = summary_node(state)
+    result = await summary_node(state)
+    await repository.save_meeting_summary(workspace_id, req.meeting_id, result["summary"])
+
     return ChatbotSummaryResponse(
         summary=result["summary"],
         generated_at=datetime.now()
+    )
+
+@router.post("/workspaces/{workspace_id}/documents", response_model=DocumentUploadResponse)
+async def upload_document(
+    workspace_id: int,
+    file: UploadFile = File(...),
+    title: Optional[str] = Form(None),
+):
+    """
+    내부 문서 업로드 -> ChromaDB 임베딩 저장.
+    같은 파일 재업로드 시 기존 벡터를 덮어씀 (중복 없음).
+    스캔 이미지 PDF처럼 텍스트 추출 불가 시 422 반환.
+    """
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower()
+    file_type = _EXT_MAP.get(ext)
+    if not file_type:
+        raise HTTPException(status_code=415, detail=f"지원하지 않는 파일 형식: .{ext}")
+
+    file_bytes = await file.read()
+
+    try:
+        result = ingest_document(
+            workspace_id=workspace_id,
+            filename=file.filename,
+            file_type=file_type,
+            file_bytes=file_bytes,
+            title=title
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    return DocumentUploadResponse(
+        doc_id=result["doc_id"],
+        chunks=result["chunks"],
+        title=result["title"],
+        uploaded_at=datetime.now()
     )

@@ -45,6 +45,7 @@ from app.domains.workspace.service import (
     validate_invite_code_service,
     list_my_workspaces_service,
 )
+from app.domains.user.dependencies import require_workspace_admin
 
 
 router = APIRouter()
@@ -80,6 +81,7 @@ async def get_workspace_dashboard(
 async def get_workspace(
     workspace_id: int,
     db: Session = Depends(get_db),
+    _admin = Depends(require_workspace_admin),
 ) -> WorkspaceResponse:
     """
     워크스페이스 정보를 조회하는 API 엔드포인트입니다.
@@ -103,6 +105,7 @@ async def patch_workspace(
     workspace_id: int,
     payload: WorkspaceUpdateRequest,
     db: Session = Depends(get_db),
+    _admin = Depends(require_workspace_admin),
 ) -> WorkspaceResponse:
     """
     워크스페이스 기본 설정을 수정하는 API 엔드포인트입니다.
@@ -140,6 +143,7 @@ async def validate_invite_code(
 async def issue_workspace_invite_code(
     workspace_id: int,
     db: Session = Depends(get_db),
+    _admin = Depends(require_workspace_admin),
 ) -> InviteCodeIssueResponse:
     """
     특정 워크스페이스의 새 초대코드를 발급하는 API 엔드포인트입니다.
@@ -166,6 +170,7 @@ async def get_workspace_members(
     workspace_id: int,
     department_id: int | None = None,
     db: Session = Depends(get_db),
+    _admin = Depends(require_workspace_admin),
 ) -> WorkspaceMemberListResponse:
     """
     특정 워크스페이스의 멤버 목록을 조회하는 API 엔드포인트입니다.
@@ -191,6 +196,7 @@ async def update_workspace_member_role(
     user_id: int,
     payload: WorkspaceMemberRoleUpdateRequest,
     db: Session = Depends(get_db),
+    _admin = Depends(require_workspace_admin),
 ) -> WorkspaceMemberRoleUpdateResponse:
     """
     특정 워크스페이스 소속 멤버의 역할을 변경하는 API 엔드포인트입니다.
@@ -221,6 +227,7 @@ async def update_workspace_member_department(
     user_id: int,
     payload: WorkspaceMemberDepartmentUpdateRequest,
     db: Session = Depends(get_db),
+    _admin = Depends(require_workspace_admin),
 ) -> WorkspaceMemberDepartmentUpdateResponse:
     """
     특정 워크스페이스 소속 멤버의 부서를 변경하는 API 엔드포인트입니다.
@@ -244,6 +251,7 @@ async def update_workspace_member_department(
 async def get_workspace_departments(
     workspace_id: int,
     db: Session = Depends(get_db),
+    _admin = Depends(require_workspace_admin),
 ) -> DepartmentListResponse:
     """
     특정 워크스페이스의 부서 목록을 조회하는 API 엔드포인트입니다.
@@ -260,6 +268,7 @@ async def create_workspace_department(
     workspace_id: int,
     payload: DepartmentCreateRequest,
     db: Session = Depends(get_db),
+    _admin = Depends(require_workspace_admin),
 ) -> DepartmentResponse:
     """
     특정 워크스페이스에 새 부서를 생성하는 API 엔드포인트입니다.
@@ -277,6 +286,7 @@ async def update_workspace_department(
     department_id: int,
     payload: DepartmentUpdateRequest,
     db: Session = Depends(get_db),
+    _admin = Depends(require_workspace_admin),
 ) -> DepartmentResponse:
     """
     특정 워크스페이스의 부서 이름을 수정하는 API 엔드포인트입니다.
@@ -297,6 +307,7 @@ async def delete_workspace_department(
     workspace_id: int,
     department_id: int,
     db: Session = Depends(get_db),
+    _admin = Depends(require_workspace_admin),
 ) -> None:
     """
     특정 워크스페이스의 부서를 삭제하는 API 엔드포인트입니다.

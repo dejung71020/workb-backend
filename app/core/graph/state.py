@@ -6,8 +6,8 @@ class SharedState(TypedDict):
     # --- 1. 서비스 및 흐름 제어 (Control Plane) ---
     next_node: str               # 다음에 실행할 노드명
     current_scenario: str        # 현재 진행 중인 시나리오 ID (SCN-001 등)
-    workspace_id: str            # 웹 온보딩에서 생성된 워크스페이스 고유 ID
-    meeting_id: str              # 현재 세션의 회의 ID (기록 열람 및 저장용)
+    workspace_id: int            # 웹 온보딩에서 생성된 워크스페이스 고유 ID
+    meeting_id: int              # 현재 세션의 회의 ID (기록 열람 및 저장용)
     
     # --- 2. Meeting 도메인 (Scribe) ---
     # 실시간 발화 스트림 및 화자 정보를 누적 저장
