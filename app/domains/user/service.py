@@ -46,6 +46,7 @@ from app.domains.user.schemas import (
     UserResponse,
     UserRole,
 )
+from app.domains.user.models import User
 
 
 def _generate_invite_code() -> str:
@@ -56,6 +57,19 @@ def _generate_invite_code() -> str:
         대문자 기반의 8자리 초대코드를 반환합니다.
     """
     return secrets.token_hex(4).upper()
+
+
+def _access_token_claims(user: User) -> dict[str, str | int | None]:
+    """
+    프론트가 로그인 직후 localStorage에 사용자 정보를 채울 수 있도록
+    access token에 필요한 최소 프로필 정보를 함께 담습니다.
+    """
+    return {
+        "role": user.role,
+        "email": user.email,
+        "name": user.name,
+        "workspace_id": user.workspace_id,
+    }
 
 
 def signup_admin_service(db: Session, payload: AdminSignupRequest) -> AdminSignupResponse:
@@ -200,7 +214,7 @@ def login_service(db: Session, payload: LoginRequest) -> TokenResponse:
 
     access_token = create_access_token(
         subject=str(user.id),
-        extra_claims={"role": user.role},
+        extra_claims=_access_token_claims(user),
     )
     refresh_token = create_refresh_token(subject=str(user.id))
 
@@ -252,7 +266,7 @@ def refresh_token_service(db: Session, payload: RefreshTokenRequest) -> TokenRes
 
     access_token = create_access_token(
         subject=str(user.id),
-        extra_claims={"role": user.role},
+        extra_claims=_access_token_claims(user),
     )
     new_refresh_token = create_refresh_token(subject=str(user.id))
 

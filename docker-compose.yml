@@ -11,7 +11,7 @@ services:
       MYSQL_DATABASE: meeting_assistant
       MYSQL_CHARSET: utf8mb4
     ports:
-      - "3306:3306"
+      - "3307:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
