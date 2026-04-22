@@ -39,3 +39,15 @@ class SlackChannelSelectRequest(BaseModel):
 
 class OAuthUrlResponse(BaseModel):
     auth_url: str
+
+# --- Slack ---
+class SlackChannelItem(BaseModel):
+    id: str
+    name: str
+
+class SlackChannelListResponse(BaseModel):
+    channels: List[SlackChannelItem]
+
+class TestIntegrationResponse(BaseModel):
+    success: bool
+    message: str
