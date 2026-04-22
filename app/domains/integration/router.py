@@ -1,5 +1,6 @@
 # app\domains\integration\router.py
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, status
+from typing import Optional
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -18,8 +19,10 @@ from app.domains.integration.schemas import (
     SlackChannelItem,
     SlackChannelListResponse,
     TestIntegrationResponse,
+    GoogleCalendarEventsResponse,
+    GoogleCalendarEventItem,
 )
-from app.domains.user.dependencies import require_workspace_admin
+from app.domains.user.dependencies import require_workspace_admin, require_workspace_member
 
 router = APIRouter()
 
@@ -196,6 +199,23 @@ async def list_slack_channels(
     try:
         channels = await service.get_slack_channel(db, workspace_id)
         return SlackChannelListResponse(channels=channels)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/google/events", response_model=GoogleCalendarEventsResponse)
+async def list_google_calendar_events(
+    workspace_id: int = Query(..., description="워크스페이스 ID"),
+    time_min: Optional[str] = Query(None, description="조회 시작 시각 (ISO 8601)"),
+    max_results: int = Query(50, description="최대 반환 건수"),
+    db: Session = Depends(get_db),
+    _admin=Depends(require_workspace_member),
+):
+    try:
+        events = await service.list_google_calendar_events(db, workspace_id, time_min, max_results)
+        return GoogleCalendarEventsResponse(
+            events=[GoogleCalendarEventItem(**e) for e in events]
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

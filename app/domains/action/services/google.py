@@ -149,7 +149,8 @@ async def suggest_next_meeting(
             continue
 
         slot_end = cursor + timedelta(minutes=duration_minutes)
-        if slot_end.hour > 18:
+        work_end = cursor.replace(hour=18, minute=0, second=0, microsecond=0)
+        if slot_end > work_end:
             cursor = cursor.replace(hour=9, minute=0) + timedelta(days=1)
             continue
 

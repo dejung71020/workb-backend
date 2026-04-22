@@ -3,7 +3,7 @@ import json
 import base64
 import logging
 from datetime import datetime, timedelta, timezone
-from app.utils.time_utils import now_kst
+from app.utils.time_utils import now_kst, KST
 
 from sqlalchemy.orm import Session
 from typing import List
@@ -13,6 +13,8 @@ from app.domains.integration.models import Integration, ServiceType
 from app.domains.integration import repository
 from app.infra.clients.session_manager import ClientSessionManager
 from app.core.config import settings
+from app.infra.clients.slack import SlackClient
+from app.infra.clients.google import GoogleCalendarClient
 
 logger= logging.getLogger(__name__)
 
@@ -242,7 +244,10 @@ async def get_valid_google_token(db: Session, workspace_id: int) -> str:
     if not integration or not integration.access_token:
         raise ValueError("Google Calendar 연동이 필요합니다.")
 
-    if integration.token_expires_at and integration.token_expires_at < now_kst() + timedelta(minutes=5):
+    expires_at = integration.token_expires_at
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=KST)
+    if expires_at and expires_at < now_kst() + timedelta(minutes=5):
         client = await ClientSessionManager.get_client()
         res = await client.post(
             "https://oauth2.googleapis.com/token",
@@ -273,7 +278,7 @@ async def get_valid_google_token(db: Session, workspace_id: int) -> str:
 #===============================================================
 
 # Slack API
-from app.infra.clients.slack import SlackClient
+
 
 async def get_slack_channel(db: Session, workspace_id: int) -> List[dict]:
     """
@@ -285,6 +290,31 @@ async def get_slack_channel(db: Session, workspace_id: int) -> List[dict]:
     
     slack_client = SlackClient(integration.access_token)
     return await slack_client.get_public_channels()
+
+async def list_google_calendar_events(
+    db: Session,
+    workspace_id: int,
+    time_min: str = None,
+    max_results: int = 50,
+) -> list:
+    
+    access_token = await get_valid_google_token(db, workspace_id)
+    client = GoogleCalendarClient(access_token)
+    result = await client.list_events(time_min=time_min, max_results=max_results)
+    events = []
+    for item in result.get("items", []):
+        start = item.get("start", {})
+        end = item.get("end", {})
+        events.append({
+            "id": item.get("id", ""),
+            "title": item.get("summary", "(제목 없음)"),
+            "start": start.get("dateTime") or start.get("date", ""),
+            "end": end.get("dateTime") or end.get("date", ""),
+            "description": item.get("description"),
+            "html_link": item.get("htmlLink"),
+        })
+    return events
+
 
 async def save_slack_channel(db: Session, workspace_id: int, channel_id: str) -> Integration:
     """
