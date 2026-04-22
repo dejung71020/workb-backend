@@ -6,6 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    # 1. 시스템 기본 설정
     ENV: str = "dev"
     DEBUG: bool = False
     RESET_DB_ON_STARTUP: bool = False
@@ -17,34 +18,38 @@ class Settings(BaseSettings):
     CHROMA_HOST: str = "localhost"
     CHROMA_PORT: int = 8001
 
+    # 2. AI
     OPENAI_API_KEY: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
     ANTHROPIC_API_KEY: Optional[str] = None
     TAVILY_API_KEY: Optional[str] = None
 
-    SLACK_WEBHOOK_URL: Optional[str] = None
-    SLACK_BOT_TOKEN: Optional[str] = None
-    SLACK_DEFAULT_CHANNEL_ID: Optional[str] = None
+    # 3. Slack
     SLACK_CLIENT_ID: Optional[str] = None
     SLACK_CLIENT_SECRET: Optional[str] = None
-    SLACK_REDIRECT_URI: Optional[str] = "http://localhost:8000/api/v1/integrations/slack/callback"
+    SLACK_REDIRECT_URI: Optional[str] = "https://localhost/api/v1/integrations/slack/callback"
 
+    # 4. JIRA
     JIRA_INSTANCE_URL: Optional[str] = None
     JIRA_API_KEY: Optional[str] = None
     JIRA_CLIENT_ID: Optional[str] = None
     JIRA_CLIENT_SECRET: Optional[str] = None
     REDIRECT_URI: str = "http://localhost:8000/api/v1/integrations/jira/callback"
 
+    # 5. Google
     GOOGLE_CLIENT_ID: Optional[str] = None
     GOOGLE_CLIENT_SECRET: Optional[str] = None
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/integrations/google/callback"
 
+    # 6. Notion
     NOTION_CLIENT_ID: Optional[str] = None
     NOTION_CLIENT_SECRET: Optional[str] = None
-    NOTION_REDIRECT_URI: str = "http://localhost:8000/api/v1/integrations/notion/callback"
+    NOTION_REDIRECT_URI: str = "https://localhost/api/v1/integrations/notion/callback"
 
+    # 7. 카카오
     KAKAO_REST_API_KEY: Optional[str] = None
 
+    # 8. FRONTEND
     FRONTEND_URL: str = "http://localhost:5173"
 
     @field_validator("DEBUG", mode="before")

@@ -10,7 +10,8 @@ from app.utils.redis_utils import (
 
 vision_llm = ChatOpenAI(
     model="gpt-5.4-mini",
-    api_key=settings.OPENAI_API_KEY
+    api_key=settings.OPENAI_API_KEY,
+    temperature=0.2,
 )
 
 def get_libreoffice_path() -> str:
@@ -27,12 +28,12 @@ def encode_image(image_bytes: bytes) -> str:
     return base64.b64encode(image_bytes).decode("utf-8")
 
 # --- 이미지 캡처 분석 ---
-def analyze_image(image_bytes: bytes, meeting_id: str, seq: int | None = None) -> dict:
+async def analyze_image(image_bytes: bytes, meeting_id: int, seq: int | None = None) -> dict:
     """화면 캡처 이미지 OCR + 차트 분석"""
     context = (
-        get_related_utterance(meeting_id, seq) 
-        or get_meeting_context(meeting_id)
-        or get_past_meeting_context(meeting_id)
+        await get_related_utterance(meeting_id, seq) 
+        or await get_meeting_context(meeting_id)
+        or await get_past_meeting_context(meeting_id)
     )
     context_section = f"현재 회의 발화 내용:\n{context}\n" if context else ""
 
@@ -61,7 +62,7 @@ def analyze_image(image_bytes: bytes, meeting_id: str, seq: int | None = None) -
         } 
     ])
 
-    result = vision_llm.invoke([message])
+    result = await vision_llm.ainvoke([message])
 
     try:
         json_match = re.search(r'\{.*\}', result.content, re.DOTALL)
@@ -95,9 +96,9 @@ def convert_pptx_to_images(ppt_bytes: bytes) -> list[bytes]:
             result.append(buf.getvalue())
         return result
 
-def analyze_ppt_slide_image(image_bytes: bytes, slide_number: int, meeting_id: str) -> dict:
+async def analyze_ppt_slide_image(image_bytes: bytes, slide_number: int, meeting_id: int) -> dict:
     """슬라이드 이미지 전체를 Gemini Vision으로 분석"""
-    context = get_meeting_context(meeting_id) or get_past_meeting_context(meeting_id)
+    context = await get_meeting_context(meeting_id) or await get_past_meeting_context(meeting_id)
     context_section = f"현재 회의 발화 내용:\n{context}\n" if context else ""
 
     message = HumanMessage(content=[
@@ -125,7 +126,7 @@ def analyze_ppt_slide_image(image_bytes: bytes, slide_number: int, meeting_id: s
         }
     ])
 
-    result = vision_llm.invoke([message])
+    result = await vision_llm.ainvoke([message])
 
     try:
         json_match = re.search(r'\{.*\}', result.content, re.DOTALL)
