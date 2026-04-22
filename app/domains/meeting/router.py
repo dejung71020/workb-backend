@@ -3,17 +3,10 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_user_id
-from app.domains.workspace.deps import require_workspace_admin
+from app.domains.workspace.deps import require_workspace_admin, require_workspace_member
 from app.db.session import get_db
 
 from app.domains.meeting.schemas import (
-    AgendaBulkCreateRequest,
-    AgendaBulkCreateResponse,
-    AgendaItemCreatedOut,
-    AgendaItemDeleteResponse,
-    AgendaItemPatch,
-    AgendaItemPatchResponse,
     CreateMeetingRequest,
     CreateMeetingResponse,
     DeleteMeetingResponse,
@@ -69,6 +62,7 @@ def create_workspace_meeting(
 def get_workspace_meetings_history(
     workspace_id: int,
     db: Session = Depends(get_db),
+    _member: int = Depends(require_workspace_member),
     keyword: Optional[str] = Query(None, description="검색어(제목/회의록 포함)"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
@@ -91,6 +85,7 @@ def get_workspace_meeting(
     workspace_id: int,
     meeting_id: int,
     db: Session = Depends(get_db),
+    _member: int = Depends(require_workspace_member),
 ):
     """워크스페이스 내 단일 회의 조회 (참석자 목록 포함)."""
     return MeetingDetailService.get_meeting(db, workspace_id, meeting_id)
@@ -149,89 +144,4 @@ def patch_workspace_meeting(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"회의 수정 중 오류가 발생했습니다: {e}",
-        )
-
-
-@router.post(
-    "/{meeting_id}/agenda",
-    response_model=AgendaBulkCreateResponse,
-    status_code=201,
-)
-def create_meeting_agenda_items(
-    meeting_id: int,
-    body: AgendaBulkCreateRequest,
-    db: Session = Depends(get_db),
-    current_user_id: int = Depends(get_current_user_id),
-):
-    """
-    회의에 아젠다 항목을 일괄 등록합니다.
-
-    - `meetings` 존재 검증
-    - `agendas` 부모가 없으면 생성 (`created_by` = 현재 사용자)
-    - `agenda_items` 벌크 삽입 (단일 트랜잭션)
-    """
-    try:
-        agenda_id, rows = AgendaService.bulk_create_items(
-            db, meeting_id, current_user_id, body
-        )
-        return AgendaBulkCreateResponse(
-            agenda_id=agenda_id,
-            items=[
-                AgendaItemCreatedOut(
-                    id=int(r.id), title=r.title, order_index=int(r.order_index)
-                )
-                for r in rows
-            ],
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"아젠다 등록 중 오류가 발생했습니다: {e}",
-        )
-
-
-@router.patch(
-    "/{meeting_id}/agenda/items/{item_id}",
-    response_model=AgendaItemPatchResponse,
-)
-def patch_meeting_agenda_item(
-    meeting_id: int,
-    item_id: int,
-    body: AgendaItemPatch,
-    db: Session = Depends(get_db),
-):
-    """아젠다 항목 부분 수정 (요청에 포함된 필드만 반영)."""
-    try:
-        row = AgendaService.patch_item(db, meeting_id, item_id, body)
-        return AgendaItemPatchResponse(data=agenda_item_to_out(row))
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"아젠다 수정 중 오류가 발생했습니다: {e}",
-        )
-
-
-@router.delete(
-    "/{meeting_id}/agenda/items/{item_id}",
-    response_model=AgendaItemDeleteResponse,
-)
-def delete_meeting_agenda_item(
-    meeting_id: int,
-    item_id: int,
-    db: Session = Depends(get_db),
-):
-    """아젠다 항목 삭제 (hard delete)."""
-    try:
-        AgendaService.delete_item(db, meeting_id, item_id)
-        return AgendaItemDeleteResponse()
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"아젠다 삭제 중 오류가 발생했습니다: {e}",
         )

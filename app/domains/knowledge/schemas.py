@@ -36,7 +36,7 @@ class MeetingOverview(BaseModel):
 class DiscussionItem(BaseModel):
     """
     주요 논의 사항 항목 1개.
-    agenda 있으면 topic = 안건명, 없으면 LLM이 클러스터링한 주제명.
+    topic은 발화 맥락을 대표하는 주제명.
     """
     topic: str
     content: str

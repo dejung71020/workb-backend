@@ -12,7 +12,6 @@ class SharedState(TypedDict):
     # --- 2. Meeting 도메인 (Scribe) ---
     # 실시간 발화 스트림 및 화자 정보를 누적 저장
     transcript: Annotated[List[dict], operator.add] # [{speaker: str, text: str, timestamp: str}]
-    agenda: List[dict]           # [회의 전] 설정된 안건 목록 [{"topic": str, "speaker": str}]
     
     # --- 3. Knowledge 도메인 (Researcher) ---
     search_query: str            # RAG 검색 및 외부 지식 탐색을 위한 쿼리

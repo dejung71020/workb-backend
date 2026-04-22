@@ -27,7 +27,6 @@ from app.domains.meeting.schemas import (
 from app.domains.user.models import User
 from app.domains.intelligence.models import Decision, MeetingMinute, MinutePhoto, ReviewRequest
 from app.domains.action.models import ActionItem, Report, WbsEpic, WbsTask
-from app.domains.meeting.models import Agenda, AgendaItem
 from app.domains.meeting.repository import MeetingHistoryRepository
 
 
@@ -146,25 +145,12 @@ class MeetingDeleteService:
                 synchronize_session=False
             )
 
-            # 3) agendas + items
-            agenda_ids = [
-                int(a.id)
-                for a in db.query(Agenda.id).filter(Agenda.meeting_id == meeting_id).all()
-            ]
-            if agenda_ids:
-                db.query(AgendaItem).filter(AgendaItem.agenda_id.in_(agenda_ids)).delete(
-                    synchronize_session=False
-                )
-                db.query(Agenda).filter(Agenda.id.in_(agenda_ids)).delete(
-                    synchronize_session=False
-                )
-
-            # 4) meeting participants
+            # 3) meeting participants
             db.query(MeetingParticipant).filter(
                 MeetingParticipant.meeting_id == meeting_id
             ).delete(synchronize_session=False)
 
-            # 5) action items / reports
+            # 4) action items / reports
             db.query(ActionItem).filter(ActionItem.meeting_id == meeting_id).delete(
                 synchronize_session=False
             )
@@ -172,7 +158,7 @@ class MeetingDeleteService:
                 synchronize_session=False
             )
 
-            # 6) wbs: tasks -> epics
+            # 5) wbs: tasks -> epics
             epic_ids = [
                 int(e.id)
                 for e in db.query(WbsEpic.id).filter(WbsEpic.meeting_id == meeting_id).all()
@@ -185,7 +171,7 @@ class MeetingDeleteService:
                     synchronize_session=False
                 )
 
-            # 7) finally meeting
+            # 6) finally meeting
             db.delete(meeting)
 
             db.commit()

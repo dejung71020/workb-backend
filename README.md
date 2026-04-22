@@ -281,7 +281,7 @@ pytest tests/domains/meeting
 | Integration (System) | [온보딩/설정] 워크스페이스/회의 고유 식별자 관리 및 외부 서비스(Jira 등) OAuth 연동 정보 보유. | workspace_id, meeting_id, next_node, current_scenario | PostgreSQL |
 | User | [인증] 회원가입, 로그인, 음성 지문(Voice Fingerprint) 등록 및 화자 분리용 프로필 관리. | user_id (세션 관리용) | PostgreSQL |
 | Workspace | [팀 관리] 워크스페이스 멤버 권한 및 팀별 맞춤 설정 관리. | workspace_id | PostgreSQL |
-| Meeting (Scribe) | [회의 중] 실시간 STT 및 화자 분리 발화 스트림 생성. 안건(agenda) 기반 흐름 추적. | transcript, agenda | Redis, PostgreSQL |
+| Meeting (Scribe) | [회의 중] 실시간 STT 및 화자 분리 발화 스트림 생성. | transcript | Redis, PostgreSQL |
 | Knowledge (Researcher) | [검색] 즉석 자료 검색 및 과거 회의록 RAG 검색. 사용자별 개별 질문 답변 생성. | search_query, retrieved_docs, chat_history, user_question, chat_response | Pinecone |
 | Intelligence (Analyst) | [분석/제어] 요약본 및 결정사항 도출. 전체 그래프 흐름(Supervisor) 순서 및 분기 계산. | summary, decisions, previous_context | PostgreSQL |
 | Vision (Interpreter) | [비전 분석] 공유 화면/이미지 OCR 및 발표 맥락 해석 결과 제공. | screenshot_analysis | PostgreSQL, S3 |

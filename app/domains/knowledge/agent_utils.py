@@ -316,7 +316,7 @@ async def summary_node(state: SharedState) -> dict:
     흐름:
         1. 컨텍스트 로드 - partial_summary 캐시 우선, 없으면 전체 발화
         2. 이전 회의 데이터 조회 - follow-up 추적에 사용
-        3. 프롬프트 구성 - agenda 유무에 따라 분기
+        3. 프롬프트 구성
         4. LLM 호출 - SummaryResponse 구조 강제
         5. 할루시네이션 검증 - 발화 키워드 겹침률로 신뢰도 판정
     """

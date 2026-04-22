@@ -11,8 +11,6 @@ DELETE FROM review_requests;
 DELETE FROM meeting_minutes;
 DELETE FROM decisions;
 
-DELETE FROM agenda_items;
-DELETE FROM agendas;
 DELETE FROM meeting_participants;
 
 DELETE FROM action_items;
@@ -158,22 +156,6 @@ INSERT INTO meeting_participants (id, meeting_id, user_id, speaker_label, is_hos
   (1, 1, 1, 'SPEAKER_01', 1),
   (2, 2, 1, 'SPEAKER_01', 1),
   (3, 3, 1, 'SPEAKER_01', 1);
-
--- -------------------------------------------------------------------
--- agendas (3)
--- -------------------------------------------------------------------
-INSERT INTO agendas (id, meeting_id, created_by, created_at) VALUES
-  (1, 1, 1, DATE_SUB(NOW(), INTERVAL 2 DAY)),
-  (2, 2, 1, DATE_SUB(NOW(), INTERVAL 1 DAY)),
-  (3, 3, 1, DATE_SUB(NOW(), INTERVAL 3 DAY));
-
--- -------------------------------------------------------------------
--- agenda_items (3)
--- -------------------------------------------------------------------
-INSERT INTO agenda_items (id, agenda_id, title, presenter_id, estimated_minutes, reference_url, order_index) VALUES
-  (1, 1, 'Kickoff: scope & timeline', 1, 20, 'https://example.com/kickoff', 1),
-  (2, 2, 'Daily: blockers and next steps', 1, 15, NULL, 1),
-  (3, 3, 'Review: decisions & action items', 1, 30, 'https://example.com/review', 1);
 
 -- -------------------------------------------------------------------
 -- speaker_profiles (3)

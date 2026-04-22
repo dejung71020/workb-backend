@@ -45,7 +45,7 @@ from app.domains.workspace.service import (
     validate_invite_code_service,
     list_my_workspaces_service,
 )
-from app.domains.user.dependencies import require_workspace_admin
+from app.domains.workspace.deps import require_workspace_admin
 
 
 router = APIRouter()

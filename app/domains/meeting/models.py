@@ -38,26 +38,6 @@ class MeetingParticipant(Base):
     speaker_label = Column(String(20), nullable=True)
     is_host = Column(Boolean, default=False)
 
-class Agenda(Base):
-    __tablename__ = "agendas"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    meeting_id = Column(Integer, ForeignKey("meetings.id"), nullable=False)
-    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
-    
-    created_at = Column(DateTime, default=func.now(), nullable=False)
-
-class AgendaItem(Base):
-    __tablename__ = "agenda_items"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    agenda_id = Column(Integer, ForeignKey("agendas.id"), nullable=False)
-    title = Column(String(200), nullable=False)
-    presenter_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    estimated_minutes = Column(Integer, nullable=True)
-    reference_url = Column(String(500), nullable=True)
-    order_index = Column(Integer, nullable=False)
-
 class SpeakerProfile(Base):
     __tablename__ = "speaker_profiles"
 

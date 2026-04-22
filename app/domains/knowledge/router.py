@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.core.graph.workflow import knowledge_app
+from app.domains.workspace.deps import require_workspace_member
 from app.domains.knowledge.schemas import (
     ChatbotHistoryMessage,
     ChatbotHistoryResponse,
@@ -41,6 +42,7 @@ router = APIRouter()
 def search_workspace_meetings(
     workspace_id: int,
     db: Session = Depends(get_db),
+    _member: int = Depends(require_workspace_member),
     keyword: Optional[str] = Query(None, description="회의 제목 부분 일치 검색"),
     from_date: Optional[date] = Query(None, description="scheduled_at 기준 시작일(포함)"),
     to_date: Optional[date] = Query(None, description="scheduled_at 기준 종료일(포함)"),
