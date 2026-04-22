@@ -1,46 +1,41 @@
 # app\domains\integration\schemas.py
-from datetime import datetime
-from typing import Optional
-
 from pydantic import BaseModel
-
+from typing import Optional, List
+from datetime import datetime
 from app.domains.integration.models import ServiceType
 
-
+# --- Response Schemas ---
 class IntegrationResponse(BaseModel):
+    "연동 단일 항목 응답"
     id: int
     service: ServiceType
     is_connected: bool
     selected_channel_id: Optional[str] = None
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
+    
+    updated_at: datetime
 
     class Config:
         from_attributes = True
 
-
-class IntegrationItemResponse(IntegrationResponse):
-    pass
-
-
 class IntegrationListResponse(BaseModel):
-    integrations: list[IntegrationResponse]
+    """연동 목록 응답"""
+    integrations: List[IntegrationResponse]
 
+# --- Request Scheams (API Key 방식) ---
 
 class JiraConnectRequest(BaseModel):
-    domain: str
-    email: str
-    api_token: str
-    project_key: str
-
+    domain: str         # http://company.atlassian.net/
+    email: str          # Atlassian 계정 이메일
+    api_token: str      # Atlassian API Token
+    project_key: str    # PROJ
 
 class KakaoConnectRequest(BaseModel):
-    api_key: str
-
+    api_key: str        # kakao REST API Key
 
 class SlackChannelSelectRequest(BaseModel):
     channel_id: str
-
+    
+# -- OAuth Response ---
 
 class OAuthUrlResponse(BaseModel):
     auth_url: str
