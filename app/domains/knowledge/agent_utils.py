@@ -5,22 +5,32 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.graph import StateGraph, MessagesState, END
-from pymongo import MongoClient
+from motor.motor_asyncio import AsyncIOMotorClient
 import chromadb
 import redis
 
 from app.core.config import settings
 from app.core.graph.state import SharedState
-from app.utils.redis_utils import get_meeting_context
+from app.utils.redis_utils import get_meeting_context, is_meeting_live
+from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 
 # --- 클라이언트 초기화 ---
 # 모듈 로드 시 한 번만 연결. 요청마다 새로 연결하지 않음.
-mongo_db = MongoClient(settings.MONGODB_URL)["workb"]
+mongo_db = AsyncIOMotorClient(settings.MONGODB_URL)["workb"]
 chroma_client = chromadb.HttpClient(
     host=settings.CHROMA_HOST,
     port=settings.CHROMA_PORT,
 )
-r = redis.from_url(settings.REDIS_URL)
+r = redis.asyncio.from_url(settings.REDIS_URL)
+
+# ── OpenAI 임베딩 함수 ────────────────────────────────────────────────────────
+# 저장(service.py)과 검색(search_internal_db) 양쪽에서 동일한 EF를 써야
+# 벡터 공간이 일치해 올바른 유사도 계산이 가능함.
+# ChromaDB는 EF를 영속 저장하지 않으므로 get할 때마다 명시해야 함.
+_openai_ef = OpenAIEmbeddingFunction(
+    api_key=settings.OPENAI_API_KEY,
+    model_name="text-embedding-3-small",
+)
 
 llm = ChatOpenAI(
     model="gpt-4o-mini",
@@ -32,7 +42,7 @@ llm = ChatOpenAI(
 # @tool 데코레이터가 함수 시그니처와 docstring을 LLM용 tool_schema로 변환함.
 
 @tool
-def search_past_meetings(query: str) -> list:
+async def search_past_meetings(query: str) -> list:
     """이전 회의 내용에서 관련 정보를 검색한다."""
     try:
         # $meta 연산자를 사용하여 텍스트 검색 결과를 점수 순으로 정렬
@@ -41,6 +51,7 @@ def search_past_meetings(query: str) -> list:
             {"score": {"$meta": "textScore"}}, # 점수를 'score' 필드에 저장
         ).sort([("score", {"$meta": "textScore"})]).limit(5) # 점수 순으로 정렬
 
+        docs = await cursor.to_list(length=5)
         return [
             {
                 "source": "past_meetings",
@@ -49,16 +60,20 @@ def search_past_meetings(query: str) -> list:
                 "url": None,
                 "relevance_score": doc.get("score", 0.5)
             }
-            for doc in cursor
+            for doc in docs
         ]
     except Exception:
         return []
 
 @tool
-def search_internal_db(query: str) -> list:
-    """회사 내부 문서에서 관련 정보를 시멘틱 검색한다."""
+def search_internal_db(query: str, workspace_id: str) -> list:
+    """
+    회사 내부 문서에서 관련 정보를 시멘틱 검색한다.
+    workspace_id: 현재 워크스페이스 ID
+    """
     try:
-        collection = chroma_client.get_or_create_collection("internal_docs")
+        # get_collection()이 저장 때와 동일한 EF를 사용 → 벡터 공간 일치
+        collection = get_collection(workspace_id)
         results = collection.query(
             query_texts=[query],
             n_results=5
@@ -173,14 +188,24 @@ react_agent = agent_graph.compile()
 # SharedState를 받아 처리 후 업데이트할 필드만 dict로 반환.
 # LangGraph가 반환값을 state에 머지(merge)한다.
 
-def knowledge_node(state: SharedState) -> dict:
+async def knowledge_node(state: SharedState) -> dict:
     """
     사용자 질문을 react_agent로 처리하는 메인 Q&A 노드.
 
-    system_prompt에 현재 회의 발화 전체를 컨텍스트로 주입해
-    LLM이 회의 내용을 기반으로 답변하거나 필요한 도구를 선택하게 한다.
+    흐름:
+        1. 회의 중 여부 확인 (is_live) - STT 딜레이 고지 여부 결정
+        2. 현재 회의 발화 로드 (meeting_id 있을 때만)
+        3. react_agent 호출
+        4. 도구 사용 여부에 따라 분기:
+            - 도구 사용 (웹검색/캘린더/내부문서) -> citiation 검증 생략
+            - 회의 내용 기반 -> citiation이 원문에 실제 존재하는지 검증
+        5. STT 딜레이 고지 prepend (회의 중일 때만)
     """
-    meeting_context = get_meeting_context(state["meeting_id"])
+    meeting_id = state.get("meeting_id")
+    # Redis utterances 존재 여부로 회의 중/후 판단
+    is_live = await is_meeting_live(meeting_id) if meeting_id else False
+    meeting_context = await get_meeting_context(meeting_id) if meeting_id else ""
+    workspace_id = state.get("workspace_id", "")
 
     system_prompt = f"""
     당신은 회의 AI 어시스턴트입니다.
@@ -189,32 +214,102 @@ def knowledge_node(state: SharedState) -> dict:
     {meeting_context}
     
     규칙:
-    - 회의 발화 데이터는 최대 약 30초 전까지의 내용만 반영됩니다. 가장 최근 발화는 포함되지 않을 수 있음을 답변에 명시하세요.
     - 회의 내용만으로 답할 수 있으면 도구 없이 답변하세요.
     - 정보가 불완전하더라도 회의에서 언급된 내용을 바탕으로 최대한 답변하세요.
     - 확실하지 않은 정보는 "~라고 언급됐습니다" 형식으로 답변하세요.
+    - 특정 문서·파일·자료·브리프·보고서 내용이 필요하면 search_internal_db를 먼저 사용하세요. workspace_id는 반드시 "{workspace_id}"로 전달하세요.
     - 외부 자료가 필요하면 web_search를 사용하세요.
     - 이전 회의 내용이 필요하면 search_past_meetings를 사용하세요.
-    - 회사 내부 문서가 필요하면 search_internal_db를 사용하세요.
+    - 회사 내부 문서가 필요하면 search_internal_db를 사용하세요. workspace_id는 반드시 "{workspace_id}"로 전달하세요.
     - 일정 등록 요청이면 register_calendar를 사용하세요.
     - 일정 수정 요청이면 update_calendar_event를 사용하세요.
     - 일정 삭제 요청이면 delete_calendar_event를 사용하세요.
     - 특정 날짜나 일정에 대해 물어보면 get_calendar_events를 사용하세요.
+
+    최종 답변은 반드시 아래 JSON 형식으로만 출력하세요.
+    {{
+        "answer": "사용자 질문에 대한 답변",
+        "confidence": "high" | "medium" | "low"
+        "hedge_note": "근거 있음 | 근거 불충분 | 근거 없음",
+        "citations": ["근거가 된 발화를 [화자명] 내용 형식 그대로 복사. 요약・재서술 금지. 최대 3개."]
+    }}
+
+    confidence 기준:
+    - high: 발화에 명확한 근거 있음
+    - medium: 발화에 간접적으로 언급됨
+    - Low: 발화에 근거 없거나 추측
+    citations: 도구 사용 결과나 외부 정보면 []. 회의 내용 기반이면 반드시 원문 발췌.
     """
 
-    result = react_agent.invoke({
+    result = await react_agent.ainvoke({
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": state["user_question"]}
         ]
     })
 
+    # 도구 사용 여부 확인 - tool_calls 있으면 웹검색/캘린더 등 외부 도구 사용한 것
+    tool_used = any(
+        getattr(msg, "tool_calls", None)
+        for msg in result["messages"]
+    )
+
+    # LLM이 앞뒤에 설명 텍스트를 붙이는 경우를 대비해 JSON 블록만 추출
+    raw = result["messages"][-1].content
+    json_match = re.search(r"\{.*\}", raw, re.DOTALL)
+    try:
+        parsed = json.loads(json_match.group()) if json_match else {}
+    except json.JSONDecodeError:
+        parsed = {}
+
+    answer = parsed.get("answer", raw) # JSON 파싱 실패 시 원문 그대로 사용
+    confidence = parsed.get("confidence", "low")
+    citations = parsed.get("citations", [])
+
+    if tool_used:
+        # 외부 도구 사용 결과 -> 발화 원문과 대조 불필요, 검증 생략
+        pass
+    else:
+        # 회의 내용 기반 답변 -> citation이 실제 발화 원문에 존재하는지 검증
+        context_words = set(re.findall(r"[가-힣a-zA-Z0-9]+", meeting_context))
+        verified_citations = []
+        citation_failed = False
+
+        for c in citations:
+            citation_words = set(re.findall(r"[가-힣a-zA-Z0-9]+", c))
+            overlap = len(citation_words & context_words) / len(citation_words) if citation_words else 0
+            if overlap >= 0.6:
+                verified_citations.append(c)
+            else:
+                # citation이 원문에 없음 -> LLM이 인용을 조작(fabrication)한 케이스
+                citation_failed = True
+
+        if citation_failed or (not citations and confidence == "low"):
+            # 불일치 또는 근거 없음 -> 답변 자체를 대체
+            answer = "해당 내용은 회의에서 확인되지 않았습니다."
+        else:
+            # 검증 통과한 citations만 표시
+            if verified_citations:
+                citation_block = "\n\n**📎 근거 발화:**\n" + "\n".join(f"> {c}" for c in verified_citations)
+                answer += citation_block
+            
+            # medium이면 간접 근거 고지
+            if confidence == "medium":
+                answer += "\n\n※ 간접적으로 언급된 내용을 바탕으로 한 답변입니다."
+
+    # STT 딜레이 고지 - Redis utterances 있는 경우(회의 중)에만 prepend
+    if is_live:
+        answer = (
+            "※ 아래는 약 30초 전까지 반영된 발화 기준이며, 가장 최근 발화는 포함되지 않을 수 있습니다.\n\n"                
+            + answer 
+        )
+
     return {
-        "chat_response": result["messages"][-1].content,
+        "chat_response": answer,
         "function_type": "agent"
     }
 
-def summary_node(state: SharedState) -> dict:
+async def summary_node(state: SharedState) -> dict:
     """
     회의 발화 전체를 구조화된 JSON 요약으로 변환하는 노드.
 
@@ -225,25 +320,28 @@ def summary_node(state: SharedState) -> dict:
         4. LLM 호출 - SummaryResponse 구조 강제
         5. 할루시네이션 검증 - 발화 키워드 겹침률로 신뢰도 판정
     """
-
-    meeting_id = state["meeting_id"]
+    meeting_id = state.get("meeting_id")
+    is_live = await is_meeting_live(meeting_id) if meeting_id else False
 
     # 1단계: 컨텍스트 로드
     # partial_summary가 있으면 이미 요약된 앞부분은 재처리하지 않고 재사용.
     # 없으면 Redis에서 전체 발화를 가져온다.
-    cached = r.get(f"meeting:{meeting_id}:partial_summary")
-    if cached:
-        # 이전 partial_summary + 새 발화만 이어붙여 중분 처리
-        prev_summary = cached.decode()
-        new_utterances = get_meeting_context(meeting_id)
-        context = f"[이전 요약]\n(prev_summary)\n\n[추가 발화]\n{new_utterances}"
+    if not meeting_id:
+        context = ""
     else:
-        context = get_meeting_context(meeting_id)
+        cached = await r.get(f"meeting:{meeting_id}:partial_summary")
+        if cached:
+            # 이전 partial_summary + 새 발화만 이어붙여 중분 처리
+            prev_summary = cached.decode()
+            new_utterances = await get_meeting_context(meeting_id)
+            context = f"[이전 요약]\n(prev_summary)\n\n[추가 발화]\n{new_utterances}"
+        else:
+            context = await get_meeting_context(meeting_id)
 
     # 2단계: 이전 회의 데이터 조회
     # 발화 앞부분 200자를 쿼리로 사용해 관련 이전 회의를 검색
     # search_past_meetings는 @tool이므로 .invoke()로 직접 호출.
-    past_meetings = search_past_meetings.invoke({"query": context[:200]})
+    past_meetings = await search_past_meetings.ainvoke({"query": context[:200]})
     past_context = "\n".join(
         m.get("snippet", "") for m in past_meetings if m.get("snippet")
     )
@@ -295,7 +393,7 @@ def summary_node(state: SharedState) -> dict:
     {{
         "overview": {{"purpose": "...", "datetime_str": "..."}},
         "discussion_items": [{{"topic": "...", "content": "..."}}],
-        "decisions": [{{"decision": "...", "rationale": "...", "opposing_opinion": "..."}}],
+        "decisions": [{{"decision": "...", "citiation": "..."}}],
         "action_items": [{{"assignee": "...", "content": "...", "deadline": "...", "priority": "high|normal", "urgency": "urgent|normal|low"}}],
         "pending_items": [{{"content": "...", "carried_over": false, "first_mentioned_meeting": null}}],
         "next_meeting": "...",
@@ -305,7 +403,7 @@ def summary_node(state: SharedState) -> dict:
     """
 
     # 4단계: LLM 호출
-    result = llm.invoke(prompt)
+    result = await llm.ainvoke(prompt)
     content = result.content
 
     # JSON 블록만 추출 (LLM이 설명 텍스트를 앞뒤에 붙이는 경우 대비)
@@ -343,6 +441,12 @@ def summary_node(state: SharedState) -> dict:
 
     summary_dict["hallucination_flags"] = flags
 
+    # 참석자 명단 직접 주입 — LLM에게 맡기지 않는 이유:
+    #   발화에서 추출하면 실제 참석자 누락/오인식 가능                                                                   
+    #   DB가 정확한 소스이므로 DB에서 직접 가져옴                                                                        
+    from app.domains.knowledge.repository import get_meeting_participants                                                
+    summary_dict["attendees"] = get_meeting_participants(meeting_id) if meeting_id else []
+
     # partial_summary 캐시 갱신
     # 다음 요약 호출 시 이미 처리한 내용을 재처리하지 않기 위해 저장.
     # TTL 3600초(1시간) — 회의 종료 후 자동 만료.
@@ -351,13 +455,20 @@ def summary_node(state: SharedState) -> dict:
         partial_text = overview.get("purpose", "") or json.dumps(
             summary_dict.get("discussion_items", [])[:2], ensure_ascii=False
         )
-        r.set(f"meeting:{meeting_id}:partial_summary", partial_text, ex=3600)
+        await r.set(f"meeting:{meeting_id}:partial_summary", partial_text, ex=3600)
     except Exception:
         pass  # 캐시 저장 실패는 요약 결과에 영향 없음
 
+    formatted = _format_summary_markdown(summary_dict)
+    if is_live:
+        formatted = (
+            "※ 아래는 약 30초 전까지 반영된 발화 기준이며, 가장 최근 발화는 포함되지 않을 수 있습니다.\n\n"                
+            + formatted 
+        )
+
     return {
         "summary": summary_dict,
-        "chat_response": _format_summary_markdown(summary_dict),
+        "chat_response": formatted,
         "function_type": "summary"
     }
 
@@ -371,6 +482,11 @@ def _format_summary_markdown(s: dict) -> str:
     if overview.get("datetime_str"):
         lines.append(f"**일시:** {overview['datetime_str']}")
 
+    # 참석자 — overview 바로 아래                                                                                        
+    attendees = s.get("attendees", [])
+    if attendees:                                                                                                        
+        lines.append(f"**참석자:** {', '.join(attendees)}")
+
     discussion = s.get("discussion_items", [])
     if discussion:
         lines.append("\n### 🗂 주요 논의 사항")
@@ -383,10 +499,6 @@ def _format_summary_markdown(s: dict) -> str:
         lines.append("\n### ✅ 결정 사항")
         for d in decisions:
             lines.append(f"- {d.get('decision', '')}")
-            if d.get("rationale"):
-                lines.append(f"  - 근거: {d['rationale']}")
-            if d.get("opposing_opinion"):
-                lines.append(f"  - 반대 의견: {d['opposing_opinion']}")
 
     actions = s.get("action_items", [])
     if actions:
@@ -420,15 +532,32 @@ def _format_summary_markdown(s: dict) -> str:
 
     return "\n".join(lines)
 
-def classify_intent(state: SharedState) -> dict:
+async def classify_intent(state: SharedState) -> dict:
     """summary 여부만 판단 - 나머지는 전부 knowledge_node로"""
     prompt = f"""
-    사용자 입력이 회의 내용 요약 요청인지 판단하세요. 단어 하나만 출력하세요
-
-    - summary: 요약해줘, 정리해줘, 중간 정리 등 명시적 요약 요청
-    - agent: 그 외 모든 입력
-
-    입력: {state['user_question']}
+    사용자 입력이 "현재 진행 중인 회의 전체 내용을 요약해달라"는 요청인지 판단하세요. 단어 하나만 출력하세요.
+                                                                                                                         
+    - summary: 현재 회의 내용 요약/정리 요청. 예) "오늘 회의 요약해줘", "지금까지 논의 정리해줘", "중간 정리해줘"      
+    - agent: 특정 문서/자료 검색, 외부 정보 조회, 일정 관련, 특정 주제에 대한 질문 등 그 외 모든 입력.                 
+            예) "AI 브리프 내용 요약해줘", "지난 회의에서 결정된 거 알려줘", "~~문서 찾아줘"                         
+                                                                                                                        
+    입력: {state['user_question']} 
     """
-    result = llm.invoke(prompt)
-    return {"function_type": result.content.strip()}
+    result = await llm.ainvoke(prompt)
+    function_type = result.content.strip().lower()                                                                     
+    # LLM이 예상 밖의 값을 반환하면 agent로 fallback
+    if function_type not in ("summary", "agent"):                                                                      
+        function_type = "agent"
+    return {"function_type": function_type}
+
+def get_collection(workspace_id: str):
+    f"""
+    ws_{workspace_id}_docs 컬렉션 반환.
+    service.py(저장)와 search_internal_db(검색) 양쪽에서 호출.
+    항상 동일한 _openai_ef를 넘겨 벡터 공간 일치 보장.
+    """
+    return chroma_client.get_or_create_collection(
+        name=f"ws_{workspace_id}_docs",
+        embedding_function=_openai_ef,
+        metadata={"workspace_id": workspace_id}
+    )
