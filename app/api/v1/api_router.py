@@ -1,34 +1,30 @@
 # app\api\v1\api_router.py
 from fastapi import APIRouter
 
-<<<<<<< HEAD
+# 라우터 임포트
 from app.api.v1.routers.workspaces import router as workspaces_router
 from app.api.v1.routers.meetings import router as meetings_router
 from app.api.v1.routers.knowledge import router as knowledge_router
 
-api_router = APIRouter()
-
-# Workspaces: 홈 대시보드 등
-api_router.include_router(workspaces_router, prefix="/workspaces", tags=["Workspaces"])
-
-# Meetings: 생성, 히스토리
-api_router.include_router(meetings_router, prefix="/meetings", tags=["Meetings"])
-
-# Knowledge: 과거 회의 검색
-api_router.include_router(knowledge_router, prefix="/knowledge", tags=["Knowledge"])
-=======
-# 각 도메인별 라우터 임포트
-# from app.domains.meeting.router import router as meeting_router
-# from app.domains.intelligence.router import router as intelligence_router
-from app.domains.knowledge.router import router as knowledge_router
+# 추가 도메인 라우터 (domains 경로 기준)
+from app.domains.knowledge.router import router as domains_knowledge_router
 from app.domains.action.router import router as action_router
 from app.domains.vision.router import router as vision_router
+from app.domains.integration.router import router as integration_router
+# 아래 도메인은 필요에 따라 주석 해제
+# from app.domains.meeting.router import router as meeting_router
+# from app.domains.intelligence.router import router as intelligence_router
 # from app.domains.user.router import router as user_router
 # from app.domains.workspace.router import router as workspace_router
-from app.domains.integration.router import router as integration_router
 
 api_router = APIRouter()
 
+# v1. 기존 workspaces, meetings, knowledge routing
+api_router.include_router(workspaces_router, prefix="/workspaces", tags=["Workspaces"])
+api_router.include_router(meetings_router, prefix="/meetings", tags=["Meetings"])
+api_router.include_router(knowledge_router, prefix="/knowledge", tags=["Knowledge"])
+
+# 아래는 domains 기준 도메인 라우팅 (활성화 필요한 경우 주석 해제/추가)
 # 1. 사용자 및 인증 도메인 (회원가입, 로그인, 음성 특징 등록)
 # api_router.include_router(user_router, prefix="/users", tags=["Users"])
 
@@ -39,7 +35,7 @@ api_router = APIRouter()
 # api_router.include_router(intelligence_router, prefix="/intelligences", tags=["Intelligence"])
 
 # 4. 지식 베이스 도메인 (과거 자료 검색, 챗봇 대화 엔드포인트)
-api_router.include_router(knowledge_router, prefix="/knowledges", tags=["Knowledge"])
+api_router.include_router(domains_knowledge_router, prefix="/knowledges", tags=["Knowledge"])
 
 # 5. 액션 도메인 (생성된 WBS 조회, 외부 툴 연동 상태 확인)
 api_router.include_router(action_router, prefix="/actions", tags=["Actions"])
@@ -52,4 +48,3 @@ api_router.include_router(vision_router, prefix="/visions", tags=["Vision"])
 
 # 8. API 연동 통합 도메인
 api_router.include_router(integration_router, prefix="/integrations", tags=["Integration"])
->>>>>>> main

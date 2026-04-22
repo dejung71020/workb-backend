@@ -4,14 +4,9 @@ from typing import Optional
 
 class Settings(BaseSettings):
     # 1. 시스템 기본 설정
-<<<<<<< HEAD
-    ENV : str = "dev"
-    DEBUG : bool
-    RESET_DB_ON_STARTUP: bool = False
-=======
     ENV: str = "dev"
     DEBUG: bool = False
->>>>>>> main
+    RESET_DB_ON_STARTUP: bool = False
     DATABASE_URL: Optional[str] = None
     SECRET_KEY: str = "secret_key"
     ALGORITHM: str = "HS256"
