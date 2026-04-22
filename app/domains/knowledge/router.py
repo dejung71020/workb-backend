@@ -1,11 +1,28 @@
 # app\domains\knowledge\router.py
-from fastapi import APIRouter
-from datetime import datetime
+from datetime import date, datetime
+from typing import Optional
 
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+)
+from sqlalchemy.orm import Session
+
+from app.db.session import get_db
 from app.core.graph.workflow import knowledge_app
 from app.domains.knowledge.schemas import (
-    ChatbotMessageRequest, ChatbotMessageResponse, 
-    ChatbotSummaryResponse, ChatbotHistoryMessage, ChatbotHistoryResponse
+    ChatbotHistoryMessage,
+    ChatbotHistoryResponse,
+    ChatbotMessageRequest,
+    ChatbotMessageResponse,
+    ChatbotSummaryRequest,
+    ChatbotSummaryResponse,
+    DocumentUploadResponse,
 )
 from app.domains.meeting.schemas import MeetingSearchParams, MeetingSearchResponse
 from app.domains.meeting.service import MeetingSearchService
@@ -13,7 +30,6 @@ from app.domains.knowledge import repository
 from app.utils.redis_utils import get_meeting_context
 from app.domains.knowledge.agent_utils import summary_node
 from app.domains.knowledge.service import ingest_document
-from app.domains.knowledge.schemas import DocumentUploadResponse
 
 router = APIRouter()
 
