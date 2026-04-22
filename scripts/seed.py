@@ -1,8 +1,8 @@
 # scripts/seed.py
 from app.infra.database.session import SessionLocal
 from app.domains.user.models import User
-from app.domains.workspace.models import Workspace, WorkspaceMember,Department
-from app.domains.meeting.models import Meeting
+from app.domains.workspace.models import Workspace, WorkspaceMember,Department, MemberRole
+from app.domains.meeting.models import Meeting, MeetingStatus
 from app.domains.integration.models import Integration, ServiceType
 
 DEPARTMENT_NAMES = [
@@ -66,7 +66,7 @@ def seed_test_data():
         db.add(WorkspaceMember(
             workspace_id=workspace.id,
             user_id=user.id,
-            role="admin",
+            role=MemberRole.admin,
             department_id=departments[0].id,  # 개발팀
         ))
 
@@ -75,7 +75,7 @@ def seed_test_data():
             workspace_id=workspace.id,
             created_by=user.id,
             title="테스트 회의",
-            status="scheduled",
+            status=MeetingStatus.scheduled,
             room_name="A 회의실",
         ))
 

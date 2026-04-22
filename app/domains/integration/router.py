@@ -1,9 +1,12 @@
 # app\domains\integration\router.py
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Body, status
+from typing import Optional
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.infra.database.session import get_db
+from app.domains.action.schemas import ExportResponse
 from app.domains.integration import repository, service
 from app.domains.integration.models import Integration, ServiceType
 from app.domains.integration.schemas import (
@@ -13,10 +16,13 @@ from app.domains.integration.schemas import (
     KakaoConnectRequest,
     OAuthUrlResponse,
     SlackChannelSelectRequest,
+    SlackChannelItem,
+    SlackChannelListResponse,
+    TestIntegrationResponse,
+    GoogleCalendarEventsResponse,
+    GoogleCalendarEventItem,
 )
-from app.domains.user.dependencies import require_workspace_admin
-from app.infra.database.session import get_db
-
+from app.domains.user.dependencies import require_workspace_admin, require_workspace_member
 
 router = APIRouter()
 
@@ -64,7 +70,6 @@ async def connect_integration_for_dev(
         db.add(item)
     else:
         item.is_connected = True
-
     db.commit()
     db.refresh(item)
     return _to_response(item)
@@ -89,11 +94,10 @@ async def disconnect_integration(
     item = service.disconnect_integration(db, workspace_id, service_name)
     if item is None:
         raise HTTPException(status_code=404, detail="연동 정보를 찾을 수 없습니다.")
-
     return _to_response(item)
 
 
-@router.post("/workspaces/{workspace_id}/{service_name}/test")
+@router.post("/workspaces/{workspace_id}/{service_name}/test", response_model=TestIntegrationResponse)
 async def test_webhook(
     workspace_id: int,
     service_name: ServiceType,
@@ -103,12 +107,12 @@ async def test_webhook(
     success = await service.test_integration(db, workspace_id, service_name)
     if not success:
         raise HTTPException(status_code=400, detail="연동 상태 확인 불가")
-    return {"success": True, "message": "webhook 연결 성공"}
+    return TestIntegrationResponse(success=True, message="연결 성공")
 
 
 @router.get("/google/auth", response_model=OAuthUrlResponse)
 async def google_auth(
-    workspace_id: int,
+    workspace_id: int = Query(..., description="워크스페이스 ID"),
     _admin=Depends(require_workspace_admin),
 ) -> OAuthUrlResponse:
     return OAuthUrlResponse(auth_url=service.get_google_auth_url(workspace_id))
@@ -125,7 +129,7 @@ async def google_callback(code: str, state: str, db: Session = Depends(get_db)):
 
 @router.get("/slack/auth", response_model=OAuthUrlResponse)
 async def slack_auth(
-    workspace_id: int,
+    workspace_id: int = Query(..., description="워크스페이스 ID"),
     _admin=Depends(require_workspace_admin),
 ) -> OAuthUrlResponse:
     return OAuthUrlResponse(auth_url=service.get_slack_auth_url(workspace_id))
@@ -142,7 +146,7 @@ async def slack_callback(code: str, state: str, db: Session = Depends(get_db)):
 
 @router.get("/notion/auth", response_model=OAuthUrlResponse)
 async def notion_auth(
-    workspace_id: int,
+    workspace_id: int = Query(..., description="워크스페이스 ID"),
     _admin=Depends(require_workspace_admin),
 ) -> OAuthUrlResponse:
     return OAuthUrlResponse(auth_url=service.get_notion_auth_url(workspace_id))
@@ -186,7 +190,7 @@ async def connect_kakao(
     return _to_response(item)
 
 
-@router.get("/workspaces/{workspace_id}/slack/channels")
+@router.get("/workspaces/{workspace_id}/slack/channels", response_model=SlackChannelListResponse)
 async def list_slack_channels(
     workspace_id: int,
     db: Session = Depends(get_db),
@@ -194,17 +198,34 @@ async def list_slack_channels(
 ):
     try:
         channels = await service.get_slack_channel(db, workspace_id)
-        return {"channels": channels}
+        return SlackChannelListResponse(channels=channels)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.patch("/slack/channel")
+@router.get("/google/events", response_model=GoogleCalendarEventsResponse)
+async def list_google_calendar_events(
+    workspace_id: int = Query(..., description="워크스페이스 ID"),
+    time_min: Optional[str] = Query(None, description="조회 시작 시각 (ISO 8601)"),
+    max_results: int = Query(50, description="최대 반환 건수"),
+    db: Session = Depends(get_db),
+    _admin=Depends(require_workspace_member),
+):
+    try:
+        events = await service.list_google_calendar_events(db, workspace_id, time_min, max_results)
+        return GoogleCalendarEventsResponse(
+            events=[GoogleCalendarEventItem(**e) for e in events]
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/slack/channel", response_model=ExportResponse)
 async def select_slack_channel(
-    workspace_id: int,
-    body: SlackChannelSelectRequest,
+    workspace_id: int = Query(..., description="워크스페이스 ID"),
+    body: SlackChannelSelectRequest = Body(...),
     db: Session = Depends(get_db),
     _admin=Depends(require_workspace_admin),
 ):
     await service.save_slack_channel(db, workspace_id, body.channel_id)
-    return {"status": "ok"}
+    return ExportResponse(status="ok")
