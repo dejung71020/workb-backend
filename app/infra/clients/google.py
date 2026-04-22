@@ -149,3 +149,61 @@ class GoogleCalendarClient(BaseClient):
                 "description": description
             },
         )
+    
+    async def update_event(
+            self,
+            event_id: str,
+            title: str | None = None,
+            start_datetime: str | None = None,
+            end_datetime: str | None = None,
+            attendees: list[str] | None = None,
+            description: str | None = None,
+            calendar_id: str = 'primary',
+    ) -> dict:
+        '''
+        받은 인수로 캘린더 업데이트
+
+        구글 캘린더의 body 구조
+        body: Dict[str, Any] = {
+            "summary": title,
+            "description": description,
+            "start": {
+                "dateTime": start_datetime,
+                "timeZone": "Asia/Seoul"
+            },
+            "end": {
+                "dateTime": end_datetime,
+                "timeZone": "Asia/Seoul"
+            },
+        }
+        if attendees:
+            body["attendees"] = [{
+                "email": email
+        } for email in attendees]
+        ''' 
+        body = {}
+        if title is not None:
+            body['summary'] = title
+
+        if description is not None:
+            body['description'] = description
+        
+        if start_datetime is not None:
+            body['start'] = {
+                "dateTime": start_datetime,
+                "timeZone": "Asia/Seoul"
+            }
+        
+        if end_datetime is not None:
+            body['end'] = {
+                "dateTime": end_datetime,
+                'timeZone': "Asia/Seoul"
+            }
+        
+        if attendees is not None:
+            body['attendees'] = [{"email": email} for email in attendees]
+
+        return await self._request(
+            "PATCH", f"/calendars/{calendar_id}/events/{event_id}",
+            json=body,
+        )

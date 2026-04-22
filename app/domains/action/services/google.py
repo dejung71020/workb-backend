@@ -171,8 +171,9 @@ async def register_next_meeting(
         meeting_id: int,
         title: str,
         scheduled_at: str,
+        attendee_emails: list[str] = [],
         duration_minutes: int = 60,
-) -> None:
+) -> str:
     """
     확정된 다음 회의 시간을 캘린더에 이벤트로 등록한다.
 
@@ -185,30 +186,84 @@ async def register_next_meeting(
     return:
         등록 잘 됬나 안됬나
     """
-    try:
-        # 1. 토큰 갱신
-        access_token = await get_valid_google_token(db, workspace_id)
-        if not access_token:
-            raise ValueError(f"[Google Calendar] {workspace_id} - 구글 연동이 되지 않았습니다.")
-        
-        # 2. 구글 캘린더 클라이언트
-        client = GoogleCalendarClient(access_token)
+    # 1. 토큰 갱신
+    access_token = await get_valid_google_token(db, workspace_id)
+    if not access_token:
+        raise ValueError(f"[Google Calendar] {workspace_id} - 구글 연동이 되지 않았습니다.")
+    
+    # 참석자 이메일 없으면 슬랙에서 찾아봄
+    if not attendee_emails:
+        slack_integration = integration_repo.get_integration(db, workspace_id, ServiceType.slack)
+        if slack_integration and slack_integration.access_token:
+            channel_id = (slack_integration.extra_config or {}).get("channel_id")
+            if channel_id:
+                slack_client = SlackClient(slack_integration.access_token)
+                member_ids = await slack_client.get_channel_members(channel_id)
+                for uid in member_ids:
+                    info = await slack_client.get_user_info(uid)
+                    email = info.get("email", "")
+                    if email:
+                        attendee_emails.append(email)
+    # 구글 클라이언트 꺼내기
+    client = GoogleCalendarClient(access_token)
+    start_at = datetime.fromisoformat(scheduled_at)
+    end_at = start_at + timedelta(minutes=duration_minutes)
 
-        # 3. 시작 일정
+    result = await client.create_event(
+        title=title,
+        start_datetime=start_at.strftime("%Y-%m-%dT%H:%M:%S"),
+        end_datetime=end_at.strftime("%Y-%m-%dT%H:%M:%S"),
+        attendees=attendee_emails if attendee_emails else None,
+    )
+    event_id = result.get("id", "")
+    logger.info(f"[Google Calendar] 다음 회의 등록 완료 - meeting_id={meeting_id}, event_id={event_id}")
+    return event_id
+
+async def update_next_meeting(
+        db: Session,
+        workspace_id: int,
+        event_id: str,
+        title: str | None = None,
+        scheduled_at: str | None = None,
+        duration_minutes: int = 60,
+        attendee_emails: List[str] | None = None,
+        description: str | None = None,
+) -> None:
+    """
+    workspace_id와 event_id를 받아서 바꾸고 싶은 부분만 바꾸는 코드
+
+    args:
+        workspace_id: 워크스페이스 ID
+        event_id: 캘린더 ID
+        title: 제목
+        scheduled_at: 일정
+        duration_minutes: 회의 소요시간
+        attendee_emails: 참석자들 구글 이메일
+        description: 회의 설명
+
+    return ?
+    """
+    access_token = await get_valid_google_token(db, workspace_id)
+    if not access_token:
+        raise ValueError(f"구글 연동이 되지 않았습니다. (workspace_id={workspace_id})")
+    
+    client = GoogleCalendarClient(access_token)
+
+    start_datetime = None
+    end_datetime = None
+    if scheduled_at:
         start_at = datetime.fromisoformat(scheduled_at)
-
-        # 4. 종료 일정
         end_at = start_at + timedelta(minutes=duration_minutes)
+        start_datetime = start_at.strftime("%Y-%m-%dT%H:%M:%S")
+        end_datetime = end_at.strftime("%Y-%m-%dT%H:%M:%S")
 
-        # 5. 이벤트 생성
-        await client.create_event(
-            title=title,
-            start_datetime=start_at.strftime("%Y-%m-%dT%H:%M:%S"),
-            end_datetime=end_at.strftime("%Y-%m-%dT%H:%M:%S"),
-        )
+    await client.update_event(
+        event_id=event_id,
+        title=title,
+        start_datetime=start_datetime,
+        end_datetime=end_datetime,
+        attendees=attendee_emails,
+        description=description,
+    )
 
-        # 6. 로깅
-        logger.info(f"[Google Calendar] {workspace_id}-{meeting_id} 다음 회의 등록 완료\n제목 : {title}\n시작시간 : {scheduled_at}")
-
-    except Exception as e:
-        logger.error(f"[Google Calendar].{meeting_id} - 일정 등록 실패 : {e}")
+    logger.info(f"[Google Calendar] 이벤트 수정 완료 - event_id={event_id}")

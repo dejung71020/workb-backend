@@ -47,3 +47,14 @@ class NextMeetingRegisterRequest(BaseModel):
     title: str
     scheduled_at: str
     participant_ids: List[int]
+    attendee_emails: List[str] = []
+
+class NextMeetingRegisterResponse(BaseModel):
+    event_id: str
+
+class NextMeetingUpdateRequest(BaseModel):
+    title: str | None = None
+    scheduled_at: str | None = None
+    duration_minutes: int = 60
+    attendee_emails: List[str] | None = None
+    description: str | None = None
