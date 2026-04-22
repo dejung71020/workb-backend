@@ -12,12 +12,6 @@ from app.domains.workspace.router import router as workspace_router
 
 api_router = APIRouter()
 
-# v1. 기존 workspaces, meetings, knowledge routing
-api_router.include_router(workspaces_router, prefix="/workspaces", tags=["Workspaces"])
-api_router.include_router(meetings_router, prefix="/meetings", tags=["Meetings"])
-api_router.include_router(knowledge_router, prefix="/knowledge", tags=["Knowledge"])
-
-# 아래는 domains 기준 도메인 라우팅 (활성화 필요한 경우 주석 해제/추가)
 # 1. 사용자 및 인증 도메인 (회원가입, 로그인, 음성 특징 등록)
 api_router.include_router(user_router, prefix="/users", tags=["Users"])
 
@@ -28,7 +22,7 @@ api_router.include_router(user_router, prefix="/users", tags=["Users"])
 # api_router.include_router(intelligence_router, prefix="/intelligences", tags=["Intelligence"])
 
 # 4. 지식 베이스 도메인 (과거 자료 검색, 챗봇 대화 엔드포인트)
-api_router.include_router(domains_knowledge_router, prefix="/knowledges", tags=["Knowledge"])
+api_router.include_router(knowledge_router, prefix="/knowledges", tags=["Knowledge"])
 
 # 5. 액션 도메인 (생성된 WBS 조회, 외부 툴 연동 상태 확인)
 api_router.include_router(action_router, prefix="/actions", tags=["Actions"])
