@@ -27,21 +27,25 @@ DELETE FROM meetings;
 DELETE FROM device_settings;
 DELETE FROM invite_codes;
 DELETE FROM workspace_members;
+DELETE FROM departments;
 DELETE FROM workspaces;
 DELETE FROM users;
 
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- -------------------------------------------------------------------
--- users (3)
+-- users
 -- -------------------------------------------------------------------
-INSERT INTO users (id, email, password_hash, name, department, social_provider, social_id, created_at, updated_at) VALUES
-  (1, 'user1@example.com', '$2b$10$dummyhash.user1', '김수민', '제품팀',   'none',  NULL,       DATE_SUB(NOW(), INTERVAL 120 DAY), DATE_SUB(NOW(), INTERVAL 1 DAY)),
-  (2, 'user2@example.com', NULL,                    '이지현', '디자인팀', 'google','google-2', DATE_SUB(NOW(), INTERVAL  90 DAY), DATE_SUB(NOW(), INTERVAL 2 DAY)),
-  (3, 'user3@example.com', NULL,                    '박준혁', '개발팀',   'kakao', 'kakao-3',  DATE_SUB(NOW(), INTERVAL  60 DAY), DATE_SUB(NOW(), INTERVAL 3 DAY)),
-  (4, 'user4@example.com', NULL,                    '최은영', '마케팅팀', 'none',  NULL,       DATE_SUB(NOW(), INTERVAL  50 DAY), DATE_SUB(NOW(), INTERVAL 4 DAY)),
-  (5, 'user5@example.com', NULL,                    '정민준', '개발팀',   'none',  NULL,       DATE_SUB(NOW(), INTERVAL  40 DAY), DATE_SUB(NOW(), INTERVAL 5 DAY)),
-  (6, 'user6@example.com', NULL,                    '오서연', '마케팅팀', 'none',  NULL,       DATE_SUB(NOW(), INTERVAL  30 DAY), DATE_SUB(NOW(), INTERVAL 6 DAY));
+-- NOTE: current schema (app/domains/user/models.py)
+-- - no `department`, `social_provider`, `social_id`, `updated_at`
+-- - `password_hash` is NOT NULL
+INSERT INTO users (id, email, password_hash, name, role, workspace_id, department_id, is_active, created_at) VALUES
+  (1, 'user1@example.com', '$2b$10$dummyhash.user1', '김수민', 'admin',  NULL, NULL, 1, DATE_SUB(NOW(), INTERVAL 120 DAY)),
+  (2, 'user2@example.com', '$2b$10$dummyhash.user2', '이지현', 'member', NULL, NULL, 1, DATE_SUB(NOW(), INTERVAL  90 DAY)),
+  (3, 'user3@example.com', '$2b$10$dummyhash.user3', '박준혁', 'member', NULL, NULL, 1, DATE_SUB(NOW(), INTERVAL  60 DAY)),
+  (4, 'user4@example.com', '$2b$10$dummyhash.user4', '최은영', 'member', NULL, NULL, 1, DATE_SUB(NOW(), INTERVAL  50 DAY)),
+  (5, 'user5@example.com', '$2b$10$dummyhash.user5', '정민준', 'member', NULL, NULL, 1, DATE_SUB(NOW(), INTERVAL  40 DAY)),
+  (6, 'user6@example.com', '$2b$10$dummyhash.user6', '오서연', 'member', NULL, NULL, 1, DATE_SUB(NOW(), INTERVAL  30 DAY));
 
 -- -------------------------------------------------------------------
 -- workspaces (3)
@@ -50,6 +54,20 @@ INSERT INTO workspaces (id, owner_id, name, industry, default_language, summary_
   (1, 1, 'Workspace A', 'SaaS',     'ko', 'bullet', 'https://example.com/logo-a.png', DATE_SUB(NOW(), INTERVAL 100 DAY), DATE_SUB(NOW(), INTERVAL 1 DAY)),
   (2, 2, 'Workspace B', 'Finance',  'en', 'short',  'https://example.com/logo-b.png', DATE_SUB(NOW(), INTERVAL  80 DAY), DATE_SUB(NOW(), INTERVAL 2 DAY)),
   (3, 3, 'Workspace C', 'Retail',   'ko', 'detail', 'https://example.com/logo-c.png', DATE_SUB(NOW(), INTERVAL  60 DAY), DATE_SUB(NOW(), INTERVAL 3 DAY));
+
+-- -------------------------------------------------------------------
+-- departments
+-- -------------------------------------------------------------------
+INSERT INTO departments (id, workspace_id, name, created_at, updated_at) VALUES
+  (1, 1, '제품팀', DATE_SUB(NOW(), INTERVAL 100 DAY), DATE_SUB(NOW(), INTERVAL 1 DAY)),
+  (2, 1, '디자인팀', DATE_SUB(NOW(), INTERVAL 100 DAY), DATE_SUB(NOW(), INTERVAL 1 DAY)),
+  (3, 1, '개발팀', DATE_SUB(NOW(), INTERVAL 100 DAY), DATE_SUB(NOW(), INTERVAL 1 DAY));
+
+-- map a few users to workspace/department for demo screens
+UPDATE users SET workspace_id = 1, department_id = 1 WHERE id = 1;
+UPDATE users SET workspace_id = 1, department_id = 2 WHERE id = 2;
+UPDATE users SET workspace_id = 1, department_id = 3 WHERE id IN (3, 5);
+UPDATE users SET workspace_id = 1 WHERE id IN (4, 6);
 
 -- -------------------------------------------------------------------
 -- workspace_members (3)
@@ -115,18 +133,19 @@ INSERT INTO integrations (id, workspace_id, service, access_token, refresh_token
 -- -------------------------------------------------------------------
 -- meetings (3) — these are what Home dashboard renders as cards
 -- -------------------------------------------------------------------
-INSERT INTO meetings (id, workspace_id, created_by, title, meeting_type, status, scheduled_at, started_at, ended_at, google_calendar_event_id, created_at, updated_at) VALUES
-  (1, 1, 1, 'WS1 Scheduled: Kickoff', 'kickoff', 'scheduled',
+-- NOTE: current schema (app/domains/meeting/models.py) requires `room_name` (NOT NULL, default exists).
+INSERT INTO meetings (id, workspace_id, created_by, title, meeting_type, status, room_name, scheduled_at, started_at, ended_at, google_calendar_event_id, created_at, updated_at) VALUES
+  (1, 1, 1, 'WS1 Scheduled: Kickoff', 'kickoff', 'scheduled', '미지정',
     DATE_ADD(NOW(), INTERVAL 1 DAY), NULL, NULL,
     'gcal_evt_001',
     DATE_SUB(NOW(), INTERVAL 2 DAY), DATE_SUB(NOW(), INTERVAL 1 DAY)
   ),
-  (2, 1, 1, 'WS1 In Progress: Daily Sync', 'daily', 'in_progress',
+  (2, 1, 1, 'WS1 In Progress: Daily Sync', 'daily', 'in_progress', '미지정',
     DATE_SUB(NOW(), INTERVAL 40 MINUTE), DATE_SUB(NOW(), INTERVAL 35 MINUTE), NULL,
     NULL,
     DATE_SUB(NOW(), INTERVAL 1 DAY), DATE_SUB(NOW(), INTERVAL 30 MINUTE)
   ),
-  (3, 1, 1, 'WS1 Done: Product Review', 'review', 'done',
+  (3, 1, 1, 'WS1 Done: Product Review', 'review', 'done', '미지정',
     DATE_SUB(NOW(), INTERVAL 2 DAY), DATE_SUB(NOW(), INTERVAL 2 DAY) - INTERVAL 50 MINUTE, DATE_SUB(NOW(), INTERVAL 2 DAY),
     NULL,
     DATE_SUB(NOW(), INTERVAL 3 DAY), DATE_SUB(NOW(), INTERVAL 2 DAY)

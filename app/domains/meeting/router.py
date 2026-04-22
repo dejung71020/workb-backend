@@ -3,7 +3,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.v1.deps import get_current_user_id, require_workspace_admin
+from app.core.deps import get_current_user_id
+from app.domains.workspace.deps import require_workspace_admin
 from app.db.session import get_db
 from app.domains.meeting.agenda_service import AgendaService, agenda_item_to_out
 from app.domains.meeting.schemas import (

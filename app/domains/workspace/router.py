@@ -9,9 +9,8 @@
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
-from app.api.v1.deps import get_current_user_id
+from app.core.deps import get_current_user_id
 from app.db.session import get_db
-from app.domains.workspace.dashboard_service import DashboardService
 from app.domains.workspace.schemas import (
     DashboardResponse,
     DepartmentCreateRequest,
@@ -32,6 +31,7 @@ from app.domains.workspace.schemas import (
 )
 
 from app.domains.workspace.service import (
+    DashboardService,
     create_workspace_department_service,
     delete_workspace_department_service,
     get_workspace_members_service,

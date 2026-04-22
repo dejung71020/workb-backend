@@ -7,7 +7,7 @@
 
 from sqlalchemy.orm import Session
 
-from app.domains.workspace.models import Department, Workspace
+from app.domains.workspace.models import Department, Workspace, WorkspaceMember
 
 
 def get_workspace_by_invite_code(db: Session, invite_code: str) -> Workspace | None:
@@ -23,6 +23,26 @@ def get_workspace_by_invite_code(db: Session, invite_code: str) -> Workspace | N
         존재하지 않으면 None을 반환합니다.
     """
     return db.query(Workspace).filter(Workspace.invite_code == invite_code).first()
+
+
+def get_workspace_membership(
+    db: Session,
+    workspace_id: int,
+    user_id: int,
+) -> WorkspaceMember | None:
+    """
+    워크스페이스 + 사용자 기준 멤버십 1건을 조회합니다.
+
+    권한(인가) 검사 전용으로 쓰이며, 없으면 None입니다.
+    """
+    return (
+        db.query(WorkspaceMember)
+        .filter(
+            WorkspaceMember.workspace_id == workspace_id,
+            WorkspaceMember.user_id == user_id,
+        )
+        .one_or_none()
+    )
 
 
 def get_workspace_by_id(db: Session, workspace_id: int) -> Workspace | None:
