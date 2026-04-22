@@ -38,7 +38,6 @@ class KakaoExportRequest(BaseModel):
 # google calendar
 # =================================================================
 class NextMeetingSuggestRequest(BaseModel):
-    attendee_emails: List[str]
     duration_minutes: int = 60
 
 class NextMeetingSuggestResponse(BaseModel):

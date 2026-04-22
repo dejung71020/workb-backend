@@ -4,11 +4,11 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.domains.integration import service
-from app.domains.integration.models import ServiceType
+from app.domains.integration import repository, service
+from app.domains.integration.models import Integration, ServiceType
 from app.domains.integration.schemas import (
-    IntegrationResponse,
     IntegrationListResponse,
+    IntegrationResponse,
     JiraConnectRequest,
     KakaoConnectRequest,
     OAuthUrlResponse,
@@ -17,18 +17,18 @@ from app.domains.integration.schemas import (
 from app.domains.user.dependencies import require_workspace_admin
 from app.infra.database.session import get_db
 
+
 router = APIRouter()
 
 FRONTEND_INTEGRATIONS = f"{settings.FRONTEND_URL}/settings/integrations"
 
 
-def _to_response(item) -> IntegrationResponse:
+def _to_response(item: Integration) -> IntegrationResponse:
     return IntegrationResponse(
         id=item.id,
         service=item.service,
         is_connected=item.is_connected,
         selected_channel_id=item.extra_config.get("channel_id") if item.extra_config else None,
-        created_at=item.created_at,
         updated_at=item.updated_at,
     )
 
@@ -37,9 +37,10 @@ def _to_response(item) -> IntegrationResponse:
 async def get_integrations(
     workspace_id: int,
     db: Session = Depends(get_db),
-    _admin = Depends(require_workspace_admin),
-):
-    return service.get_integrations_service(db, workspace_id)
+    _admin=Depends(require_workspace_admin),
+) -> IntegrationListResponse:
+    items = service.get_integrations(db, workspace_id)
+    return IntegrationListResponse(integrations=[_to_response(item) for item in items])
 
 
 @router.patch(
@@ -51,14 +52,22 @@ async def connect_integration_for_dev(
     workspace_id: int,
     service_name: ServiceType,
     db: Session = Depends(get_db),
-    _admin = Depends(require_workspace_admin),
-):
-    return service.update_integration_connection_service(
-        db=db,
-        workspace_id=workspace_id,
-        service=service_name,
-        is_connected=True,
-    )
+    _admin=Depends(require_workspace_admin),
+) -> IntegrationResponse:
+    item = repository.get_integration(db, workspace_id, service_name)
+    if item is None:
+        item = Integration(
+            workspace_id=workspace_id,
+            service=service_name,
+            is_connected=True,
+        )
+        db.add(item)
+    else:
+        item.is_connected = True
+
+    db.commit()
+    db.refresh(item)
+    return _to_response(item)
 
 
 @router.patch(
@@ -75,9 +84,12 @@ async def disconnect_integration(
     workspace_id: int,
     service_name: ServiceType,
     db: Session = Depends(get_db),
-    _admin = Depends(require_workspace_admin),
-):
+    _admin=Depends(require_workspace_admin),
+) -> IntegrationResponse:
     item = service.disconnect_integration(db, workspace_id, service_name)
+    if item is None:
+        raise HTTPException(status_code=404, detail="연동 정보를 찾을 수 없습니다.")
+
     return _to_response(item)
 
 
@@ -86,7 +98,7 @@ async def test_webhook(
     workspace_id: int,
     service_name: ServiceType,
     db: Session = Depends(get_db),
-    _admin = Depends(require_workspace_admin),
+    _admin=Depends(require_workspace_admin),
 ):
     success = await service.test_integration(db, workspace_id, service_name)
     if not success:
@@ -95,7 +107,10 @@ async def test_webhook(
 
 
 @router.get("/google/auth", response_model=OAuthUrlResponse)
-async def google_auth(workspace_id: int, _admin = Depends(require_workspace_admin)):
+async def google_auth(
+    workspace_id: int,
+    _admin=Depends(require_workspace_admin),
+) -> OAuthUrlResponse:
     return OAuthUrlResponse(auth_url=service.get_google_auth_url(workspace_id))
 
 
@@ -109,7 +124,10 @@ async def google_callback(code: str, state: str, db: Session = Depends(get_db)):
 
 
 @router.get("/slack/auth", response_model=OAuthUrlResponse)
-async def slack_auth(workspace_id: int, _admin = Depends(require_workspace_admin)):
+async def slack_auth(
+    workspace_id: int,
+    _admin=Depends(require_workspace_admin),
+) -> OAuthUrlResponse:
     return OAuthUrlResponse(auth_url=service.get_slack_auth_url(workspace_id))
 
 
@@ -123,7 +141,10 @@ async def slack_callback(code: str, state: str, db: Session = Depends(get_db)):
 
 
 @router.get("/notion/auth", response_model=OAuthUrlResponse)
-async def notion_auth(workspace_id: int, _admin = Depends(require_workspace_admin)):
+async def notion_auth(
+    workspace_id: int,
+    _admin=Depends(require_workspace_admin),
+) -> OAuthUrlResponse:
     return OAuthUrlResponse(auth_url=service.get_notion_auth_url(workspace_id))
 
 
@@ -141,8 +162,8 @@ async def connect_jira(
     workspace_id: int,
     body: JiraConnectRequest,
     db: Session = Depends(get_db),
-    _admin = Depends(require_workspace_admin),
-):
+    _admin=Depends(require_workspace_admin),
+) -> IntegrationResponse:
     item = service.connect_jira(
         db,
         workspace_id,
@@ -159,8 +180,8 @@ async def connect_kakao(
     workspace_id: int,
     body: KakaoConnectRequest,
     db: Session = Depends(get_db),
-    _admin = Depends(require_workspace_admin),
-):
+    _admin=Depends(require_workspace_admin),
+) -> IntegrationResponse:
     item = service.connect_kakao(db, workspace_id, body.api_key)
     return _to_response(item)
 
@@ -169,7 +190,7 @@ async def connect_kakao(
 async def list_slack_channels(
     workspace_id: int,
     db: Session = Depends(get_db),
-    _admin = Depends(require_workspace_admin),
+    _admin=Depends(require_workspace_admin),
 ):
     try:
         channels = await service.get_slack_channel(db, workspace_id)
@@ -183,7 +204,7 @@ async def select_slack_channel(
     workspace_id: int,
     body: SlackChannelSelectRequest,
     db: Session = Depends(get_db),
-    _admin = Depends(require_workspace_admin),
+    _admin=Depends(require_workspace_admin),
 ):
     await service.save_slack_channel(db, workspace_id, body.channel_id)
     return {"status": "ok"}
