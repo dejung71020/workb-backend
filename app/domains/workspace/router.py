@@ -9,8 +9,11 @@
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
+from app.api.v1.deps import get_current_user_id
 from app.db.session import get_db
+from app.domains.workspace.dashboard_service import DashboardService
 from app.domains.workspace.schemas import (
+    DashboardResponse,
     DepartmentCreateRequest,
     DepartmentListResponse,
     DepartmentResponse,
@@ -18,6 +21,7 @@ from app.domains.workspace.schemas import (
     InviteCodeIssueResponse,
     InviteCodeValidateRequest,
     InviteCodeValidateResponse,
+    WorkspaceListResponse,
     WorkspaceMemberDepartmentUpdateRequest,
     WorkspaceMemberDepartmentUpdateResponse,
     WorkspaceMemberListResponse,
@@ -39,10 +43,33 @@ from app.domains.workspace.service import (
     update_workspace_member_role_service,
     update_workspace_service,
     validate_invite_code_service,
+    list_my_workspaces_service,
 )
 
 
 router = APIRouter()
+
+
+@router.get("", response_model=WorkspaceListResponse, status_code=status.HTTP_200_OK)
+async def list_my_workspaces(
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+) -> WorkspaceListResponse:
+    """현재 사용자가 속한 워크스페이스 목록."""
+    return list_my_workspaces_service(db, current_user_id)
+
+
+@router.get(
+    "/{workspace_id}/dashboard",
+    response_model=DashboardResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_workspace_dashboard(
+    workspace_id: int,
+    db: Session = Depends(get_db),
+) -> DashboardResponse:
+    """워크스페이스 홈 대시보드 (상태별 회의, 주간 요약, 미결 액션)."""
+    return DashboardService.get_dashboard(db, workspace_id)
 
 
 @router.get(

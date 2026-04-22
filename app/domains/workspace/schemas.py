@@ -5,11 +5,75 @@
 부서 CRUD 기능에 필요한 요청/응답 스키마를 정의합니다.
 """
 
-from datetime import datetime
+from datetime import date, datetime
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
 from app.domains.user.schemas import UserRole
+
+
+class WorkspaceListItem(BaseModel):
+    """내 워크스페이스 목록 한 행."""
+
+    id: int
+    name: str
+    role: str
+
+
+class WorkspaceListResponse(BaseModel):
+    """현재 사용자가 속한 워크스페이스 목록."""
+
+    success: bool = True
+    workspaces: list[WorkspaceListItem]
+    message: str = "OK"
+
+
+class DashboardParticipantOut(BaseModel):
+    user_id: int
+    name: str
+
+
+class DashboardMeetingOut(BaseModel):
+    id: int
+    title: str
+    status: str
+    scheduled_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    meeting_type: Optional[str] = None
+    participants: list[DashboardParticipantOut] = Field(default_factory=list)
+
+
+class DashboardMeetingsBundle(BaseModel):
+    in_progress: list[DashboardMeetingOut] = Field(default_factory=list)
+    scheduled: list[DashboardMeetingOut] = Field(default_factory=list)
+    done: list[DashboardMeetingOut] = Field(default_factory=list)
+
+
+class WeeklySummaryOut(BaseModel):
+    total_count: int = 0
+    total_duration_min: int = 0
+    summary_cards: list[Any] = Field(default_factory=list)
+
+
+class PendingActionItemOut(BaseModel):
+    id: int
+    content: str
+    due_date: Optional[date] = None
+    meeting_title: str
+
+
+class NextMeetingSuggestionOut(BaseModel):
+    suggested_at: datetime
+    reason: str
+
+
+class DashboardResponse(BaseModel):
+    meetings: DashboardMeetingsBundle
+    weekly_summary: WeeklySummaryOut
+    pending_action_items: list[PendingActionItemOut] = Field(default_factory=list)
+    next_meeting_suggestion: Optional[NextMeetingSuggestionOut] = None
 
 
 class WorkspaceResponse(BaseModel):

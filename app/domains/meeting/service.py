@@ -12,6 +12,9 @@ from app.domains.meeting.schemas import (
     CreateMeetingResponse,
     CreateMeetingResponseData,
     DeleteMeetingResponse,
+    MeetingDetailOut,
+    MeetingDetailParticipantOut,
+    MeetingDetailResponse,
     UpdateMeetingRequest,
     MeetingSearchData,
     MeetingSearchItemOut,
@@ -409,3 +412,53 @@ class MeetingHistoryService:
             )
 
         return MeetingHistoryResponse(total=total, page=page, meetings=items)
+
+
+class MeetingDetailService:
+    """워크스페이스 소속 회의 단건 조회 (상세·참석자)."""
+
+    @staticmethod
+    def get_meeting(db: Session, workspace_id: int, meeting_id: int) -> MeetingDetailResponse:
+        meeting = (
+            db.query(Meeting)
+            .filter(Meeting.id == meeting_id, Meeting.workspace_id == workspace_id)
+            .one_or_none()
+        )
+        if meeting is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="회의를 찾을 수 없습니다.",
+            )
+
+        rows = (
+            db.query(MeetingParticipant, User.name)
+            .join(User, User.id == MeetingParticipant.user_id)
+            .filter(MeetingParticipant.meeting_id == meeting_id)
+            .order_by(MeetingParticipant.id)
+            .all()
+        )
+        participants = [
+            MeetingDetailParticipantOut(user_id=int(mp.user_id), name=str(name))
+            for mp, name in rows
+        ]
+
+        status_str = (
+            meeting.status.value
+            if isinstance(meeting.status, MeetingStatus)
+            else str(meeting.status)
+        )
+
+        return MeetingDetailResponse(
+            success=True,
+            data=MeetingDetailOut(
+                id=int(meeting.id),
+                title=str(meeting.title),
+                status=status_str,
+                meeting_type=meeting.meeting_type,
+                scheduled_at=meeting.scheduled_at,
+                started_at=meeting.started_at,
+                ended_at=meeting.ended_at,
+                participants=participants,
+            ),
+            message="OK",
+        )

@@ -30,6 +30,7 @@ from app.domains.workspace.repository import (
     update_workspace_invite_code,
 )
 
+from app.domains.workspace.models import Workspace, WorkspaceMember
 from app.domains.workspace.schemas import (
     DepartmentCreateRequest,
     DepartmentListResponse,
@@ -37,6 +38,8 @@ from app.domains.workspace.schemas import (
     DepartmentUpdateRequest,
     InviteCodeIssueResponse,
     InviteCodeValidateResponse,
+    WorkspaceListItem,
+    WorkspaceListResponse,
     WorkspaceMemberDepartmentUpdateRequest,
     WorkspaceMemberDepartmentUpdateResponse,
     WorkspaceMemberListResponse,
@@ -573,3 +576,23 @@ def delete_workspace_department_service(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="부서를 찾을 수 없습니다.",
         )
+
+
+def list_my_workspaces_service(db: Session, user_id: int) -> WorkspaceListResponse:
+    """현재 사용자가 속한 워크스페이스 목록."""
+    rows = (
+        db.query(Workspace, WorkspaceMember.role)
+        .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
+        .filter(WorkspaceMember.user_id == user_id)
+        .order_by(Workspace.id.asc())
+        .all()
+    )
+    items = [
+        WorkspaceListItem(
+            id=int(ws.id),
+            name=ws.name,
+            role=str(role.value if hasattr(role, "value") else role),
+        )
+        for ws, role in rows
+    ]
+    return WorkspaceListResponse(success=True, workspaces=items, message="OK")

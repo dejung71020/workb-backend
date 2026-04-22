@@ -35,6 +35,31 @@ class DeleteMeetingResponse(BaseModel):
     message: str = "OK"
 
 
+# ── Meeting detail (GET /api/v1/meetings/workspaces/{ws_id}/{meeting_id}) ────
+
+
+class MeetingDetailParticipantOut(BaseModel):
+    user_id: int
+    name: str
+
+
+class MeetingDetailOut(BaseModel):
+    id: int
+    title: str
+    status: str
+    meeting_type: Optional[str] = None
+    scheduled_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    participants: list[MeetingDetailParticipantOut] = Field(default_factory=list)
+
+
+class MeetingDetailResponse(BaseModel):
+    success: bool = True
+    data: MeetingDetailOut
+    message: str = "OK"
+
+
 # ── Meeting search (GET /api/v1/knowledge/workspaces/{id}/meetings/search) ─
 
 
