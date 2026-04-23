@@ -102,6 +102,22 @@ def update_user_password(
     return user
 
 
+def update_user_profile(
+    db: Session,
+    user_id: int,
+    name: str,
+) -> User | None:
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return None
+
+    user.name = name
+    db.commit()
+    db.refresh(user)
+
+    return user
+
+
 def get_users_by_workspace_id(
     db: Session,
     workspace_id: int,

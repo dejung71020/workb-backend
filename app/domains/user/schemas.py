@@ -222,6 +222,13 @@ class PasswordResetConfirmRequest(BaseModel):
         return value
 
 
+class UserProfileUpdateRequest(BaseModel):
+    """
+    로그인한 사용자가 마이페이지에서 수정할 수 있는 프로필 정보입니다.
+    """
+    name: str = Field(min_length=2, max_length=30)
+
+
 class UserResponse(BaseModel):
     """
     사용자 정보를 응답할 때 사용하는 스키마입니다.
@@ -233,6 +240,19 @@ class UserResponse(BaseModel):
     email: EmailStr
     name: str
     role: UserRole
+
+
+class UserProfileResponse(UserResponse):
+    workspace_id: int | None = None
+
+
+class UserProfileUpdateResponse(BaseModel):
+    user: UserProfileResponse
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    message: str
+
 
 class AdminSignupResponse(UserResponse):
     """
