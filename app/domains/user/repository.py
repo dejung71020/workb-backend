@@ -86,6 +86,22 @@ def create_user(
     return user
 
 
+def update_user_password(
+    db: Session,
+    user_id: int,
+    hashed_password: str,
+) -> User | None:
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return None
+
+    user.hashed_password = hashed_password
+    db.commit()
+    db.refresh(user)
+
+    return user
+
+
 def get_users_by_workspace_id(
     db: Session,
     workspace_id: int,

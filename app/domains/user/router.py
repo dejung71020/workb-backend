@@ -21,6 +21,7 @@ service가 repository로 DB 작업
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
+from app.core.deps import get_current_user_id
 from app.db.session import get_db
 from app.domains.user.schemas import (
     AdminSignupRequest,
@@ -171,7 +172,11 @@ async def request_password_reset(payload: PasswordResetRequest) -> MessageRespon
     response_model=MessageResponse,
     status_code=status.HTTP_200_OK,
 )
-async def change_password(payload: PasswordChangeRequest) -> MessageResponse:
+async def change_password(
+    payload: PasswordChangeRequest,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+) -> MessageResponse:
     """
     비밀번호 변경 요청을 처리하는 API 엔드포인트입니다.
 
@@ -181,4 +186,4 @@ async def change_password(payload: PasswordChangeRequest) -> MessageResponse:
     Returns:
         요청 처리 결과 메시지를 반환합니다.
     """
-    return change_password_service(payload)
+    return change_password_service(db, current_user_id, payload)

@@ -22,6 +22,7 @@ from fastapi import HTTPException, status
 from jose import JWTError
 from sqlalchemy.orm import Session
 
+from app.core.email import send_admin_signup_welcome_email
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -30,8 +31,18 @@ from app.core.security import (
     verify_password,
 )
 from app.domains.integration.repository import create_default_integrations
-from app.domains.user.repository import create_user, get_user_by_email, get_user_by_id
-from app.domains.workspace.repository import create_workspace, get_workspace_by_invite_code
+from app.domains.user.repository import (
+    create_user,
+    get_user_by_email,
+    get_user_by_id,
+    update_user_password,
+)
+from app.domains.workspace.models import MemberRole
+from app.domains.workspace.repository import (
+    create_workspace,
+    create_workspace_membership,
+    get_workspace_by_invite_code,
+)
 from app.domains.user.schemas import (
     AdminSignupRequest,
     AdminSignupResponse,
@@ -118,6 +129,18 @@ def signup_admin_service(db: Session, payload: AdminSignupRequest) -> AdminSignu
         role=UserRole.ADMIN.value,
         workspace_id=workspace.id,
     )
+    create_workspace_membership(
+        db=db,
+        workspace_id=workspace.id,
+        user_id=user.id,
+        role=MemberRole.admin,
+    )
+    welcome_email_sent = send_admin_signup_welcome_email(
+        to_email=user.email,
+        name=user.name,
+        workspace_name=workspace.name,
+        invite_code=workspace.invite_code,
+    )
 
     return AdminSignupResponse(
         id=user.id,
@@ -126,6 +149,7 @@ def signup_admin_service(db: Session, payload: AdminSignupRequest) -> AdminSignu
         role=UserRole(user.role),
         workspace_id=workspace.id,
         invite_code=workspace.invite_code,
+        welcome_email_sent=welcome_email_sent,
     )
 
 
@@ -172,6 +196,12 @@ def signup_member_service(db: Session, payload: MemberSignupRequest) -> UserResp
         name=payload.name,
         role=UserRole.MEMBER.value,
         workspace_id=workspace.id,
+    )
+    create_workspace_membership(
+        db=db,
+        workspace_id=workspace.id,
+        user_id=user.id,
+        role=MemberRole.member,
     )
 
     return UserResponse(
@@ -327,12 +357,15 @@ def request_password_reset_service(
     )
 
 
-def change_password_service(payload: PasswordChangeRequest) -> MessageResponse:
+def change_password_service(
+    db: Session,
+    current_user_id: int,
+    payload: PasswordChangeRequest,
+) -> MessageResponse:
     """
     비밀번호 변경 요청을 처리합니다.
 
-    현재 단계에서는 실제 토큰 검증 및 DB 비밀번호 변경 없이,
-    변경 완료 메시지만 반환합니다.
+    현재 로그인한 사용자의 기존 비밀번호를 검증한 뒤 새 비밀번호로 변경합니다.
 
     Args:
         payload: 비밀번호 변경 요청 데이터입니다.
@@ -340,4 +373,34 @@ def change_password_service(payload: PasswordChangeRequest) -> MessageResponse:
     Returns:
         비밀번호 변경 완료 메시지를 반환합니다.
     """
+    user = get_user_by_id(db, current_user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
+    if not verify_password(payload.current_password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="현재 비밀번호가 올바르지 않습니다.",
+        )
+
+    if verify_password(payload.new_password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="새 비밀번호는 현재 비밀번호와 달라야 합니다.",
+        )
+
+    updated = update_user_password(
+        db=db,
+        user_id=user.id,
+        hashed_password=hash_password(payload.new_password),
+    )
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
     return MessageResponse(message="비밀번호가 성공적으로 변경되었습니다.")

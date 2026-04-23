@@ -169,16 +169,11 @@ class PasswordResetRequest(BaseModel):
 
 class PasswordChangeRequest(BaseModel):
     """
-    비밀번호 재설정 완료 요청 스키마입니다.
+    로그인한 사용자의 비밀번호 변경 요청 스키마입니다.
 
-    이메일 인증 또는 재설정 링크를 통해 받은 token과
-    새로 설정할 비밀번호를 함께 전달받는 상황을 가정합니다.
-
-    필드 설명은 다음과 같습니다.
-    - token: 비밀번호 변경 권한을 증명하는 토큰입니다.
-    - new_password: 새로 설정할 비밀번호입니다.
+    현재 비밀번호를 검증한 뒤 새 비밀번호로 변경합니다.
     """
-    token: str
+    current_password: str = Field(min_length=8, max_length=64)
     new_password: str = Field(min_length=8, max_length=64)
 
     @field_validator("new_password")
@@ -229,6 +224,7 @@ class AdminSignupResponse(UserResponse):
     """
     workspace_id: int
     invite_code: str
+    welcome_email_sent: bool = False
 
 class TokenResponse(BaseModel):
     """

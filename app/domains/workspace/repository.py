@@ -7,7 +7,7 @@
 
 from sqlalchemy.orm import Session
 
-from app.domains.workspace.models import Department, Workspace, WorkspaceMember
+from app.domains.workspace.models import Department, MemberRole, Workspace, WorkspaceMember
 
 
 def get_workspace_by_invite_code(db: Session, invite_code: str) -> Workspace | None:
@@ -43,6 +43,32 @@ def get_workspace_membership(
         )
         .one_or_none()
     )
+
+
+def create_workspace_membership(
+    db: Session,
+    workspace_id: int,
+    user_id: int,
+    role: MemberRole,
+) -> WorkspaceMember:
+    """
+    사용자와 워크스페이스의 멤버십 row를 생성합니다.
+
+    이미 같은 멤버십이 있으면 중복 생성하지 않고 기존 row를 반환합니다.
+    """
+    existing = get_workspace_membership(db, workspace_id, user_id)
+    if existing:
+        return existing
+
+    membership = WorkspaceMember(
+        workspace_id=workspace_id,
+        user_id=user_id,
+        role=role,
+    )
+    db.add(membership)
+    db.commit()
+    db.refresh(membership)
+    return membership
 
 
 def get_workspace_by_id(db: Session, workspace_id: int) -> Workspace | None:
