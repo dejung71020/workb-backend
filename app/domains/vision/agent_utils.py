@@ -9,9 +9,8 @@ from app.utils.redis_utils import (
 )
 
 vision_llm = ChatOpenAI(
-    model="gpt-5.4-mini",
+    model="o4-mini",
     api_key=settings.OPENAI_API_KEY,
-    temperature=0.2,
 )
 
 def get_libreoffice_path() -> str:

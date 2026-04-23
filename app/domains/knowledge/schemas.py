@@ -5,7 +5,6 @@ from typing import Optional, Literal
 
 class ChatbotMessageRequest(BaseModel):
     message: str
-    session_id: Optional[str] = None # None이면 서버가 새 UUID 발급, 있으면 기존 세션 계속
     meeting_id: Optional[int] = None # 회의 중일 때만 전달 - 없으면 이전 회의 검색만
 
 class ChatbotMessageResponse(BaseModel):

@@ -340,7 +340,6 @@ async def summary_node(state: SharedState) -> dict:
 
     # 2단계: 이전 회의 데이터 조회
     # 발화 앞부분 200자를 쿼리로 사용해 관련 이전 회의를 검색
-    # search_past_meetings는 @tool이므로 .invoke()로 직접 호출.
     past_meetings = await search_past_meetings.ainvoke({"query": context[:200]})
     past_context = "\n".join(
         m.get("snippet", "") for m in past_meetings if m.get("snippet")
@@ -388,13 +387,16 @@ async def summary_node(state: SharedState) -> dict:
     - past_meetings에서 가져온 액션 아이템이 이번 회의 발화에서 완료 언급됐으면 completed: true
     - 이번 회의에서도 미해결이면 pending_items의 carried_over: true
 
+    decisions와 action_items의 citation: 근거 발화를 [화자명] 내용 형식 그대로 복사.
+    요약・재서술 금지. 근거 발화 없으면 null.
+
     반드시 아래 JSON 형식으로만 답변하세요. 내용이 없는 섹션은 [] 또는 null. "없음" 텍스트 사용 금지.
 
     {{
         "overview": {{"purpose": "...", "datetime_str": "..."}},
         "discussion_items": [{{"topic": "...", "content": "..."}}],
         "decisions": [{{"decision": "...", "citiation": "..."}}],
-        "action_items": [{{"assignee": "...", "content": "...", "deadline": "...", "priority": "high|normal", "urgency": "urgent|normal|low"}}],
+        "action_items": [{{"assignee": "...", "content": "...", "deadline": "...", "priority": "high|normal", "urgency": "urgent|normal|low", "citiation": "..."}}],
         "pending_items": [{{"content": "...", "carried_over": false, "first_mentioned_meeting": null}}],
         "next_meeting": "...",
         "previous_followups": [{{"previous_action": "...", "completed": false}}],
@@ -423,39 +425,46 @@ async def summary_node(state: SharedState) -> dict:
 
     # 검증 대상: decisions + action_items (요약 중 사실 관계 오류가 가장 치명적인 섹션)
     check_targets = [
-        d.get("decision", "") for d in summary_dict.get("decisions", [])
+        (d.get("decision", ""), d.get("citiation", "")) 
+        for d in summary_dict.get("decisions", [])
     ] + [
-        a.get("content", "") for a in summary_dict.get("action_items", [])
+        (a.get("content", ""), a.get("citiation", "")) 
+        for a in summary_dict.get("action_items", [])
     ]
 
-    for item_text in check_targets:
+    for item_text, citation in check_targets:
         if not item_text:
             continue
-        item_words = set(re.findall(r"[가-힣a-zA-Z0-9]+", item_text))
-        # 겹치는 단어 수 / 요약 항목 단어 수
-        overlap = len(item_words & context_words) / len(item_words) if item_words else 0
+
+        if not citation:
+            confidence = "needs_review" # 근거 발화 미제출
+        else:
+            citation_words = set(re.findall(r"[가-힣a-zA-Z0-9]+", citation))
+            overlap = len(citation_words & context_words) / len(citation_words) if citation_words else 0
+            confidence = "verified" if overlap >= 0.4 else "needs_review"
+
         flags.append({
             "item": item_text,
-            "confidence": "verified" if overlap >= 0.4 else "needs_review"
+            "citiation": citation,
+            "confidence": confidence,
         })
 
     summary_dict["hallucination_flags"] = flags
 
-    # 참석자 명단 직접 주입 — LLM에게 맡기지 않는 이유:
-    #   발화에서 추출하면 실제 참석자 누락/오인식 가능                                                                   
-    #   DB가 정확한 소스이므로 DB에서 직접 가져옴                                                                        
+    # 6단계: 참석자 명단 DB에서 직접 주입                                                                              
+    # LLM 추출 대신 DB 사용 — 발화 기반 추출 시 누락/오인식 가능                                                                        
     from app.domains.knowledge.repository import get_meeting_participants                                                
     summary_dict["attendees"] = get_meeting_participants(meeting_id) if meeting_id else []
 
-    # partial_summary 캐시 갱신
+    # 7단계 partial_summary 캐시 갱신
     # 다음 요약 호출 시 이미 처리한 내용을 재처리하지 않기 위해 저장.
-    # TTL 3600초(1시간) — 회의 종료 후 자동 만료.
+    # 회의 종료 후 삭제됨
     try:
         overview = summary_dict.get("overview", {})
         partial_text = overview.get("purpose", "") or json.dumps(
             summary_dict.get("discussion_items", [])[:2], ensure_ascii=False
         )
-        await r.set(f"meeting:{meeting_id}:partial_summary", partial_text, ex=3600)
+        await r.set(f"meeting:{meeting_id}:partial_summary", partial_text)
     except Exception:
         pass  # 캐시 저장 실패는 요약 결과에 영향 없음
 

@@ -6,7 +6,6 @@ import matplotlib
 matplotlib.rcParams['font.family'] = 'AppleGothic'
 import numpy as np
 from langchain_openai import ChatOpenAI
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
 from app.core.config import settings
 from app.domains.vision.agent_utils import encode_image
@@ -107,6 +106,23 @@ def evaluate_one(model_name: str, model, case: dict) -> dict:
     content = result.content
     meta = result.usage_metadata or {}
 
+    # -- 토큰 집계 --------------------------------------------------------------
+    input_tokens = meta.get("input_tokens", 0)
+    output_tokens = meta.get("output_tokens", 0)
+
+    # o-시리즈: reasoning_tokens는 ouput_token_details.reasoning에서 추출
+    # gpt 시리즈는 해당 필드 없으므로 0으로 처리
+    output_details = meta.get("ouput_token_details") or {}
+    reasoning_tokens = output_details.get("reasoning", 0)
+
+    # 추정 비용 계산 - reasoning_tokens는 ouput 단가로 청구
+    cost_table = COST_PER_1M.get(model_name, {})
+    estimated_cost = (
+        input_tokens * cost_table.get("input", 0) / 1_000_000
+        + output_tokens * cost_table.get("output", 0) / 1_000_000
+    )
+
+    # -- 정량 평가 --------------------------------------------------------------
     # 1. JSON 파싱 성공 여부
     try:
         json_match = re.search(r'\{.*\}', content, re.DOTALL)
@@ -116,11 +132,14 @@ def evaluate_one(model_name: str, model, case: dict) -> dict:
         parsed = None
         json_ok = False
 
-    # 2. 필드 완성도
+    # 2. 필드 완성도 - 4개 필드가 모두 비어있지 않은지
     required_fields = ["ocr_text", "chart_description", "key_points", "summary"]
-    field_score = sum(1 for f in required_fields if parsed and parsed.get(f)) / len(required_fields) if parsed else 0
+    field_score = (
+        sum(1 for f in required_fields if parsed and parsed.get(f)) / len(required_fields) 
+        if parsed else 0
+    )
 
-    # 3. 키워드 포함률 (OCR 정확도)
+    # 3. 키워드 포함률 (OCR 정확도) - expected_keywords가 ocr_text에 있는지
     ocr_text = parsed.get("ocr_text", "") if parsed else ""
     keyword_hits = sum(1 for kw in case["expected_keywords"] if kw in ocr_text)
     keyword_score = keyword_hits / len(case["expected_keywords"]) if case["expected_keywords"] else None
@@ -131,12 +150,14 @@ def evaluate_one(model_name: str, model, case: dict) -> dict:
     if case["has_chart"]:
         chart_score = 1.0 if len(chart_desc) > 50 else 0.5 if len(chart_desc) > 10 else 0.0
 
-    # 5. 참고 이미지 처리 적절성 - 참고용 이미지인데 key_points에 슬라이드 무관 내용 없는지
+    # 5. 참고 이미지 처리 적절성 - 참고용 이미지인데 key_points가 비거나 "참고/맥락" 언급 있으면 적절
     reference_handled = None
     if case["is_reference_image"]:
         key_points = parsed.get("key_points", []) if parsed else []
         # key_points가 비어있거나 "참고" 언급이 있으면 적절히 처리된 것
-        reference_handled = len(key_points) == 0 or any("참고" in kp or "맥락" in kp for kp in key_points)
+        reference_handled = len(key_points) == 0 or any(
+            "참고" in kp or "맥락" in kp for kp in key_points
+        )
 
     # 6. 한국어 답변 여부
     korean_response = bool(re.search(r'[가-힣]', content))
@@ -150,6 +171,8 @@ def evaluate_one(model_name: str, model, case: dict) -> dict:
         "latency": round(latency, 2),
         "input_tokens": meta.get("input_tokens", 0),
         "output_tokens": meta.get("output_tokens", 0),
+        "reasoning_tokens": reasoning_tokens,       # o-시리즈만 전용, 나머지는 0
+        "estimated_cost": round(estimated_cost, 6), # USD
         "json_ok": json_ok,
         "field_score": round(field_score, 2),
         "keyword_score": keyword_score,
@@ -165,14 +188,15 @@ def evaluate_one(model_name: str, model, case: dict) -> dict:
 
 def visualize(all_results: list[dict]):
     model_names = list(MODELS.keys())
-    case_names = [c["name"] for c in TEST_CASES]
 
     fig, axes = plt.subplots(2, 3, figsize=(18, 11))
     fig.suptitle("Vision 모델 평가 결과", fontsize=16)
 
     def get_avg(metric, model):
-        vals = [r[metric] for r in all_results if r["model"] == model and r.get(metric) is not None and
-r.get("error") is None]
+        vals = [
+            r[metric] for r in all_results 
+            if r["model"] == model and r.get(metric) is not None and not r.get("error")
+        ]
         return np.mean(vals) if vals else 0
 
     # 1. 모델별 평균 응답 시간
@@ -182,11 +206,12 @@ r.get("error") is None]
     ax.set_title("평균 응답 시간 (초)")
     ax.tick_params(axis='x', rotation=20)
 
-    # 2. 모델별 평균 입력 토큰
+    # 2. 모델별 추정 비용 - 입력 토큰 대신 비용으로 교체
+    # 단가 차이가 크므로 토큰 수보다 비용이 실질적 비교 지표
     ax = axes[0][1]
-    input_tokens = [get_avg("input_tokens", m) for m in model_names]
-    ax.bar(model_names, input_tokens, color="coral")
-    ax.set_title("평균 입력 토큰")
+    costs = [get_avg("estimated_cost", m) for m in model_names]
+    ax.bar(model_names, costs, color="tomato")
+    ax.set_title("평균 추정 비용 (USD)")
     ax.tick_params(axis='x', rotation=20)
 
     # 3. 모델별 필드 완성도
@@ -246,10 +271,17 @@ r.get("error") is None]
             print(f"\n[{r['model']} / {r['case']}] 오류: {r['error']}")
             continue
         print(f"\n[{r['model']} / {r['case']}]")
-        print(f"  OCR 미리보기: {r['ocr_preview']}")
-        print(f"  차트 설명: {r['chart_preview']}")
-        print(f"  요약: {r['summary_preview']}")
-        print(f"  한국어 응답: {'O' if r['korean_response'] else 'X'}")
+        print(f"  latency:          {r['latency']}s")
+        print(f"  input_tokens:     {r['input_tokens']}")
+        print(f"  output_tokens:    {r['output_tokens']}")
+        # reasoning_tokens는 o-시리즈에서만 0 이상의 값을 가짐
+        if r['reasoning_tokens']:
+            print(f"  reasoning_tokens: {r['reasoning_tokens']}")
+        print(f"  estimated_cost:   ${r['estimated_cost']:.6f}")
+        print(f"  OCR 미리보기:     {r['ocr_preview']}")
+        print(f"  차트 설명:        {r['chart_preview']}")
+        print(f"  요약:             {r['summary_preview']}")
+        print(f"  한국어 응답:      {'O' if r['korean_response'] else 'X'}")
         if r['reference_handled'] is not None:
             print(f"  참고이미지 처리: {'O' if r['reference_handled'] else 'X'}")
 
@@ -268,7 +300,7 @@ if __name__ == "__main__":
             if r.get("error"):
                 print(f"    오류: {r['error']}")
             else:
-                print(f"    latency: {r['latency']}s, 토큰: {r['input_tokens']}, 필드완성도: {r['field_score']}")
+                print(f"    latency: {r['latency']}s, tokens: {r['input_tokens']}, cost: ${r['estimated_cost']:.6f}, 필드완성도: {r['field_score']}")
 
     if all_results:
         visualize(all_results)
