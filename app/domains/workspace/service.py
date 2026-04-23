@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.email import send_workspace_invite_email
 from app.domains.action.models import ActionItem, ActionStatus
 from app.domains.meeting.models import Meeting, MeetingParticipant, MeetingStatus
 from app.domains.user.models import User
@@ -24,18 +25,20 @@ from app.domains.user.repository import (
     update_user_role,
 )
 from app.domains.workspace.repository import (
+    create_invite_code,
     create_department,
     delete_department,
     get_department_by_id,
     get_departments_by_workspace_id,
     get_workspace_by_id,
     get_workspace_by_invite_code,
+    get_invite_code_by_code,
     update_department,
     update_workspace,
     update_workspace_invite_code,
 )
 
-from app.domains.workspace.models import Workspace, WorkspaceMember
+from app.domains.workspace.models import MemberRole, Workspace, WorkspaceMember
 from app.domains.workspace.schemas import (
     DashboardMeetingOut,
     DashboardMeetingsBundle,
@@ -51,6 +54,8 @@ from app.domains.workspace.schemas import (
     WeeklySummaryOut,
     WorkspaceListItem,
     WorkspaceListResponse,
+    WorkspaceInviteEmailRequest,
+    WorkspaceInviteEmailResponse,
     WorkspaceMemberDepartmentUpdateRequest,
     WorkspaceMemberDepartmentUpdateResponse,
     WorkspaceMemberListResponse,
@@ -70,6 +75,13 @@ def _generate_invite_code() -> str:
     service 계층 내부에 별도 함수로 둡니다.
     """
     return secrets.token_hex(4).upper()
+
+
+def _generate_unique_invite_code(db: Session) -> str:
+    while True:
+        code = _generate_invite_code()
+        if not get_workspace_by_invite_code(db, code) and not get_invite_code_by_code(db, code):
+            return code
 
 
 def get_workspace_service(db: Session, workspace_id: int) -> WorkspaceResponse:
@@ -174,6 +186,11 @@ def validate_invite_code_service(
         HTTPException: 초대코드가 유효하지 않을 경우 400 Bad Request 예외를 발생시킵니다.
     """
     workspace = get_workspace_by_invite_code(db, invite_code)
+
+    if not workspace:
+        invite = get_invite_code_by_code(db, invite_code)
+        if invite and not invite.is_used and invite.expires_at >= datetime.utcnow():
+            workspace = get_workspace_by_id(db, invite.workspace_id)
 
     if not workspace:
         raise HTTPException(
@@ -438,6 +455,63 @@ def issue_workspace_invite_code_service(
     return InviteCodeIssueResponse(
         workspace_id=updated_workspace.id,
         invite_code=updated_workspace.invite_code,
+    )
+
+
+def send_workspace_invite_emails_service(
+    db: Session,
+    workspace_id: int,
+    payload: WorkspaceInviteEmailRequest,
+) -> WorkspaceInviteEmailResponse:
+    workspace = get_workspace_by_id(db, workspace_id)
+    if not workspace:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="워크스페이스를 찾을 수 없습니다.",
+        )
+    role_labels = {
+        "admin": "관리자",
+        "member": "멤버",
+        "viewer": "뷰어",
+    }
+    seen: set[str] = set()
+    sent_count = 0
+    failed_count = 0
+
+    for invite in payload.invites:
+        email = str(invite.email).strip().lower()
+        if email in seen:
+            continue
+        seen.add(email)
+        code = _generate_unique_invite_code(db)
+        create_invite_code(
+            db=db,
+            workspace_id=workspace.id,
+            code=code,
+            role=MemberRole(invite.role.value),
+            expires_at=datetime.utcnow() + timedelta(days=7),
+        )
+
+        sent = send_workspace_invite_email(
+            to_email=email,
+            workspace_name=workspace.name,
+            invite_code=code,
+            role_label=role_labels.get(invite.role.value, invite.role.value),
+        )
+        if sent:
+            sent_count += 1
+        else:
+            failed_count += 1
+
+    message = (
+        f"초대 메일 {sent_count}건을 발송했습니다."
+        if sent_count > 0
+        else "초대 메일을 발송하지 못했습니다."
+    )
+    return WorkspaceInviteEmailResponse(
+        sent_count=sent_count,
+        failed_count=failed_count,
+        message=message,
     )
 
 
