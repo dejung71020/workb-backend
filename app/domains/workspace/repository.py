@@ -7,7 +7,7 @@
 
 from sqlalchemy.orm import Session
 
-from app.domains.workspace.models import Department, MemberRole, Workspace, WorkspaceMember
+from app.domains.workspace.models import Department, InviteCode, MemberRole, Workspace, WorkspaceMember
 
 
 def get_workspace_by_invite_code(db: Session, invite_code: str) -> Workspace | None:
@@ -69,6 +69,41 @@ def create_workspace_membership(
     db.commit()
     db.refresh(membership)
     return membership
+
+
+def get_invite_code_by_code(db: Session, code: str) -> InviteCode | None:
+    return db.query(InviteCode).filter(InviteCode.code == code).one_or_none()
+
+
+def create_invite_code(
+    db: Session,
+    workspace_id: int,
+    code: str,
+    role: MemberRole,
+    expires_at,
+) -> InviteCode:
+    invite = InviteCode(
+        workspace_id=workspace_id,
+        code=code,
+        role=role,
+        expires_at=expires_at,
+    )
+    db.add(invite)
+    db.commit()
+    db.refresh(invite)
+    return invite
+
+
+def mark_invite_code_used(
+    db: Session,
+    invite: InviteCode,
+    user_id: int,
+) -> InviteCode:
+    invite.is_used = True
+    invite.used_by = user_id
+    db.commit()
+    db.refresh(invite)
+    return invite
 
 
 def get_workspace_by_id(db: Session, workspace_id: int) -> Workspace | None:

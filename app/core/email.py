@@ -62,18 +62,81 @@ def send_admin_signup_welcome_email(
     safe_workspace_name = escape(workspace_name)
     safe_invite_code = escape(invite_code)
     safe_login_url = escape(login_url, quote=True)
-    subject = "Workb 관리자 가입이 완료되었습니다"
+    subject = "Workb에 오신 것을 환영합니다"
     text_body = (
-        f"{name}님, Workb 관리자 가입이 완료되었습니다.\n\n"
+        f"{name}님, Workb 워크스페이스가 준비되었습니다.\n\n"
         f"워크스페이스: {workspace_name}\n"
         f"초대코드: {invite_code}\n"
         f"로그인: {login_url}\n"
+        "\n이 초대코드를 팀원에게 공유하면 멤버가 워크스페이스에 참여할 수 있습니다.\n"
     )
     html_body = f"""
-    <p>{safe_name}님, Workb 관리자 가입이 완료되었습니다.</p>
-    <p><strong>워크스페이스</strong>: {safe_workspace_name}</p>
-    <p><strong>초대코드</strong>: {safe_invite_code}</p>
-    <p><a href="{safe_login_url}">Workb 로그인</a></p>
+    <div style="font-family:Arial,sans-serif;line-height:1.6;color:#111827">
+      <h2 style="margin:0 0 12px">Workb에 오신 것을 환영합니다</h2>
+      <p>{safe_name}님, 관리자 계정과 워크스페이스가 준비되었습니다.</p>
+      <div style="padding:16px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb">
+        <p style="margin:0 0 8px"><strong>워크스페이스</strong>: {safe_workspace_name}</p>
+        <p style="margin:0"><strong>초대코드</strong>: <code>{safe_invite_code}</code></p>
+      </div>
+      <p>팀원에게 초대코드를 공유하면 같은 워크스페이스에 참여할 수 있습니다.</p>
+      <p><a href="{safe_login_url}" style="color:#4f46e5">Workb 로그인하기</a></p>
+    </div>
+    """
+
+    return send_email(to_email, subject, text_body, html_body)
+
+
+def send_workspace_invite_email(
+    to_email: str,
+    workspace_name: str,
+    invite_code: str,
+    role_label: str,
+) -> bool:
+    signup_url = f"{settings.FRONTEND_URL.rstrip('/')}/signup/member?invite={invite_code}"
+    safe_workspace_name = escape(workspace_name)
+    safe_invite_code = escape(invite_code)
+    safe_role_label = escape(role_label)
+    safe_signup_url = escape(signup_url, quote=True)
+    subject = f"{workspace_name} 워크스페이스 초대"
+    text_body = (
+        f"Workb {workspace_name} 워크스페이스에 초대되었습니다.\n\n"
+        f"초대 권한: {role_label}\n"
+        f"초대코드: {invite_code}\n"
+        f"가입 링크: {signup_url}\n"
+    )
+    html_body = f"""
+    <div style="font-family:Arial,sans-serif;line-height:1.6;color:#111827">
+      <h2 style="margin:0 0 12px">Workb 워크스페이스 초대</h2>
+      <p><strong>{safe_workspace_name}</strong> 워크스페이스에 초대되었습니다.</p>
+      <div style="padding:16px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb">
+        <p style="margin:0 0 8px"><strong>초대 권한</strong>: {safe_role_label}</p>
+        <p style="margin:0"><strong>초대코드</strong>: <code>{safe_invite_code}</code></p>
+      </div>
+      <p>아래 링크에서 초대코드를 확인하고 멤버 회원가입을 진행해주세요.</p>
+      <p><a href="{safe_signup_url}" style="color:#4f46e5">Workb 워크스페이스 참여하기</a></p>
+    </div>
+    """
+
+    return send_email(to_email, subject, text_body, html_body)
+
+
+def send_password_reset_email(to_email: str, name: str, reset_url: str) -> bool:
+    safe_name = escape(name)
+    safe_reset_url = escape(reset_url, quote=True)
+    subject = "Workb 비밀번호 재설정 안내"
+    text_body = (
+        f"{name}님, Workb 비밀번호 재설정 요청이 접수되었습니다.\n\n"
+        f"아래 링크에서 새 비밀번호를 설정해주세요.\n{reset_url}\n\n"
+        f"이 링크는 {settings.PASSWORD_RESET_TOKEN_MINUTES}분 동안 사용할 수 있습니다.\n"
+    )
+    html_body = f"""
+    <div style="font-family:Arial,sans-serif;line-height:1.6;color:#111827">
+      <h2 style="margin:0 0 12px">비밀번호 재설정</h2>
+      <p>{safe_name}님, Workb 비밀번호 재설정 요청이 접수되었습니다.</p>
+      <p>아래 링크에서 새 비밀번호를 설정해주세요.</p>
+      <p><a href="{safe_reset_url}" style="color:#4f46e5">새 비밀번호 설정하기</a></p>
+      <p style="color:#6b7280;font-size:13px">이 링크는 {settings.PASSWORD_RESET_TOKEN_MINUTES}분 동안 사용할 수 있습니다.</p>
+    </div>
     """
 
     return send_email(to_email, subject, text_body, html_body)

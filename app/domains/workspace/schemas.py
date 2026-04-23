@@ -8,7 +8,7 @@
 from datetime import date, datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 from app.domains.user.schemas import UserRole
 
@@ -134,6 +134,21 @@ class InviteCodeIssueResponse(BaseModel):
 
     workspace_id: int
     invite_code: str
+
+
+class WorkspaceInviteEmailItem(BaseModel):
+    email: EmailStr
+    role: UserRole = UserRole.MEMBER
+
+
+class WorkspaceInviteEmailRequest(BaseModel):
+    invites: list[WorkspaceInviteEmailItem] = Field(min_length=1, max_length=20)
+
+
+class WorkspaceInviteEmailResponse(BaseModel):
+    sent_count: int
+    failed_count: int
+    message: str
 
 
 class WorkspaceMemberResponse(BaseModel):

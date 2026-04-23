@@ -20,6 +20,8 @@ from app.domains.workspace.schemas import (
     InviteCodeIssueResponse,
     InviteCodeValidateRequest,
     InviteCodeValidateResponse,
+    WorkspaceInviteEmailRequest,
+    WorkspaceInviteEmailResponse,
     WorkspaceListResponse,
     WorkspaceMemberDepartmentUpdateRequest,
     WorkspaceMemberDepartmentUpdateResponse,
@@ -38,6 +40,7 @@ from app.domains.workspace.service import (
     get_workspace_departments_service,
     get_workspace_service,
     issue_workspace_invite_code_service,
+    send_workspace_invite_emails_service,
     update_workspace_department_service,
     update_workspace_member_department_service,
     update_workspace_member_role_service,
@@ -159,6 +162,23 @@ async def issue_workspace_invite_code(
         새로 발급된 초대코드 정보를 반환합니다.
     """
     return issue_workspace_invite_code_service(db, workspace_id)
+
+
+@router.post(
+    "/{workspace_id}/invites/email",
+    response_model=WorkspaceInviteEmailResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def send_workspace_invite_emails(
+    workspace_id: int,
+    payload: WorkspaceInviteEmailRequest,
+    db: Session = Depends(get_db),
+    _admin = Depends(require_workspace_admin),
+) -> WorkspaceInviteEmailResponse:
+    """
+    워크스페이스 초대코드를 이메일로 발송합니다.
+    """
+    return send_workspace_invite_emails_service(db, workspace_id, payload)
 
 
 @router.get(

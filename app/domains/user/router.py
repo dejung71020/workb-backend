@@ -31,6 +31,7 @@ from app.domains.user.schemas import (
     MemberSignupRequest,
     MessageResponse,
     PasswordChangeRequest,
+    PasswordResetConfirmRequest,
     PasswordResetRequest,
     RefreshTokenRequest,
     TokenResponse,
@@ -38,6 +39,7 @@ from app.domains.user.schemas import (
 )
 from app.domains.user.service import (
     change_password_service,
+    confirm_password_reset_service,
     login_service,
     logout_service,
     request_password_reset_service,
@@ -154,7 +156,10 @@ async def logout(
     response_model=MessageResponse,
     status_code=status.HTTP_200_OK,
 )
-async def request_password_reset(payload: PasswordResetRequest) -> MessageResponse:
+async def request_password_reset(
+    payload: PasswordResetRequest,
+    db: Session = Depends(get_db),
+) -> MessageResponse:
     """
     비밀번호 재설정 메일 발송 요청을 처리하는 API 엔드포인트입니다.
 
@@ -164,7 +169,22 @@ async def request_password_reset(payload: PasswordResetRequest) -> MessageRespon
     Returns:
         요청 처리 결과 메시지를 반환합니다.
     """
-    return request_password_reset_service(payload)
+    return request_password_reset_service(db, payload)
+
+
+@router.post(
+    "/password-reset/confirm",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def confirm_password_reset(
+    payload: PasswordResetConfirmRequest,
+    db: Session = Depends(get_db),
+) -> MessageResponse:
+    """
+    비밀번호 재설정 링크에서 새 비밀번호를 저장합니다.
+    """
+    return confirm_password_reset_service(db, payload)
 
 
 @router.post(

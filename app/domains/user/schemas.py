@@ -205,6 +205,23 @@ class PasswordChangeRequest(BaseModel):
         return value
 
 
+class PasswordResetConfirmRequest(BaseModel):
+    """
+    이메일 링크로 받은 토큰을 사용해 새 비밀번호를 설정합니다.
+    """
+    token: str
+    new_password: str = Field(min_length=8, max_length=64)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, value: str) -> str:
+        if not any(char.isalpha() for char in value):
+            raise ValueError("비밀번호에는 영문자가 최소 1개 이상 포함되어야 합니다.")
+        if not any(char.isdigit() for char in value):
+            raise ValueError("비밀번호에는 숫자가 최소 1개 이상 포함되어야 합니다.")
+        return value
+
+
 class UserResponse(BaseModel):
     """
     사용자 정보를 응답할 때 사용하는 스키마입니다.
