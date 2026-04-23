@@ -5,6 +5,7 @@ python-multipart==0.0.24
 
 # AI & Agents
 langchain>=1.2.15
+langchain-community
 langchain-text-splitters>=0.3.0
 langchain-openai==1.1.12
 langchain-anthropic==1.4.0

@@ -52,6 +52,17 @@ class Settings(BaseSettings):
     # 8. FRONTEND
     FRONTEND_URL: str = "http://localhost:5173"
 
+    # 9. Email
+    SMTP_HOST: Optional[str] = None
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
+    SMTP_FROM_EMAIL: Optional[str] = None
+    SMTP_FROM_NAME: str = "Workb"
+    SMTP_USE_TLS: bool = True
+    ADMIN_SIGNUP_EMAIL_ENABLED: bool = True
+    PASSWORD_RESET_TOKEN_MINUTES: int = 30
+
     @field_validator("DEBUG", mode="before")
     @classmethod
     def parse_debug(cls, value):
