@@ -31,10 +31,12 @@ from app.domains.workspace.schemas import (
     WorkspaceResponse,
     WorkspaceUpdateRequest,
 )
+from app.domains.user.schemas import MessageResponse
 
 from app.domains.workspace.service import (
     DashboardService,
     create_workspace_department_service,
+    delete_workspace_service,
     delete_workspace_department_service,
     get_workspace_members_service,
     get_workspace_departments_service,
@@ -114,6 +116,23 @@ async def patch_workspace(
     워크스페이스 기본 설정을 수정하는 API 엔드포인트입니다.
     """
     return update_workspace_service(db, workspace_id, payload)
+
+
+@router.delete(
+    "/{workspace_id}",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def delete_workspace(
+    workspace_id: int,
+    db: Session = Depends(get_db),
+    _admin = Depends(require_workspace_admin),
+) -> MessageResponse:
+    """
+    워크스페이스와 관련 데이터를 삭제합니다. 워크스페이스 관리자만 수행할 수 있습니다.
+    """
+    delete_workspace_service(db, workspace_id)
+    return MessageResponse(message="워크스페이스가 삭제되었습니다.")
 
 
 @router.post(

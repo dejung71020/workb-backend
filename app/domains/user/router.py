@@ -51,6 +51,7 @@ from app.domains.user.service import (
     signup_admin_service,
     signup_member_service,
     update_my_profile_service,
+    withdraw_my_account_service,
 )
 
 
@@ -185,6 +186,21 @@ async def update_my_profile(
     로그인한 사용자의 이름을 수정하고 갱신된 토큰을 발급합니다.
     """
     return update_my_profile_service(db, current_user_id, payload)
+
+
+@router.delete(
+    "/me",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def withdraw_my_account(
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+) -> MessageResponse:
+    """
+    로그인한 사용자의 회원 탈퇴를 처리합니다.
+    """
+    return withdraw_my_account_service(db, current_user_id)
 
 
 @router.post(

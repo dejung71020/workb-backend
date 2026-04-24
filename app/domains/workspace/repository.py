@@ -71,6 +71,37 @@ def create_workspace_membership(
     return membership
 
 
+def count_workspace_admins(db: Session, workspace_id: int) -> int:
+    """
+    워크스페이스에 남아 있는 관리자 수를 조회합니다.
+    """
+    return (
+        db.query(WorkspaceMember)
+        .filter(
+            WorkspaceMember.workspace_id == workspace_id,
+            WorkspaceMember.role == MemberRole.admin,
+        )
+        .count()
+    )
+
+
+def delete_workspace_membership(
+    db: Session,
+    workspace_id: int,
+    user_id: int,
+) -> bool:
+    """
+    사용자 1명의 워크스페이스 멤버십을 삭제합니다.
+    """
+    membership = get_workspace_membership(db, workspace_id, user_id)
+    if not membership:
+        return False
+
+    db.delete(membership)
+    db.commit()
+    return True
+
+
 def get_invite_code_by_code(db: Session, code: str) -> InviteCode | None:
     return db.query(InviteCode).filter(InviteCode.code == code).one_or_none()
 
