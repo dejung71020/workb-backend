@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.domains.workspace.deps import require_workspace_admin, require_workspace_member
+from app.core.deps import get_current_user_id
 from app.db.session import get_db
 
 from app.domains.meeting.schemas import (
@@ -12,6 +13,9 @@ from app.domains.meeting.schemas import (
     DeleteMeetingResponse,
     MeetingDetailResponse,
     MeetingHistoryResponse,
+    SpeakerProfileListResponse,
+    SpeakerProfileRegisterRequest,
+    SpeakerProfileRegisterResponse,
     UpdateMeetingRequest,
 )
 from app.domains.meeting.service import (
@@ -20,6 +24,7 @@ from app.domains.meeting.service import (
     MeetingDetailService,
     MeetingHistoryService,
     MeetingUpdateService,
+    SpeakerProfileService,
 )
 
 router = APIRouter()
@@ -75,6 +80,40 @@ def get_workspace_meetings_history(
     - page/size 페이징
     """
     return MeetingHistoryService.get_history(db, workspace_id, keyword, page, size)
+
+
+@router.get(
+    "/workspaces/{workspace_id}/speaker-profiles",
+    response_model=SpeakerProfileListResponse,
+)
+def list_workspace_speaker_profiles(
+    workspace_id: int,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(require_workspace_member),
+):
+    """
+    화자 프로필 목록을 조회합니다.
+    관리자는 워크스페이스 전체, 멤버는 본인 프로필만 조회합니다.
+    """
+    return SpeakerProfileService.list_profiles(db, workspace_id, current_user_id)
+
+
+@router.post(
+    "/workspaces/{workspace_id}/speaker-profiles",
+    response_model=SpeakerProfileRegisterResponse,
+    status_code=status.HTTP_200_OK,
+)
+def register_workspace_speaker_profile(
+    workspace_id: int,
+    payload: SpeakerProfileRegisterRequest,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    """
+    화자 프로필을 등록합니다.
+    관리자는 모든 멤버, 멤버는 본인만 등록할 수 있습니다.
+    """
+    return SpeakerProfileService.register_profile(db, workspace_id, current_user_id, payload)
 
 
 @router.get(

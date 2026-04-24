@@ -37,6 +37,7 @@ from app.domains.user.repository import (
     create_user,
     get_user_by_email,
     get_user_by_id,
+    update_user_profile,
     update_user_password,
 )
 from app.domains.workspace.models import MemberRole
@@ -60,6 +61,9 @@ from app.domains.user.schemas import (
     PasswordResetRequest,
     RefreshTokenRequest,
     TokenResponse,
+    UserProfileResponse,
+    UserProfileUpdateRequest,
+    UserProfileUpdateResponse,
     UserResponse,
     UserRole,
 )
@@ -87,6 +91,16 @@ def _access_token_claims(user: User) -> dict[str, str | int | None]:
         "name": user.name,
         "workspace_id": user.workspace_id,
     }
+
+
+def _user_profile_response(user: User) -> UserProfileResponse:
+    return UserProfileResponse(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        role=UserRole(user.role),
+        workspace_id=user.workspace_id,
+    )
 
 
 def signup_admin_service(db: Session, payload: AdminSignupRequest) -> AdminSignupResponse:
@@ -356,6 +370,42 @@ def logout_service(db: Session, payload: LogoutRequest) -> MessageResponse:
         )
 
     return MessageResponse(message="로그아웃되었습니다.")
+
+
+def get_my_profile_service(db: Session, current_user_id: int) -> UserProfileResponse:
+    user = get_user_by_id(db, current_user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+    return _user_profile_response(user)
+
+
+def update_my_profile_service(
+    db: Session,
+    current_user_id: int,
+    payload: UserProfileUpdateRequest,
+) -> UserProfileUpdateResponse:
+    user = update_user_profile(db, current_user_id, payload.name.strip())
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
+    access_token = create_access_token(
+        subject=str(user.id),
+        extra_claims=_access_token_claims(user),
+    )
+    refresh_token = create_refresh_token(subject=str(user.id))
+
+    return UserProfileUpdateResponse(
+        user=_user_profile_response(user),
+        access_token=access_token,
+        refresh_token=refresh_token,
+        message="프로필이 변경되었습니다.",
+    )
 
 
 def request_password_reset_service(

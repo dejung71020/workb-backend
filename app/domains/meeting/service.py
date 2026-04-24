@@ -6,7 +6,13 @@ from fastapi import HTTPException, status
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
-from app.domains.meeting.models import Meeting, MeetingParticipant, MeetingStatus
+from app.domains.meeting.models import (
+    DiarizationMethod,
+    Meeting,
+    MeetingParticipant,
+    MeetingStatus,
+    SpeakerProfile,
+)
 from app.domains.meeting.schemas import (
     CreateMeetingRequest,
     CreateMeetingResponse,
@@ -23,11 +29,17 @@ from app.domains.meeting.schemas import (
     MeetingSearchResponse,
     MeetingHistoryItemOut,
     MeetingHistoryResponse,
+    SpeakerProfileItem,
+    SpeakerProfileListResponse,
+    SpeakerProfileRegisterRequest,
+    SpeakerProfileRegisterResponse,
 )
 from app.domains.user.models import User
 from app.domains.intelligence.models import Decision, MeetingMinute, MinutePhoto, ReviewRequest
 from app.domains.action.models import ActionItem, Report, WbsEpic, WbsTask
 from app.domains.meeting.repository import MeetingHistoryRepository
+from app.domains.workspace.models import MemberRole, WorkspaceMember
+from app.domains.workspace.repository import get_workspace_membership
 
 
 class MeetingCreateService:
@@ -447,4 +459,160 @@ class MeetingDetailService:
                 participants=participants,
             ),
             message="OK",
+        )
+
+
+def _workspace_role_for_user(
+    db: Session,
+    workspace_id: int,
+    user: User,
+) -> str | None:
+    membership = get_workspace_membership(db, workspace_id, user.id)
+    if membership:
+        return membership.role.value
+    if user.workspace_id == workspace_id:
+        return user.role
+    return None
+
+
+def _speaker_profile_item(
+    user: User,
+    role: str,
+    profile: SpeakerProfile | None,
+) -> SpeakerProfileItem:
+    return SpeakerProfileItem(
+        user_id=user.id,
+        name=user.name,
+        email=user.email,
+        role=role,
+        is_verified=bool(profile and profile.is_verified),
+        diarization_method=profile.diarization_method.value if profile else None,
+        updated_at=profile.updated_at if profile else None,
+    )
+
+
+class SpeakerProfileService:
+    @staticmethod
+    def list_profiles(
+        db: Session,
+        workspace_id: int,
+        current_user_id: int,
+    ) -> SpeakerProfileListResponse:
+        current_user = db.query(User).filter(User.id == current_user_id).one_or_none()
+        if current_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="사용자를 찾을 수 없습니다.",
+            )
+
+        current_role = _workspace_role_for_user(db, workspace_id, current_user)
+        if current_role is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="워크스페이스 멤버만 수행할 수 있습니다.",
+            )
+
+        if current_role == MemberRole.admin.value:
+            member_rows = (
+                db.query(User, WorkspaceMember.role)
+                .join(WorkspaceMember, WorkspaceMember.user_id == User.id)
+                .filter(WorkspaceMember.workspace_id == workspace_id)
+                .order_by(User.id.asc())
+                .all()
+            )
+        else:
+            member_rows = [(current_user, MemberRole(current_role))]
+
+        user_ids = [int(user.id) for user, _role in member_rows]
+        profile_rows = (
+            db.query(SpeakerProfile)
+            .filter(
+                SpeakerProfile.workspace_id == workspace_id,
+                SpeakerProfile.user_id.in_(user_ids),
+            )
+            .all()
+            if user_ids
+            else []
+        )
+        profiles_by_user = {int(profile.user_id): profile for profile in profile_rows}
+
+        return SpeakerProfileListResponse(
+            profiles=[
+                _speaker_profile_item(
+                    user=user,
+                    role=role.value if isinstance(role, MemberRole) else str(role),
+                    profile=profiles_by_user.get(int(user.id)),
+                )
+                for user, role in member_rows
+            ]
+        )
+
+    @staticmethod
+    def register_profile(
+        db: Session,
+        workspace_id: int,
+        current_user_id: int,
+        payload: SpeakerProfileRegisterRequest,
+    ) -> SpeakerProfileRegisterResponse:
+        current_user = db.query(User).filter(User.id == current_user_id).one_or_none()
+        if current_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="사용자를 찾을 수 없습니다.",
+            )
+
+        current_role = _workspace_role_for_user(db, workspace_id, current_user)
+        if current_role is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="워크스페이스 멤버만 수행할 수 있습니다.",
+            )
+
+        target_user_id = payload.user_id or current_user_id
+        if target_user_id != current_user_id and current_role != MemberRole.admin.value:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="본인 화자 프로필만 등록할 수 있습니다.",
+            )
+
+        target_user = db.query(User).filter(User.id == target_user_id).one_or_none()
+        if target_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="대상 사용자를 찾을 수 없습니다.",
+            )
+
+        target_role = _workspace_role_for_user(db, workspace_id, target_user)
+        if target_role is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="같은 워크스페이스 멤버만 등록할 수 있습니다.",
+            )
+
+        profile = (
+            db.query(SpeakerProfile)
+            .filter(
+                SpeakerProfile.workspace_id == workspace_id,
+                SpeakerProfile.user_id == target_user_id,
+            )
+            .one_or_none()
+        )
+        if profile is None:
+            profile = SpeakerProfile(
+                workspace_id=workspace_id,
+                user_id=target_user_id,
+                diarization_method=DiarizationMethod(payload.diarization_method),
+                is_verified=True,
+            )
+            db.add(profile)
+        else:
+            profile.diarization_method = DiarizationMethod(payload.diarization_method)
+            profile.is_verified = True
+
+        db.commit()
+        db.refresh(profile)
+
+        return SpeakerProfileRegisterResponse(
+            profile=_speaker_profile_item(target_user, target_role, profile),
+            message="화자 프로필이 등록되었습니다.",
         )
