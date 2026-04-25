@@ -118,6 +118,23 @@ def update_user_profile(
     return user
 
 
+def deactivate_user_account(db: Session, user_id: int) -> User | None:
+    """
+    회원 탈퇴 처리용으로 사용자 계정을 비활성화하고 워크스페이스 연결을 끊습니다.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return None
+
+    user.is_active = False
+    user.workspace_id = None
+    user.department_id = None
+    db.commit()
+    db.refresh(user)
+
+    return user
+
+
 def get_users_by_workspace_id(
     db: Session,
     workspace_id: int,

@@ -14,8 +14,10 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.email import send_workspace_invite_email
-from app.domains.action.models import ActionItem, ActionStatus
-from app.domains.meeting.models import Meeting, MeetingParticipant, MeetingStatus
+from app.domains.action.models import ActionItem, ActionStatus, Report, WbsEpic, WbsTask
+from app.domains.integration.models import Integration
+from app.domains.intelligence.models import Decision, MeetingMinute, MinutePhoto, ReviewRequest
+from app.domains.meeting.models import Meeting, MeetingParticipant, MeetingStatus, SpeakerProfile
 from app.domains.user.models import User
 from app.domains.user.repository import (
     count_users_by_department_id,
@@ -38,7 +40,7 @@ from app.domains.workspace.repository import (
     update_workspace_invite_code,
 )
 
-from app.domains.workspace.models import MemberRole, Workspace, WorkspaceMember
+from app.domains.workspace.models import Department, DeviceSetting, InviteCode, MemberRole, Workspace, WorkspaceMember
 from app.domains.workspace.schemas import (
     DashboardMeetingOut,
     DashboardMeetingsBundle,
@@ -161,6 +163,83 @@ def update_workspace_service(
         summary_style=updated_workspace.summary_style,
         logo_url=updated_workspace.logo_url,
     )
+
+
+def delete_workspace_service(db: Session, workspace_id: int) -> None:
+    """
+    워크스페이스와 워크스페이스에 종속된 데이터를 삭제합니다.
+
+    현재 모델에는 DB cascade 옵션이 없으므로 FK 제약을 피하기 위해
+    하위 테이블부터 명시적으로 정리합니다.
+    """
+    workspace = get_workspace_by_id(db, workspace_id)
+    if not workspace:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="워크스페이스를 찾을 수 없습니다.",
+        )
+
+    meeting_ids = [
+        meeting_id
+        for (meeting_id,) in db.query(Meeting.id)
+        .filter(Meeting.workspace_id == workspace_id)
+        .all()
+    ]
+    minute_ids: list[int] = []
+    epic_ids: list[int] = []
+
+    if meeting_ids:
+        minute_ids = [
+            minute_id
+            for (minute_id,) in db.query(MeetingMinute.id)
+            .filter(MeetingMinute.meeting_id.in_(meeting_ids))
+            .all()
+        ]
+        epic_ids = [
+            epic_id
+            for (epic_id,) in db.query(WbsEpic.id)
+            .filter(WbsEpic.meeting_id.in_(meeting_ids))
+            .all()
+        ]
+
+    if minute_ids:
+        db.query(ReviewRequest).filter(ReviewRequest.minute_id.in_(minute_ids)).delete(synchronize_session=False)
+        db.query(MinutePhoto).filter(MinutePhoto.minute_id.in_(minute_ids)).delete(synchronize_session=False)
+
+    if epic_ids:
+        db.query(WbsTask).filter(WbsTask.epic_id.in_(epic_ids)).delete(synchronize_session=False)
+
+    if meeting_ids:
+        db.query(MeetingMinute).filter(MeetingMinute.meeting_id.in_(meeting_ids)).delete(synchronize_session=False)
+        db.query(Decision).filter(Decision.meeting_id.in_(meeting_ids)).delete(synchronize_session=False)
+        db.query(WbsEpic).filter(WbsEpic.meeting_id.in_(meeting_ids)).delete(synchronize_session=False)
+        db.query(ActionItem).filter(ActionItem.meeting_id.in_(meeting_ids)).delete(synchronize_session=False)
+        db.query(Report).filter(Report.meeting_id.in_(meeting_ids)).delete(synchronize_session=False)
+        db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id.in_(meeting_ids)).delete(synchronize_session=False)
+        db.query(Meeting).filter(Meeting.id.in_(meeting_ids)).delete(synchronize_session=False)
+
+    db.query(SpeakerProfile).filter(SpeakerProfile.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(Integration).filter(Integration.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(InviteCode).filter(InviteCode.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(DeviceSetting).filter(DeviceSetting.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(WorkspaceMember).filter(WorkspaceMember.workspace_id == workspace_id).delete(synchronize_session=False)
+
+    (
+        db.query(User)
+        .filter(User.workspace_id == workspace_id)
+        .update(
+            {
+                User.is_active: False,
+                User.workspace_id: None,
+                User.department_id: None,
+            },
+            synchronize_session=False,
+        )
+    )
+
+    db.query(Department).filter(Department.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.delete(workspace)
+    db.commit()
 
 
 def validate_invite_code_service(

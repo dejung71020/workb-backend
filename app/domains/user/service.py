@@ -35,6 +35,7 @@ from app.core.security import (
 from app.domains.integration.repository import create_default_integrations
 from app.domains.user.repository import (
     create_user,
+    deactivate_user_account,
     get_user_by_email,
     get_user_by_id,
     update_user_profile,
@@ -42,9 +43,12 @@ from app.domains.user.repository import (
 )
 from app.domains.workspace.models import MemberRole
 from app.domains.workspace.repository import (
+    count_workspace_admins,
     create_workspace,
     create_workspace_membership,
+    delete_workspace_membership,
     get_invite_code_by_code,
+    get_workspace_membership,
     get_workspace_by_id,
     get_workspace_by_invite_code,
     mark_invite_code_used,
@@ -271,6 +275,12 @@ def login_service(db: Session, payload: LoginRequest) -> TokenResponse:
             detail="이메일 또는 비밀번호가 올바르지 않습니다.",
         )
 
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="탈퇴했거나 비활성화된 계정입니다.",
+        )
+
     if not verify_password(payload.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -328,6 +338,11 @@ def refresh_token_service(db: Session, payload: RefreshTokenRequest) -> TokenRes
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="사용자를 찾을 수 없습니다.",
         )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="탈퇴했거나 비활성화된 계정입니다.",
+        )
 
     access_token = create_access_token(
         subject=str(user.id),
@@ -374,7 +389,7 @@ def logout_service(db: Session, payload: LogoutRequest) -> MessageResponse:
 
 def get_my_profile_service(db: Session, current_user_id: int) -> UserProfileResponse:
     user = get_user_by_id(db, current_user_id)
-    if not user:
+    if not user or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="사용자를 찾을 수 없습니다.",
@@ -406,6 +421,44 @@ def update_my_profile_service(
         refresh_token=refresh_token,
         message="프로필이 변경되었습니다.",
     )
+
+
+def withdraw_my_account_service(db: Session, current_user_id: int) -> MessageResponse:
+    """
+    로그인한 사용자의 회원 탈퇴를 처리합니다.
+
+    마지막 워크스페이스 관리자가 단독으로 탈퇴하면 워크스페이스 관리자가 사라지므로
+    워크스페이스 삭제 또는 다른 관리자 지정 후 탈퇴하도록 막습니다.
+    """
+    user = get_user_by_id(db, current_user_id)
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
+    workspace_id = user.workspace_id
+    if workspace_id is not None:
+        membership = get_workspace_membership(db, workspace_id, user.id)
+        is_admin = (
+            (membership is not None and membership.role == MemberRole.admin)
+            or user.role == MemberRole.admin.value
+        )
+        if is_admin and count_workspace_admins(db, workspace_id) <= 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="마지막 관리자는 먼저 워크스페이스를 삭제하거나 다른 관리자를 지정해야 합니다.",
+            )
+        delete_workspace_membership(db, workspace_id, user.id)
+
+    deactivated = deactivate_user_account(db, user.id)
+    if not deactivated:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
+    return MessageResponse(message="회원 탈퇴가 완료되었습니다.")
 
 
 def request_password_reset_service(
