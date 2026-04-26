@@ -43,6 +43,9 @@ from app.domains.workspace.models import MemberRole, WorkspaceMember
 from app.domains.workspace.repository import get_workspace_membership
 from app.domains.integration import service as integration_service
 from app.infra.clients.google import GoogleCalendarClient
+from app.domains.notification.models import NotificationType
+from app.domains.notification import service as notification_service
+from app.utils.time_utils import now_kst
 
 
 def _to_kst_naive(dt: datetime) -> datetime:
@@ -115,6 +118,22 @@ class MeetingCreateService:
                         is_host=(uid == created_by),
                     )
                 )
+
+            # 알림: 참석자 초대
+            try:
+                scheduled_kst = _to_kst_aware(meeting.scheduled_at)  # type: ignore[arg-type]
+                notification_service.emit_meeting_invites(
+                    db,
+                    workspace_id=workspace_id,
+                    meeting_id=int(meeting.id),
+                    meeting_title=str(meeting.title),
+                    scheduled_at_kst=scheduled_kst,
+                    invited_user_ids=ordered_user_ids,
+                    actor_user_id=created_by,
+                )
+            except Exception:
+                # 알림 실패는 회의 생성 자체를 막지 않음
+                pass
 
             if payload.sync_google_calendar:
                 # Workspace 단위 Google OAuth 토큰을 사용해 캘린더 이벤트 생성 후 event_id 저장
@@ -391,6 +410,52 @@ class MeetingUpdateService:
             ),
             message="OK",
         )
+
+
+class MeetingLifecycleService:
+    """회의 진행 상태 전환 (scheduled -> in_progress -> done)."""
+
+    @staticmethod
+    def start_meeting(db: Session, workspace_id: int, meeting_id: int) -> None:
+        meeting = (
+            db.query(Meeting)
+            .filter(Meeting.id == meeting_id, Meeting.workspace_id == workspace_id)
+            .one_or_none()
+        )
+        if meeting is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="회의를 찾을 수 없습니다.",
+            )
+
+        now_naive_kst = now_kst().replace(tzinfo=None)
+        if meeting.status != MeetingStatus.in_progress:
+            meeting.status = MeetingStatus.in_progress
+        if meeting.started_at is None:
+            meeting.started_at = now_naive_kst
+
+        db.commit()
+
+    @staticmethod
+    def end_meeting(db: Session, workspace_id: int, meeting_id: int) -> None:
+        meeting = (
+            db.query(Meeting)
+            .filter(Meeting.id == meeting_id, Meeting.workspace_id == workspace_id)
+            .one_or_none()
+        )
+        if meeting is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="회의를 찾을 수 없습니다.",
+            )
+
+        now_naive_kst = now_kst().replace(tzinfo=None)
+        if meeting.started_at is None:
+            meeting.started_at = now_naive_kst
+        meeting.ended_at = now_naive_kst
+        meeting.status = MeetingStatus.done
+
+        db.commit()
 
 
 class MeetingSearchService:

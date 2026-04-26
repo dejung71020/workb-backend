@@ -27,6 +27,8 @@ from app.domains.user.repository import (
     update_user_department,
     update_user_role,
 )
+from app.domains.notification.models import NotificationType
+from app.domains.notification import service as notification_service
 from app.domains.workspace.repository import (
     create_invite_code,
     create_department,
@@ -396,12 +398,29 @@ def update_workspace_member_role_service(
             detail="해당 워크스페이스 소속 사용자가 아닙니다.",
         )
 
+    prev_role = str(user.role)
     updated_user = update_user_role(db, user_id, role)
     if not updated_user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="사용자를 찾을 수 없습니다.",
         )
+
+    # 알림: 권한 변경 (본인에게)
+    try:
+        if str(updated_user.role) != prev_role:
+            notification_service.create_notification(
+                db,
+                workspace_id=workspace_id,
+                user_id=int(updated_user.id),
+                type_=NotificationType.role_changed,
+                title="권한 변경",
+                body=f"워크스페이스 내 내 역할이 변경되었습니다. ({prev_role} → {updated_user.role})",
+                link="/settings/profile",
+                dedupe_key=f"role_changed:{updated_user.id}:{prev_role}->{updated_user.role}",
+            )
+    except Exception:
+        pass
 
     return WorkspaceMemberRoleUpdateResponse(
         user_id=updated_user.id,
@@ -907,8 +926,29 @@ class DashboardService:
         weekly = WeeklySummaryOut(
             total_count=week_meeting_count,
             total_duration_min=total_minutes,
+            action_items_total=0,
+            action_items_done=0,
             summary_cards=[],
         )
+
+        # 액션 아이템 완료율: 워크스페이스 전체(모든 회의)의 액션 아이템 기준 집계
+        action_total = (
+            db.query(ActionItem.id)
+            .join(Meeting, Meeting.id == ActionItem.meeting_id)
+            .filter(Meeting.workspace_id == workspace_id)
+            .count()
+        )
+        action_done = (
+            db.query(ActionItem.id)
+            .join(Meeting, Meeting.id == ActionItem.meeting_id)
+            .filter(
+                Meeting.workspace_id == workspace_id,
+                ActionItem.status == ActionStatus.done,
+            )
+            .count()
+        )
+        weekly.action_items_total = int(action_total)
+        weekly.action_items_done = int(action_done)
 
         pending_rows = (
             db.query(ActionItem, Meeting.title)

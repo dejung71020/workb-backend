@@ -7,6 +7,7 @@ from app.domains.action.router import router as action_router
 from app.domains.integration.router import router as integration_router
 from app.domains.knowledge.router import router as knowledge_router
 from app.domains.meeting.router import router as meeting_router
+from app.domains.notification.router import router as notification_router
 from app.domains.user.router import router as user_router
 from app.domains.vision.router import router as vision_router
 from app.domains.workspace.router import router as workspace_router
@@ -36,3 +37,6 @@ api_router.include_router(workspace_router, prefix="/workspaces", tags=["Workspa
 
 # 8. API 연동 통합 도메인
 api_router.include_router(integration_router, prefix="/integrations", tags=["Integration"])
+
+# 9. 알림 도메인
+api_router.include_router(notification_router, prefix="/notifications", tags=["Notifications"])
