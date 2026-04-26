@@ -107,3 +107,7 @@ dj/
 .vscode/settings.json
 a.txt
 scripts/slack_test.py
+
+# ------- 저장소 ----------------
+storage/meetings/*/
+!storage/meetings/.gitkeep

@@ -1,4 +1,5 @@
 # app/domains/action/services/slack.py
+import json
 import logging
 from typing import Optional, List
 from sqlalchemy.orm import Session
@@ -7,6 +8,7 @@ from app.core.config import settings
 from app.domains.integration.repository import get_integration
 from app.domains.integration.models import ServiceType
 from app.domains.action import repository
+from app.domains.action.models import ReportFormat
 from app.infra.clients.slack import SlackClient
 
 logger = logging.getLogger(__name__)
@@ -17,6 +19,7 @@ async def export_slack(
         meeting_id: int,
         channel_id: Optional[str] = None,
         include_action_items: bool = True,
+        include_reports: bool = False,
 ) -> None:
     try:
         # 1. Slack 연동
@@ -88,6 +91,38 @@ async def export_slack(
                 thread_ts=ts,
                 action_items=slack_action_items,
             )
+
+        if include_reports:
+            reports = repository.get_reports(db, meeting_id)
+            for report in reports:
+                if report.format == ReportFormat.markdown and report.content:
+                    text = f"*[{report.title}]*\n{report.content[:2000]}"
+                    await slack.send_message(
+                        channel_id=channel_id,
+                        text=text,
+                        thread_ts=ts
+                    )
+
+                elif report.format == ReportFormat.wbs and report.content:
+                    wbs = json.loads(report.content)
+                    lines = [f"*[WBS: {report.title}]*"]
+                    for epic in wbs.get("epics", []):
+                        lines.append(f"\n*{epic['title']}*")
+                        for task in epic.get("tasks", []):
+                            lines.append(f"  • [{task.get('assignee','')}] {task['title']}")
+                    await slack.send_message(
+                        channel_id=channel_id,
+                        text="\n".join(lines)[:3000],
+                        thread_ts=ts
+                    )
+                
+                elif report.format in (ReportFormat.excel, ReportFormat.html):
+                    report_link = f"{settings.FRONTEND_URL}/meetings/{meeting_id}/reports"
+                    await slack.send_message(
+                        channel_id=channel_id,
+                        text=f"*[{report.title}]* 다운로드",
+                        thread_ts=ts,
+                    )
 
         logger.info(f"[Slack Export] 완료 - meeting_id = {meeting_id}, channel={channel_id}")
 
