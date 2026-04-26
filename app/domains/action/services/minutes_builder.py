@@ -3,6 +3,9 @@ from sqlalchemy.orm import Session
 from app.domains.intelligence.models import MeetingMinute, MinuteStatus
 from app.domains.action.mongo_repository import get_meeting_summary
 from app.utils.time_utils import now_kst
+from app.domains.meeting.models import MeetingParticipant, Meeting
+from app.domains.notification.models import NotificationType
+from app.domains.notification import service as notification_service
 
 async def build_and_save_minutes(db: Session, meeting_id: int) -> MeetingMinute:
     # 회의록을 이미 만들었는지 확인
@@ -27,6 +30,31 @@ async def build_and_save_minutes(db: Session, meeting_id: int) -> MeetingMinute:
     db.add(minute)
     db.commit()
     db.refresh(minute)
+
+    # 알림: 회의록 초안 생성 완료 (참석자 전원)
+    try:
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).one_or_none()
+        if meeting is not None:
+            participant_ids = [
+                int(uid)
+                for (uid,) in db.query(MeetingParticipant.user_id)
+                .filter(MeetingParticipant.meeting_id == meeting_id)
+                .all()
+            ]
+            for uid in participant_ids:
+                notification_service.create_notification(
+                    db,
+                    workspace_id=int(meeting.workspace_id),
+                    user_id=uid,
+                    type_=NotificationType.minutes_ready,
+                    title="회의록 생성 완료",
+                    body=f"[{meeting.title}] 회의록 초안이 생성되었습니다. 확인해 보세요.",
+                    link=f"/meetings/{meeting_id}/notes",
+                    dedupe_key=f"minutes_ready:{meeting_id}",
+                )
+    except Exception:
+        pass
+
     return minute
 
 def _format_minutes(summary: dict) -> str:

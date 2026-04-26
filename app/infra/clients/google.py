@@ -207,3 +207,17 @@ class GoogleCalendarClient(BaseClient):
             "PATCH", f"/calendars/{calendar_id}/events/{event_id}",
             json=body,
         )
+
+    async def delete_event(
+            self,
+            event_id: str,
+            calendar_id: str = "primary",
+    ) -> Dict[str, Any]:
+        """
+        Google Calendar 일정 삭제.
+        성공 시 Google API는 보통 빈 응답을 반환합니다.
+        """
+        return await self._request(
+            "DELETE",
+            f"/calendars/{calendar_id}/events/{event_id}",
+        )

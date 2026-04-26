@@ -10,6 +10,7 @@ class CreateMeetingRequest(BaseModel):
     scheduled_at: datetime
     participant_ids: list[int] = Field(default_factory=list)
     sync_google_calendar: bool = False
+    duration_minutes: int = 60
 
 
 class CreateMeetingResponseData(BaseModel):
@@ -29,6 +30,8 @@ class UpdateMeetingRequest(BaseModel):
     meeting_type: str
     scheduled_at: datetime
     participant_ids: list[int] = Field(default_factory=list)
+    sync_google_calendar: bool | None = None
+    duration_minutes: int = 60
 
 class DeleteMeetingResponse(BaseModel):
     success: bool = True

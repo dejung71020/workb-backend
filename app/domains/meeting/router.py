@@ -23,6 +23,7 @@ from app.domains.meeting.service import (
     MeetingDeleteService,
     MeetingDetailService,
     MeetingHistoryService,
+    MeetingLifecycleService,
     MeetingUpdateService,
     SpeakerProfileService,
 )
@@ -35,7 +36,7 @@ router = APIRouter()
     response_model=CreateMeetingResponse,
     status_code=201,
 )
-def create_workspace_meeting(
+async def create_workspace_meeting(
     workspace_id: int,
     body: CreateMeetingRequest,
     db: Session = Depends(get_db),
@@ -48,7 +49,7 @@ def create_workspace_meeting(
     - 생성자는 참석자에 포함되며 is_host=1
     """
     try:
-        return MeetingCreateService.create_meeting(
+        return await MeetingCreateService.create_meeting(
             db, workspace_id, current_user_id, body
         )
     except HTTPException:
@@ -134,7 +135,7 @@ def get_workspace_meeting(
     "/workspaces/{workspace_id}/{meeting_id}",
     response_model=DeleteMeetingResponse,
 )
-def delete_workspace_meeting(
+async def delete_workspace_meeting(
     workspace_id: int,
     meeting_id: int,
     db: Session = Depends(get_db),
@@ -142,7 +143,7 @@ def delete_workspace_meeting(
 ):
     """회의 및 연관 데이터 삭제."""
     try:
-        return MeetingDeleteService.delete_meeting(
+        return await MeetingDeleteService.delete_meeting(
             db=db,
             workspace_id=workspace_id,
             meeting_id=meeting_id,
@@ -161,7 +162,7 @@ def delete_workspace_meeting(
     "/workspaces/{workspace_id}/{meeting_id}",
     response_model=CreateMeetingResponse,
 )
-def patch_workspace_meeting(
+async def patch_workspace_meeting(
     workspace_id: int,
     meeting_id: int,
     body: UpdateMeetingRequest,
@@ -170,7 +171,7 @@ def patch_workspace_meeting(
 ):
     """회의 정보 수정."""
     try:
-        return MeetingUpdateService.update_meeting(
+        return await MeetingUpdateService.update_meeting(
             db=db,
             workspace_id=workspace_id,
             meeting_id=meeting_id,
@@ -184,3 +185,27 @@ def patch_workspace_meeting(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"회의 수정 중 오류가 발생했습니다: {e}",
         )
+
+
+@router.post("/workspaces/{workspace_id}/{meeting_id}/start")
+def start_workspace_meeting(
+    workspace_id: int,
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    _member: int = Depends(require_workspace_member),
+) -> dict:
+    """회의를 진행 중으로 전환합니다."""
+    MeetingLifecycleService.start_meeting(db, workspace_id, meeting_id)
+    return {"status": "ok"}
+
+
+@router.post("/workspaces/{workspace_id}/{meeting_id}/end")
+def end_workspace_meeting(
+    workspace_id: int,
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    _member: int = Depends(require_workspace_member),
+) -> dict:
+    """회의를 완료로 전환합니다."""
+    MeetingLifecycleService.end_meeting(db, workspace_id, meeting_id)
+    return {"status": "ok"}

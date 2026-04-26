@@ -115,7 +115,10 @@ async def google_auth(
     workspace_id: int = Query(..., description="워크스페이스 ID"),
     _admin=Depends(require_workspace_admin),
 ) -> OAuthUrlResponse:
-    return OAuthUrlResponse(auth_url=service.get_google_auth_url(workspace_id))
+    try:
+        return OAuthUrlResponse(auth_url=service.get_google_auth_url(workspace_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/google/callback")

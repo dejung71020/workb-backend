@@ -1,14 +1,17 @@
 # app/core/lifespan.py
 from contextlib import asynccontextmanager
+import contextlib
 
 from fastapi import FastAPI
 from sqlalchemy import text
+import asyncio
 
 from app.core.config import settings
 from app.infra.clients.session_manager import ClientSessionManager
 from app.infra.database.base import Base
 from app.infra.database.session import engine
 from scripts.seed import seed_test_data
+from app.domains.notification.jobs import notification_jobs_loop
 
 # 모든 모델을 import해야 Base가 테이블을 인식함
 from app.domains.user.models import User
@@ -17,6 +20,7 @@ from app.domains.meeting.models import Meeting, MeetingParticipant, SpeakerProfi
 from app.domains.intelligence.models import Decision, MeetingMinute, MinutePhoto, ReviewRequest
 from app.domains.action.models import ActionItem, WbsEpic, WbsTask, Report
 from app.domains.integration.models import Integration
+from app.domains.notification.models import Notification
 
 
 def _reset_mysql_schema() -> None:
@@ -35,6 +39,7 @@ def _reset_mysql_schema() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     should_reset_db = settings.DEBUG and settings.RESET_DB_ON_STARTUP
+    jobs_task: asyncio.Task | None = None
 
     if should_reset_db:
         _reset_mysql_schema()
@@ -49,7 +54,15 @@ async def lifespan(app: FastAPI):
     if should_reset_db:
         seed_test_data()
 
+    if settings.NOTIFICATION_JOBS_ENABLED:
+        jobs_task = asyncio.create_task(notification_jobs_loop())
+
     yield
     
     # [종료 시] 연결 닫기
     await ClientSessionManager.close_client()
+
+    if jobs_task is not None:
+        jobs_task.cancel()
+        with contextlib.suppress(Exception):
+            await jobs_task

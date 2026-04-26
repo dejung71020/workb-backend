@@ -42,6 +42,7 @@ class DashboardMeetingOut(BaseModel):
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     meeting_type: Optional[str] = None
+    google_calendar_event_id: Optional[str] = None
     participants: list[DashboardParticipantOut] = Field(default_factory=list)
 
 
@@ -54,6 +55,8 @@ class DashboardMeetingsBundle(BaseModel):
 class WeeklySummaryOut(BaseModel):
     total_count: int = 0
     total_duration_min: int = 0
+    action_items_total: int = 0
+    action_items_done: int = 0
     summary_cards: list[Any] = Field(default_factory=list)
 
 

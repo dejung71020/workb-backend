@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.utils.time_utils import KST
 from app.core.email import send_workspace_invite_email
 from app.domains.action.models import ActionItem, ActionStatus, Report, WbsEpic, WbsTask
 from app.domains.integration.models import Integration
@@ -26,6 +27,8 @@ from app.domains.user.repository import (
     update_user_department,
     update_user_role,
 )
+from app.domains.notification.models import NotificationType
+from app.domains.notification import service as notification_service
 from app.domains.workspace.repository import (
     create_invite_code,
     create_department,
@@ -395,12 +398,29 @@ def update_workspace_member_role_service(
             detail="해당 워크스페이스 소속 사용자가 아닙니다.",
         )
 
+    prev_role = str(user.role)
     updated_user = update_user_role(db, user_id, role)
     if not updated_user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="사용자를 찾을 수 없습니다.",
         )
+
+    # 알림: 권한 변경 (본인에게)
+    try:
+        if str(updated_user.role) != prev_role:
+            notification_service.create_notification(
+                db,
+                workspace_id=workspace_id,
+                user_id=int(updated_user.id),
+                type_=NotificationType.role_changed,
+                title="권한 변경",
+                body=f"워크스페이스 내 내 역할이 변경되었습니다. ({prev_role} → {updated_user.role})",
+                link="/settings/profile",
+                dedupe_key=f"role_changed:{updated_user.id}:{prev_role}->{updated_user.role}",
+            )
+    except Exception:
+        pass
 
     return WorkspaceMemberRoleUpdateResponse(
         user_id=updated_user.id,
@@ -768,8 +788,10 @@ def _dashboard_meeting_status_value(m: Meeting) -> str:
 
 
 def _dashboard_week_start_local(d: date) -> datetime:
-    monday = d - timedelta(days=d.weekday())
-    return datetime.combine(monday, datetime.min.time())
+    # 주 시작: 일요일 00:00 (로컬 naive datetime)
+    # date.weekday(): Monday=0 ... Sunday=6
+    sunday = d - timedelta(days=(d.weekday() + 1) % 7)
+    return datetime.combine(sunday, datetime.min.time())
 
 
 class DashboardService:
@@ -801,23 +823,57 @@ class DashboardService:
                     DashboardParticipantOut(user_id=int(u.id), name=str(u.name))
                 )
 
+        def to_kst_aware(dt: datetime | None) -> datetime | None:
+            if dt is None:
+                return None
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=KST)
+            return dt.astimezone(KST)
+
         def to_out(m: Meeting) -> DashboardMeetingOut:
             return DashboardMeetingOut(
                 id=int(m.id),
                 title=str(m.title),
                 status=_dashboard_meeting_status_value(m),
-                scheduled_at=m.scheduled_at,
-                started_at=m.started_at,
-                ended_at=m.ended_at,
+                scheduled_at=to_kst_aware(m.scheduled_at),
+                started_at=to_kst_aware(m.started_at),
+                ended_at=to_kst_aware(m.ended_at),
                 meeting_type=m.meeting_type,
+                google_calendar_event_id=m.google_calendar_event_id,
                 participants=parts_by_mid.get(int(m.id), []),
             )
+
+        today = date.today()
+        # "이번주" 기준: 로컬 기준 일요일 00:00 ~ 토요일 23:59:59 (inclusive)
+        week_start_naive = _dashboard_week_start_local(today)
+        week_end_naive = week_start_naive + timedelta(days=6, hours=23, minutes=59, seconds=59)
+
+        def in_this_week(dt: datetime | None) -> bool:
+            if dt is None:
+                return False
+            dt_cmp = dt.replace(tzinfo=None) if dt.tzinfo else dt
+            return week_start_naive <= dt_cmp <= week_end_naive
+
+        def meeting_in_this_week(m: Meeting, status_str: str) -> bool:
+            """
+            대시보드에는 "이번주에 해당하는 회의만" 노출한다.
+            상태별로 기준 시간이 다르므로 기존 집계 로직과 동일한 규칙을 사용한다.
+            """
+            if status_str == MeetingStatus.scheduled.value:
+                return in_this_week(m.scheduled_at)
+            if status_str == MeetingStatus.in_progress.value:
+                return in_this_week(m.started_at or m.scheduled_at)
+            if status_str == MeetingStatus.done.value:
+                return in_this_week(m.ended_at or m.started_at or m.scheduled_at)
+            return False
 
         in_progress: list[DashboardMeetingOut] = []
         scheduled: list[DashboardMeetingOut] = []
         done: list[DashboardMeetingOut] = []
         for m in meetings:
             st = _dashboard_meeting_status_value(m)
+            if not meeting_in_this_week(m, st):
+                continue
             if st == MeetingStatus.in_progress.value:
                 in_progress.append(to_out(m))
             elif st == MeetingStatus.scheduled.value:
@@ -836,17 +892,6 @@ class DashboardService:
             key=lambda x: x.ended_at or x.started_at or _min,
             reverse=True,
         )
-
-        today = date.today()
-        # "이번주" 기준: 로컬 기준 월요일 00:00 ~ 다음주 월요일 00:00 (exclusive)
-        week_start_naive = _dashboard_week_start_local(today)
-        week_end_naive = week_start_naive + timedelta(days=7)
-
-        def in_this_week(dt: datetime | None) -> bool:
-            if dt is None:
-                return False
-            dt_cmp = dt.replace(tzinfo=None) if dt.tzinfo else dt
-            return week_start_naive <= dt_cmp < week_end_naive
 
         # NOTE: 메인(Home) "회의 수"는 이번주 scheduled + in_progress + done을 모두 합산합니다.
         week_meeting_count = 0
@@ -870,7 +915,7 @@ class DashboardService:
                     continue
                 ended = m.ended_at
                 ended_cmp = ended.replace(tzinfo=None) if ended.tzinfo else ended
-                if ended_cmp < week_start_naive or ended_cmp >= week_end_naive:
+                if ended_cmp < week_start_naive or ended_cmp > week_end_naive:
                     continue
                 if m.started_at:
                     start = m.started_at
@@ -881,8 +926,29 @@ class DashboardService:
         weekly = WeeklySummaryOut(
             total_count=week_meeting_count,
             total_duration_min=total_minutes,
+            action_items_total=0,
+            action_items_done=0,
             summary_cards=[],
         )
+
+        # 액션 아이템 완료율: 워크스페이스 전체(모든 회의)의 액션 아이템 기준 집계
+        action_total = (
+            db.query(ActionItem.id)
+            .join(Meeting, Meeting.id == ActionItem.meeting_id)
+            .filter(Meeting.workspace_id == workspace_id)
+            .count()
+        )
+        action_done = (
+            db.query(ActionItem.id)
+            .join(Meeting, Meeting.id == ActionItem.meeting_id)
+            .filter(
+                Meeting.workspace_id == workspace_id,
+                ActionItem.status == ActionStatus.done,
+            )
+            .count()
+        )
+        weekly.action_items_total = int(action_total)
+        weekly.action_items_done = int(action_done)
 
         pending_rows = (
             db.query(ActionItem, Meeting.title)
