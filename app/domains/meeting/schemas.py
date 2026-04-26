@@ -1,7 +1,7 @@
 # app\domains\meeting\schemas.py
 from pydantic import BaseModel, Field
 from datetime import date, datetime
-from typing import Optional
+from typing import Literal, Optional
 
 
 class CreateMeetingRequest(BaseModel):
@@ -112,3 +112,30 @@ class MeetingHistoryResponse(BaseModel):
     total: int
     page: int
     meetings: list[MeetingHistoryItemOut] = Field(default_factory=list)
+
+
+# ── Speaker profiles (GET/POST /api/v1/meetings/workspaces/{id}/speaker-profiles) ─
+
+
+class SpeakerProfileItem(BaseModel):
+    user_id: int
+    name: str
+    email: str
+    role: str
+    is_verified: bool
+    diarization_method: Literal["stereo", "diarization"] | None = None
+    updated_at: Optional[datetime] = None
+
+
+class SpeakerProfileListResponse(BaseModel):
+    profiles: list[SpeakerProfileItem] = Field(default_factory=list)
+
+
+class SpeakerProfileRegisterRequest(BaseModel):
+    user_id: int | None = None
+    diarization_method: Literal["stereo", "diarization"] = "diarization"
+
+
+class SpeakerProfileRegisterResponse(BaseModel):
+    profile: SpeakerProfileItem
+    message: str

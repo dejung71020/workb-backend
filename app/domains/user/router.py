@@ -35,17 +35,23 @@ from app.domains.user.schemas import (
     PasswordResetRequest,
     RefreshTokenRequest,
     TokenResponse,
+    UserProfileResponse,
+    UserProfileUpdateRequest,
+    UserProfileUpdateResponse,
     UserResponse,
 )
 from app.domains.user.service import (
     change_password_service,
     confirm_password_reset_service,
+    get_my_profile_service,
     login_service,
     logout_service,
     request_password_reset_service,
     refresh_token_service,
     signup_admin_service,
     signup_member_service,
+    update_my_profile_service,
+    withdraw_my_account_service,
 )
 
 
@@ -149,6 +155,52 @@ async def logout(
     로그아웃을 처리하는 API 엔드포인트입니다.
     """
     return logout_service(db, payload)
+
+
+@router.get(
+    "/me",
+    response_model=UserProfileResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_my_profile(
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+) -> UserProfileResponse:
+    """
+    로그인한 사용자의 마이페이지 프로필 정보를 조회합니다.
+    """
+    return get_my_profile_service(db, current_user_id)
+
+
+@router.patch(
+    "/me",
+    response_model=UserProfileUpdateResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def update_my_profile(
+    payload: UserProfileUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+) -> UserProfileUpdateResponse:
+    """
+    로그인한 사용자의 이름을 수정하고 갱신된 토큰을 발급합니다.
+    """
+    return update_my_profile_service(db, current_user_id, payload)
+
+
+@router.delete(
+    "/me",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def withdraw_my_account(
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+) -> MessageResponse:
+    """
+    로그인한 사용자의 회원 탈퇴를 처리합니다.
+    """
+    return withdraw_my_account_service(db, current_user_id)
 
 
 @router.post(
