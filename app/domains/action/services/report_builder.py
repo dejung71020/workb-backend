@@ -105,12 +105,14 @@ _HTML_CSS = """
 """
 
 def _build_html(meeting_title: str, summary: dict, minutes_content: str) -> str:
+    # summary 에서 각 데이터 꺼내기
     overview  = summary.get("overview", {})
     attendees = summary.get("attendees", [])
     decisions = summary.get("decisions", [])
     actions   = summary.get("action_items", [])
     pending   = summary.get("pending_items", [])
 
+    # 우선순위/ 긴급도를 색깔 뱃지 HTML로 변환
     def badge(value: str, kind: str = "priority") -> str:
         v = (value or "").lower()
         css = f"badge-{v}" if v in ("high", "normal", "medium", "low", "urgent") else "badge-normal"
@@ -135,32 +137,32 @@ def _build_html(meeting_title: str, summary: dict, minutes_content: str) -> str:
     ) or "<li>없음</li>"
 
     return f"""<!DOCTYPE html>
-<html lang="ko">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{meeting_title} 회의록</title>{_HTML_CSS}</head>
-<body>
-<div class="container">
-  <div class="header">
-    <h1>{meeting_title}</h1>
-    <div class="meta">
-      <span>📅 {overview.get('datetime_str', '')}</span>
-      <span>👥 {', '.join(attendees)}</span>
-      <span>🎯 {overview.get('purpose', '')}</span>
-    </div>
-  </div>
+            <html lang="ko">
+            <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+            <title>{meeting_title} 회의록</title>{_HTML_CSS}</head>
+            <body>
+            <div class="container">
+            <div class="header">
+                <h1>{meeting_title}</h1>
+                <div class="meta">
+                <span>📅 {overview.get('datetime_str', '')}</span>
+                <span>👥 {', '.join(attendees)}</span>
+                <span>🎯 {overview.get('purpose', '')}</span>
+                </div>
+            </div>
 
-  <div class="section">
-    <div class="section-title">회의 내용</div>
-    <pre style="white-space:pre-wrap;font-family:inherit;font-size:14px;line-height:1.8">{minutes_content}</pre>
-  </div>
+            <div class="section">
+                <div class="section-title">회의 내용</div>
+                <pre style="white-space:pre-wrap;font-family:inherit;font-size:14px;line-height:1.8">{minutes_content}</pre>
+            </div>
 
-  {'<div class="section"><div class="section-title">결정사항</div><table><thead><tr><th>결정</th><th>근거</th><th>반대의견</th></tr></thead><tbody>' + decisions_rows + '</tbody></table></div>' if decisions else ''}
+            {'<div class="section"><div class="section-title">결정사항</div><table><thead><tr><th>결정</th><th>근거</th><th>반대의견</th></tr></thead><tbody>' + decisions_rows + '</tbody></table></div>' if decisions else ''}
 
-  {'<div class="section"><div class="section-title">액션 아이템</div><table><thead><tr><th>담당자</th><th>내용</th><th>마감</th><th>우선순위</th><th>긴급도</th></tr></thead><tbody>' + action_rows + '</tbody></table></div>' if actions else ''}
+            {'<div class="section"><div class="section-title">액션 아이템</div><table><thead><tr><th>담당자</th><th>내용</th><th>마감</th><th>우선순위</th><th>긴급도</th></tr></thead><tbody>' + action_rows + '</tbody></table></div>' if actions else ''}
 
-  {'<div class="section"><div class="section-title">미결사항</div><ul>' + pending_items + '</ul></div>' if pending else ''}
-</div>
-</body></html>"""
+            {'<div class="section"><div class="section-title">미결사항</div><ul>' + pending_items + '</ul></div>' if pending else ''}
+            </div>
+            </body></html>"""
 
 # ── 생성 함수 ─────────────────────────────────────────────────────────────────
 def generate_markdown(db: Session, meeting_id: int, user_id: int):
