@@ -62,3 +62,27 @@ class GoogleCalendarEventItem(BaseModel):
 
 class GoogleCalendarEventsResponse(BaseModel):
     events: List[GoogleCalendarEventItem]
+
+
+class GoogleCalendarItem(BaseModel):
+    id: str
+    summary: str
+    primary: bool = False
+    access_role: Optional[str] = None
+
+
+class GoogleCalendarListResponse(BaseModel):
+    calendars: List[GoogleCalendarItem]
+
+
+class GoogleCalendarCreateRequest(BaseModel):
+    name: str
+
+
+class GoogleCalendarCreateResponse(BaseModel):
+    calendar_id: str
+    summary: str
+
+
+class GoogleCalendarSelectRequest(BaseModel):
+    calendar_id: str

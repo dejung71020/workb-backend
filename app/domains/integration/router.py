@@ -21,6 +21,11 @@ from app.domains.integration.schemas import (
     TestIntegrationResponse,
     GoogleCalendarEventsResponse,
     GoogleCalendarEventItem,
+    GoogleCalendarListResponse,
+    GoogleCalendarItem,
+    GoogleCalendarCreateRequest,
+    GoogleCalendarCreateResponse,
+    GoogleCalendarSelectRequest,
 )
 from app.domains.user.dependencies import require_workspace_admin, require_workspace_member
 
@@ -219,6 +224,58 @@ async def list_google_calendar_events(
         return GoogleCalendarEventsResponse(
             events=[GoogleCalendarEventItem(**e) for e in events]
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/google/calendars", response_model=GoogleCalendarListResponse)
+async def list_google_calendars(
+    workspace_id: int = Query(..., description="워크스페이스 ID"),
+    db: Session = Depends(get_db),
+    _admin=Depends(require_workspace_admin),
+):
+    """
+    Google OAuth 완료 후, 캘린더 선택 UI를 위해 캘린더 목록을 조회한다.
+    (calendar.calendarList.list)
+    """
+    try:
+        calendars = await service.list_google_calendars(db, workspace_id)
+        return GoogleCalendarListResponse(calendars=[GoogleCalendarItem(**c) for c in calendars])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/google/calendars", response_model=GoogleCalendarCreateResponse, status_code=status.HTTP_201_CREATED)
+async def create_google_calendar(
+    workspace_id: int = Query(..., description="워크스페이스 ID"),
+    body: GoogleCalendarCreateRequest = Body(...),
+    db: Session = Depends(get_db),
+    _admin=Depends(require_workspace_admin),
+):
+    """
+    새 서브 캘린더를 생성하고(calendar.calendars.insert) calendar_id를 반환한다.
+    """
+    try:
+        created = await service.create_google_calendar(db, workspace_id, body.name)
+        return GoogleCalendarCreateResponse(**created)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/google/calendars/select", response_model=IntegrationResponse, status_code=status.HTTP_200_OK)
+async def select_google_calendar(
+    workspace_id: int = Query(..., description="워크스페이스 ID"),
+    body: GoogleCalendarSelectRequest = Body(...),
+    db: Session = Depends(get_db),
+    _admin=Depends(require_workspace_admin),
+):
+    """
+    사용자가 최종 선택한 calendar_id를 workspace에 저장한다.
+    integrations.extra_config = {"calendar_id": "..."}
+    """
+    try:
+        item = service.save_workspace_google_calendar_id(db, workspace_id, body.calendar_id)
+        return _to_response(item)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

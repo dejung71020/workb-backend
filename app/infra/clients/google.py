@@ -27,7 +27,7 @@ class GoogleCalendarClient(BaseClient):
             end_datetime: str,
             attendees: Optional[List[str]] = None,
             description: str = "",
-            calendar_id: str = "primary",
+            calendar_id: str = "",
     ) -> Dict[str, Any]:
         """
         Google Calendar 일정 생성.
@@ -40,6 +40,8 @@ class GoogleCalendarClient(BaseClient):
             description: 일정 설명 (선택)
             calendar_id: 캘린더 ID, 데이터베이스 기본키
         """
+        if not calendar_id:
+            raise ValueError("calendar_id가 필요합니다.")
         body: Dict[str, Any] = {
             "summary": title,
             "description": description,
@@ -64,7 +66,7 @@ class GoogleCalendarClient(BaseClient):
 
     async def list_events(
             self,
-            calendar_id: str = "primary",
+            calendar_id: str = "",
             time_min: Optional[str] = None,
             max_results: int = 10,
     ) -> Dict[str, Any]:
@@ -77,6 +79,8 @@ class GoogleCalendarClient(BaseClient):
             time_min: 조회 시작 시각 ISO 8601 2025-04-16T10:10:10
             max_results: 최대 반환 건수
         """
+        if not calendar_id:
+            raise ValueError("calendar_id가 필요합니다.")
         params: Dict[str, Any] = {
             "maxResults": max_results,
             "singleEvents": True,
@@ -90,6 +94,23 @@ class GoogleCalendarClient(BaseClient):
             f"/calendars/{calendar_id}/events",
             params=params
         )
+
+    async def list_calendars(self, min_access_role: str = "reader") -> Dict[str, Any]:
+        """
+        캘린더 목록 조회 (calendar.calendarList.list)
+        """
+        params: Dict[str, Any] = {
+            "minAccessRole": min_access_role,
+            "maxResults": 250,
+        }
+        return await self._request("GET", "/users/me/calendarList", params=params)
+
+    async def create_calendar(self, summary: str, time_zone: str = "Asia/Seoul") -> Dict[str, Any]:
+        """
+        새 캘린더 생성 (calendar.calendars.insert)
+        """
+        body: Dict[str, Any] = {"summary": summary, "timeZone": time_zone}
+        return await self._request("POST", "/calendars", json=body)
 
     async def get_free_slots (
             self,
@@ -137,12 +158,14 @@ class GoogleCalendarClient(BaseClient):
             self,
             event_id: str,
             description: str,
-            calendar_id: str = "primary",
+            calendar_id: str = "",
     ) -> Dict[str, Any]:
         """
         기존 이벤트의 description 만 PATCH 하여
         일정의 설명만 바꾸는 함수.
         """
+        if not calendar_id:
+            raise ValueError("calendar_id가 필요합니다.")
         return await self._request(
             "PATCH", f"/calendars/{calendar_id}/events/{event_id}",
             json={
@@ -158,7 +181,7 @@ class GoogleCalendarClient(BaseClient):
             end_datetime: str | None = None,
             attendees: list[str] | None = None,
             description: str | None = None,
-            calendar_id: str = 'primary',
+            calendar_id: str = "",
     ) -> dict:
         '''
         받은 인수로 캘린더 업데이트
@@ -203,6 +226,8 @@ class GoogleCalendarClient(BaseClient):
         if attendees is not None:
             body['attendees'] = [{"email": email} for email in attendees]
 
+        if not calendar_id:
+            raise ValueError("calendar_id가 필요합니다.")
         return await self._request(
             "PATCH", f"/calendars/{calendar_id}/events/{event_id}",
             json=body,
@@ -211,12 +236,14 @@ class GoogleCalendarClient(BaseClient):
     async def delete_event(
             self,
             event_id: str,
-            calendar_id: str = "primary",
+            calendar_id: str = "",
     ) -> Dict[str, Any]:
         """
         Google Calendar 일정 삭제.
         성공 시 Google API는 보통 빈 응답을 반환합니다.
         """
+        if not calendar_id:
+            raise ValueError("calendar_id가 필요합니다.")
         return await self._request(
             "DELETE",
             f"/calendars/{calendar_id}/events/{event_id}",
