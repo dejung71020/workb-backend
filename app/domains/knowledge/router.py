@@ -1,7 +1,7 @@
 # app\domains\knowledge\router.py
 import uuid
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
-from datetime import date, datetime
+from datetime import date
 from typing import Optional
 
 from fastapi import (
@@ -26,11 +26,14 @@ from app.domains.knowledge.schemas import (
     ChatbotSummaryRequest,
     ChatbotSummaryResponse,
     DocumentUploadResponse,
+    PastMeetingsResponse,
+    PastMeetingItem,
 )
 from app.domains.meeting.schemas import MeetingSearchParams, MeetingSearchResponse
 from app.domains.meeting.service import MeetingSearchService
 from app.domains.knowledge import repository
 from app.utils.redis_utils import get_meeting_context
+from app.utils.time_utils import now_kst
 from app.domains.knowledge.agent_utils import summary_node
 from app.domains.knowledge.service import ingest_document
 
@@ -81,6 +84,7 @@ async def chatbot_message(workspace_id: int, req: ChatbotMessageRequest, session
         "meeting_id": meeting_id,
         "workspace_id": workspace_id,
         "user_question": req.message,
+        "past_meeting_ids": req.past_meeting_ids,
         "function_type": "",
         "chat_response": ""
     }
@@ -97,7 +101,7 @@ async def chatbot_message(workspace_id: int, req: ChatbotMessageRequest, session
         function_type=result["function_type"],
         answer=result["chat_response"],
         result={},
-        timestamp=datetime.now()
+        timestamp=now_kst()
     )
 
 @router.get("/workspace/{workspace_id}/chatbot/history", response_model=ChatbotHistoryResponse)
@@ -119,6 +123,7 @@ async def chatbot_summary(workspace_id: int, req: ChatbotSummaryRequest):
     state = {
         "meeting_id": req.meeting_id,
         "workspace_id": workspace_id,
+        "past_meeting_ids": req.past_meeting_ids,
         "user_question": "",
         "function_type": "",
         "chat_response": ""
@@ -128,7 +133,15 @@ async def chatbot_summary(workspace_id: int, req: ChatbotSummaryRequest):
 
     return ChatbotSummaryResponse(
         summary=result["summary"],
-        generated_at=datetime.now()
+        generated_at=now_kst()
+    )
+
+@router.get("/workspace/{workspace_id}/past_meetings", response_model=PastMeetingsResponse)
+async def get_past_meetings(workspace_id: int):
+    meetings = await repository.get_past_meetings(workspace_id)
+    return PastMeetingsResponse(
+        meetings=[PastMeetingItem(**m) for m in meetings],
+        total=len(meetings),
     )
 
 @router.post("/workspaces/{workspace_id}/documents", response_model=DocumentUploadResponse)
@@ -164,5 +177,5 @@ async def upload_document(
         doc_id=result["doc_id"],
         chunks=result["chunks"],
         title=result["title"],
-        uploaded_at=datetime.now()
+        uploaded_at=now_kst()
     )

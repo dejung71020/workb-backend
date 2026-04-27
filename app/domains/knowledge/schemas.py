@@ -6,6 +6,7 @@ from typing import Optional, Literal
 class ChatbotMessageRequest(BaseModel):
     message: str
     meeting_id: Optional[int] = None # 회의 중일 때만 전달 - 없으면 이전 회의 검색만
+    past_meeting_ids: Optional[list[int]] = None  # None = 전체, [1,2] = 선택된 회의만
 
 class ChatbotMessageResponse(BaseModel):
     session_id: str
@@ -25,7 +26,8 @@ class ChatbotHistoryResponse(BaseModel):
 
 class ChatbotSummaryRequest(BaseModel):
     meeting_id: Optional[int] = None
-
+    past_meeting_ids: Optional[list[int]] = None
+    
 # ── 요약 구조화 스키마 (신규) ─────────────────────────────────────────────
 class MeetingOverview(BaseModel):
     """회의 기본 정보. STT 발화에서 목적/일시를 추출하지 못하면 None."""
@@ -114,3 +116,12 @@ class DocumentUploadResponse(BaseModel):
 class ChatbotSummaryResponse(BaseModel):
     summary: SummaryResponse
     generated_at: datetime
+
+class PastMeetingItem(BaseModel):
+    meeting_id: int
+    title: str
+    created_at: datetime
+
+class PastMeetingsResponse(BaseModel):
+    meetings: list[PastMeetingItem]
+    total: int

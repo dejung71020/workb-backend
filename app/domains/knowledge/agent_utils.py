@@ -1,5 +1,6 @@
 import json
 import re
+from typing import Optional
 from langchain.tools import tool
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_openai import ChatOpenAI
@@ -12,6 +13,7 @@ import redis
 from app.core.config import settings
 from app.core.graph.state import SharedState
 from app.utils.redis_utils import get_meeting_context, is_meeting_live
+from app.utils.time_utils import now_kst
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 
 # --- 클라이언트 초기화 ---
@@ -42,16 +44,31 @@ llm = ChatOpenAI(
 # @tool 데코레이터가 함수 시그니처와 docstring을 LLM용 tool_schema로 변환함.
 
 @tool
-async def search_past_meetings(query: str) -> list:
-    """이전 회의 내용에서 관련 정보를 검색한다."""
+async def search_past_meetings(query: str, meeting_ids: Optional[list[str]] = None) -> list:
+    """
+    이전 회의 내용에서 관련 정보를 검색한다.
+    meeting_ids: 검색 대상 회의 ID 목록. None 또는 빈 배열이면 전체 회의 검색.
+    """
     try:
-        # $meta 연산자를 사용하여 텍스트 검색 결과를 점수 순으로 정렬
+        # meeting_ids가 있으면 해당 회의만 검색
+        base_filter = {}
+        if meeting_ids:
+            base_filter["meeting_id"] = {"$in": meeting_ids}
+
+        # $text 검색 시도 $meta 연산자를 사용하여 텍스트 검색 결과를 점수 순으로 정렬
         cursor = mongo_db["meeting_contexts"].find(
-            {"$text": {"$search": query}},
+            {**base_filter, "$text": {"$search": query}},
             {"score": {"$meta": "textScore"}}, # 점수를 'score' 필드에 저장
         ).sort([("score", {"$meta": "textScore"})]).limit(5) # 점수 순으로 정렬
-
         docs = await cursor.to_list(length=5)
+
+        # $text 매칭 없으면 base_filter 범위 내에서 최신순 fallback
+        if not docs:
+            cursor = mongo_db["meeting_contexts"].find(
+                base_filter, {"_id": 0}
+            ).sort("created_at", -1).limit(5)
+            docs = await cursor.to_list(length=5)
+
         return [
             {
                 "source": "past_meetings",
@@ -206,6 +223,18 @@ async def knowledge_node(state: SharedState) -> dict:
     is_live = await is_meeting_live(meeting_id) if meeting_id else False
     meeting_context = await get_meeting_context(meeting_id) if meeting_id else ""
     workspace_id = state.get("workspace_id", "")
+    past_meeting_ids = state.get("past_meeting_ids")
+
+    if past_meeting_ids:
+        ids_str = ", ".join(f'"{i}"' for i in past_meeting_ids)
+        meeting_filter_hint = (
+            f"\n선택된 이전 회의 ID: [{ids_str}]."
+            f"search_past_meetings 호출 시 meeting_ids 인자로 반드시 전달하세요."
+        )
+    else:
+        meeting_filter_hint = (
+            "\nsearch_past_meetings 호출 시 meeting_ids는 null로 전달하세요. (전체 검색)"
+        )
 
     system_prompt = f"""
     당신은 회의 AI 어시스턴트입니다.
@@ -221,10 +250,6 @@ async def knowledge_node(state: SharedState) -> dict:
     - 외부 자료가 필요하면 web_search를 사용하세요.
     - 이전 회의 내용이 필요하면 search_past_meetings를 사용하세요.
     - 회사 내부 문서가 필요하면 search_internal_db를 사용하세요. workspace_id는 반드시 "{workspace_id}"로 전달하세요.
-    - 일정 등록 요청이면 register_calendar를 사용하세요.
-    - 일정 수정 요청이면 update_calendar_event를 사용하세요.
-    - 일정 삭제 요청이면 delete_calendar_event를 사용하세요.
-    - 특정 날짜나 일정에 대해 물어보면 get_calendar_events를 사용하세요.
 
     최종 답변은 반드시 아래 JSON 형식으로만 출력하세요.
     {{
@@ -239,6 +264,8 @@ async def knowledge_node(state: SharedState) -> dict:
     - medium: 발화에 간접적으로 언급됨
     - Low: 발화에 근거 없거나 추측
     citations: 도구 사용 결과나 외부 정보면 []. 회의 내용 기반이면 반드시 원문 발췌.
+
+    {meeting_filter_hint}
     """
 
     result = await react_agent.ainvoke({
@@ -322,6 +349,7 @@ async def summary_node(state: SharedState) -> dict:
     """
     meeting_id = state.get("meeting_id")
     is_live = await is_meeting_live(meeting_id) if meeting_id else False
+    past_meeting_ids = state.get("past_meeting_ids")
 
     # 1단계: 컨텍스트 로드
     # partial_summary가 있으면 이미 요약된 앞부분은 재처리하지 않고 재사용.
@@ -339,8 +367,11 @@ async def summary_node(state: SharedState) -> dict:
             context = await get_meeting_context(meeting_id)
 
     # 2단계: 이전 회의 데이터 조회
-    # 발화 앞부분 200자를 쿼리로 사용해 관련 이전 회의를 검색
-    past_meetings = await search_past_meetings.ainvoke({"query": context[:200]})
+    # past_meeting_ids 있으면 선택된 회의만, 없으면 전체 검색
+    past_meetings = await search_past_meetings.ainvoke({
+        "query": context[:200],
+        "meeting_ids": past_meeting_ids if past_meeting_ids else None,
+    })
     past_context = "\n".join(
         m.get("snippet", "") for m in past_meetings if m.get("snippet")
     )
@@ -481,20 +512,157 @@ async def summary_node(state: SharedState) -> dict:
         "function_type": "summary"
     }
 
+async def _get_meetings_by_question(question: str, workspace_id: int) -> tuple[list[dict], bool]:
+    """user_question에서 날짜 범위 추출해서 MongoDB 필터링.
+    반환: (meetings, has_date_range) — has_date_range=True면 날짜 조건으로 필터링된 결과.
+    """
+    from app.domains.knowledge.repository import get_all_past_meetings_by_workspace
+    all_meetings = await get_all_past_meetings_by_workspace(workspace_id)
+
+    date_prompt = f"""
+    아래 질문에서 날짜 범위를 추출하세요. JSON으로만 답하세요.
+    없으면 {{"start": null, "end": null}}
+
+    질문: {question}
+    현재 날짜: {now_kst().strftime("%Y-%m-%d")}
+
+    {{"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}}
+    """
+    result = await llm.ainvoke(date_prompt)
+    try:
+        dates = json.loads(re.search(r"\{.*\}", result.content, re.DOTALL).group())
+        start = now_kst().fromisoformat(dates["start"]) if dates.get("start") else None
+        end = now_kst().fromisoformat(dates["end"]) if dates.get("end") else None
+    except Exception:
+        start, end = None, None
+
+    if start or end:
+        filtered = [
+            m for m in all_meetings
+            if (not start or m.get("created_at", now_kst().min) >= start)
+            and (not end or m.get("created_at", now_kst().max) <= end)
+        ]
+        return filtered, True
+
+    return all_meetings, False
+
+async def past_summary_node(state: SharedState) -> dict:
+    """
+    선택된 이전 회의들을 하나의 구조화된 요약으로 합치는 노드.
+
+    흐름:
+        1. past_meeting_id로 MongoDB에서 회의 데이터 조회
+        2. 여러 회의 텍스트를 LLM으로 통합 구조화
+        3. _format_sammary_markdown으로 마크다운 변환
+    """
+    from app.domains.knowledge.repository import get_past_meetings_by_ids
+
+    past_meeting_ids = state.get("past_meeting_ids")
+    workspace_id = state.get("workspace_id")
+
+    if not past_meeting_ids:
+        # 날짜 범위가 있는 경우만 자동 검색
+        meetings, has_date_range = await _get_meetings_by_question(state.get("user_question", ""), workspace_id)
+
+        # 날짜 범위도 없이 전체가 나오는 건 의도한 동작이 아님
+        if not has_date_range:
+            return {
+                "chat_response": "어떤 회의를 요약할지 선택해주세요.",
+                "function_type": "past_summary",
+            }
+    else:
+        # UI에서 선택된 회의만
+        meetings = await get_past_meetings_by_ids(past_meeting_ids)
+
+    if not meetings:
+        return {
+            "chat_response": "이전 회의 데이터가 없습니다.",
+            "function_type": "past_summary",
+        }
+
+    # 회의 메타 정보를 미리 구성해서 프롬프트에 직접 주입
+    meetings_meta = [
+        {
+            "meeting_id": m["meeting_id"],
+            "title": m.get("title", ""),
+            "date": (
+                m.get("created_at").strftime("%Y-%m-%d")
+                if hasattr(m.get("created_at"), "strftime")
+                else str(m.get("created_at", ""))[:10]
+            ),
+        }
+        for m in meetings
+    ]
+    meetings_meta_str = json.dumps(meetings_meta, ensure_ascii=False)
+    dates_str = ", ".join(m["date"] for m in meetings_meta)
+
+    # 회의별 텍스트 블록 구성
+    meetings_text = "\n\n".join([
+        f"[회의 {m["meeting_id"]}] {m.get("title", "")}\n{m.get('summary', '')}" 
+        for m in meetings
+    ])
+
+    prompt = f"""
+    다음은 {len(meetings)}개 이전 회의의 요약이다.
+    모든 회의 내용을 통합하여 구조화된 JSON으로 정리하세요.
+
+    {meetings_text}
+
+    ㅡmeetings 필드는 반드시 아래 값을 그대로 사용하세요. (수정 금지):
+    {meetings_meta_str}
+
+    반드시 아래 JSON 형식으로만 답변하세요. 내용이 없는 섹션은 [] 또는 null.
+
+    {{
+        "meetings": {meetings_meta_str},
+        "overview": {{"purpose": "이전 회의 종합 요약", "datetime_str": "{dates_str}"}},
+        "discussion_items": [{{"topic": "...", "content": "..."}}],
+        "decisions": [{{"decision": "...", "citiation": null}}],                                                     
+        "action_items": [{{"assignee": "...", "content": "...", "deadline": "...", "priority": "high|normal", "urgency": "urgent|normal|low", "citiation": null}}],                                                                
+        "pending_items": [{{"content": "...", "carried_over": false, "first_mentioned_meeting": null}}],           
+        "next_meeting": null,                                                                                        
+        "previous_followups": []
+    }}
+    """
+
+    result = await llm.ainvoke(prompt)
+    content = result.content
+    
+    json_match = re.search(r"\{.*\}", content, re.DOTALL)
+    try:
+        summary_dict = json.loads(json_match.group()) if json_match else {}
+    except json.JSONDecodeError:
+        summary_dict = {}
+
+    formatted = _format_summary_markdown(summary_dict)
+    return {
+        "chat_response": formatted,
+        "function_type": "past_summary",
+    }
+
 def _format_summary_markdown(s: dict) -> str:
     """summary_dict → 프론트엔드 표시용 마크다운 문자열 변환."""
     lines = []
 
-    overview = s.get("overview", {})
-    purpose = overview.get("purpose") or "회의 요약"
-    lines.append(f"## 📋 {purpose}")
-    if overview.get("datetime_str"):
-        lines.append(f"**일시:** {overview['datetime_str']}")
+    # 이전 회의 종합 요약이면 회의 목록 먼저 표시
+    meetings = s.get("meetings", [])
+    if meetings:
+        lines.append("## 📋 이전 회의 종합 요약")
+        for m in meetings:
+            lines.append(f"- **{m.get('title', '')}** ({m.get('date', '')})")
+    else:
+        # 현재 회의 요약 (기존 방식)
+        overview = s.get("overview", {})
+        purpose = overview.get("purpose") or "회의 요약"
+        lines.append(f"## 📋 {purpose}")
+        if overview.get("datetime_str"):
+            lines.append(f"**일시:** {overview['datetime_str']}")
 
-    # 참석자 — overview 바로 아래                                                                                        
-    attendees = s.get("attendees", [])
-    if attendees:                                                                                                        
-        lines.append(f"**참석자:** {', '.join(attendees)}")
+    # 참석자 — meetings 없을 때 (현재 회의)만 표시  
+    if not meetings:                                                                                     
+        attendees = s.get("attendees", [])
+        if attendees:                                                                                                        
+            lines.append(f"**참석자:** {', '.join(attendees)}")
 
     discussion = s.get("discussion_items", [])
     if discussion:
@@ -546,16 +714,19 @@ async def classify_intent(state: SharedState) -> dict:
     prompt = f"""
     사용자 입력이 "현재 진행 중인 회의 전체 내용을 요약해달라"는 요청인지 판단하세요. 단어 하나만 출력하세요.
                                                                                                                          
-    - summary: 현재 회의 내용 요약/정리 요청. 예) "오늘 회의 요약해줘", "지금까지 논의 정리해줘", "중간 정리해줘"      
-    - agent: 특정 문서/자료 검색, 외부 정보 조회, 일정 관련, 특정 주제에 대한 질문 등 그 외 모든 입력.                 
-            예) "AI 브리프 내용 요약해줘", "지난 회의에서 결정된 거 알려줘", "~~문서 찾아줘"                         
+    - summary: 지금 진행 중인 현재 회의 요약 요청. 
+        예) "오늘 회의 요약해줘", "지금까지 논의 정리해줘", "중간 정리해줘"
+    - past_summary: 과거에 완료된 회의를 요약해달라는 요청. 날짜 범위 지정 포함.
+        예) "이전 회의 요약해줘", "지난 회의 정리해줘", "전 회의 내용 요약", "4월 1일부터 현재까지 회의 요약해줘", "지난달 회의 정리해줘", "N월 회의 요약"
+    - agent: 특정 문서/자료 검색, 외부 정보 조회, 일정 관련, 특정 주제에 대한 질문 등 그 외 모든 입력.
+        예) "AI 브리프 내용 요약해줘", "지난 회의에서 결정된 거 알려줘", "~~문서 찾아줘"                         
                                                                                                                         
     입력: {state['user_question']} 
     """
     result = await llm.ainvoke(prompt)
     function_type = result.content.strip().lower()                                                                     
     # LLM이 예상 밖의 값을 반환하면 agent로 fallback
-    if function_type not in ("summary", "agent"):                                                                      
+    if function_type not in ("summary", "past_summary", "agent"):                                                                      
         function_type = "agent"
     return {"function_type": function_type}
 
