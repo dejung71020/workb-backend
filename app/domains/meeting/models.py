@@ -1,5 +1,8 @@
 # app\domains\meeting\models.py
 from sqlalchemy import Column, String, Enum, DateTime, Boolean, ForeignKey, Integer, func
+from sqlalchemy.dialects.mysql import LONGTEXT
+from sqlalchemy.orm import Mapped, mapped_column
+from datetime import datetime, date
 from app.infra.database.base import Base
 import enum
 
@@ -38,35 +41,16 @@ class MeetingParticipant(Base):
     speaker_label = Column(String(20), nullable=True)
     is_host = Column(Boolean, default=False)
 
-class Agenda(Base):
-    __tablename__ = "agendas"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    meeting_id = Column(Integer, ForeignKey("meetings.id"), nullable=False)
-    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
-    
-    created_at = Column(DateTime, default=func.now(), nullable=False)
-
-class AgendaItem(Base):
-    __tablename__ = "agenda_items"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    agenda_id = Column(Integer, ForeignKey("agendas.id"), nullable=False)
-    title = Column(String(200), nullable=False)
-    presenter_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    estimated_minutes = Column(Integer, nullable=True)
-    reference_url = Column(String(500), nullable=True)
-    order_index = Column(Integer, nullable=False)
-
 class SpeakerProfile(Base):
     __tablename__ = "speaker_profiles"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    workspace_id = Column(Integer, ForeignKey("workspaces.id"), nullable=False)
-    voice_model_path = Column(String(500), nullable=True)
-    diarization_method = Column(Enum(DiarizationMethod), nullable=False)
-    is_verified = Column(Boolean, default=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    workspace_id: Mapped[int] = mapped_column(Integer, ForeignKey("workspaces.id"), nullable=False)
+    voice_model_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    diarization_method: Mapped[DiarizationMethod] = mapped_column(Enum(DiarizationMethod), nullable=False)
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    voice_embedding: Mapped[str | None] = mapped_column(LONGTEXT, nullable=True)
     
     created_at = Column(DateTime, default=func.now(), nullable=False)
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)

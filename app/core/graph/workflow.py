@@ -4,7 +4,7 @@ from langgraph.graph import StateGraph, END
 from app.core.graph.state import SharedState
 from app.core.graph.supervisor import supervisor_node
 from app.domains.knowledge.agent_utils import (
-    classify_intent, knowledge_node,summary_node,
+    classify_intent, knowledge_node, summary_node, past_summary_node,
 )
 
 from app.domains.integration.service import load_integration_settings
@@ -60,6 +60,7 @@ knowledge_graph = StateGraph(SharedState)
 knowledge_graph.add_node("classifier", classify_intent)
 knowledge_graph.add_node("knowledge_agent", knowledge_node)
 knowledge_graph.add_node("summary", summary_node)
+knowledge_graph.add_node("past_summary", past_summary_node)
 
 knowledge_graph.set_entry_point("classifier")
 knowledge_graph.add_conditional_edges(
@@ -68,10 +69,12 @@ knowledge_graph.add_conditional_edges(
     lambda state: state["function_type"],
     {
         "summary": "summary",
+        "past_summary": "past_summary",
         "agent": "knowledge_agent",
     }
 )
 knowledge_graph.add_edge("knowledge_agent", END)
 knowledge_graph.add_edge("summary", END)
+knowledge_graph.add_edge("past_summary", END)
 
 knowledge_app = knowledge_graph.compile()

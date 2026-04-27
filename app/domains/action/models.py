@@ -1,6 +1,8 @@
 # app\domains\action\models.py
-from sqlalchemy import Column, String, Enum, DateTime, Boolean, ForeignKey, Text, Integer, Date, func
+from sqlalchemy import Enum, ForeignKey, Text, String, func, Integer, DateTime, Date
+from sqlalchemy.orm import Mapped, mapped_column
 from app.infra.database.base import Base
+from datetime import datetime, date
 import enum
 
 class ActionStatus(str, enum.Enum):
@@ -20,56 +22,62 @@ class Priority(str, enum.Enum):
     critical = "critical"
 
 class ReportFormat(str, enum.Enum):
-    xlsx = "xlsx"
-    pptx = "pptx"
+    markdown = "markdown"
+    excel = "excel"
+    wbs = "wbs"
     html = "html"
 
 class ActionItem(Base):
     __tablename__ = "action_items"
 
-    id           = Column(Integer, primary_key=True, autoincrement=True)
-    meeting_id   = Column(Integer, ForeignKey("meetings.id"), nullable=False)
-    content      = Column(Text, nullable=False)
-    assignee_id  = Column(Integer, ForeignKey("users.id"), nullable=True)
-    due_date     = Column(Date, nullable=True)
-    status       = Column(Enum(ActionStatus), default=ActionStatus.pending)
-    detected_at  = Column(DateTime, nullable=False)
-    jira_issue_id = Column(String(100), nullable=True)
+    id:             Mapped[int]         = mapped_column(Integer, primary_key=True, autoincrement=True)
+    meeting_id:     Mapped[int]         = mapped_column(Integer, ForeignKey("meetings.id"), nullable=False)
+    content :       Mapped[str]         = mapped_column(Text, nullable=False)
+    assignee_id:    Mapped[int | None]  = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    due_date:       Mapped[date | None] = mapped_column(Date, nullable=True)
+    status:         Mapped[ActionStatus]= mapped_column(Enum(ActionStatus), default=ActionStatus.pending)
+    detected_at:    Mapped[datetime]    = mapped_column(DateTime, nullable=False)
+    jira_issue_id:  Mapped[str | None]  = mapped_column(String(100), nullable=True)
 
 
 class WbsEpic(Base):
     __tablename__ = "wbs_epics"
 
-    id           = Column(Integer, primary_key=True, autoincrement=True)
-    meeting_id   = Column(Integer, ForeignKey("meetings.id"), nullable=False)
-    title        = Column(String(200), nullable=False)
-    order_index  = Column(Integer, nullable=False)
-    jira_epic_id = Column(String(100), nullable=True)
+    id:             Mapped[int]         = mapped_column(Integer, primary_key=True, autoincrement=True)
+    meeting_id:     Mapped[int]         = mapped_column(Integer, ForeignKey("meetings.id"), nullable=False)
+    title:          Mapped[str]         = mapped_column(String(200), nullable=False)
+    order_index:    Mapped[int]         = mapped_column(Integer, nullable=False)
+    jira_epic_id:   Mapped[str | None]  = mapped_column(String(100), nullable=True)
+    notion_page_id: Mapped[str | None]  = mapped_column(String(100), nullable=True)
 
 
 class WbsTask(Base):
     __tablename__ = "wbs_tasks"
 
-    id             = Column(Integer, primary_key=True, autoincrement=True)
-    epic_id        = Column(Integer, ForeignKey("wbs_epics.id"), nullable=False)
-    title          = Column(String(200), nullable=False)
-    assignee_id    = Column(Integer, ForeignKey("users.id"), nullable=True)
-    priority       = Column(Enum(Priority), default=Priority.medium)
-    due_date       = Column(Date, nullable=True)
-    progress       = Column(Integer, default=0)
-    status         = Column(Enum(TaskStatus), default=TaskStatus.todo)
-    jira_issue_id  = Column(String(100), nullable=True)
-    notion_page_id = Column(String(100), nullable=True)
-    created_at     = Column(DateTime, default=func.now(), nullable=False)
-    updated_at     = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+    id:             Mapped[int]         = mapped_column(Integer, primary_key=True, autoincrement=True)
+    epic_id:        Mapped[int]         = mapped_column(Integer, ForeignKey("wbs_epics.id"), nullable=False)
+    title:          Mapped[str]         = mapped_column(String(200), nullable=False)
+    assignee_id:    Mapped[int | None]  = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    priority:       Mapped[Priority]    = mapped_column(Enum(Priority), default=Priority.medium)
+    due_date:       Mapped[date | None ]= mapped_column(Date, nullable=True)
+    progress:       Mapped[int]         = mapped_column(Integer, default=0)
+    status:         Mapped[TaskStatus]  = mapped_column(Enum(TaskStatus), default=TaskStatus.todo)
+    jira_issue_id:  Mapped[str | None]  = mapped_column(String(100), nullable=True)
+    notion_page_id: Mapped[str | None]  = mapped_column(String(100), nullable=True)
+    created_at:     Mapped[datetime]    = mapped_column(DateTime, default=func.now(), nullable=False)
+    updated_at:     Mapped[datetime]    = mapped_column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
 
 class Report(Base):
     __tablename__ = "reports"
 
-    id         = Column(Integer, primary_key=True, autoincrement=True)
-    meeting_id = Column(Integer, ForeignKey("meetings.id"), nullable=False)
-    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
-    format     = Column(Enum(ReportFormat), nullable=False)
-    file_url   = Column(String(500), nullable=True)
-    created_at = Column(DateTime, default=func.now(), nullable=False)
+    id:         Mapped[int]             = mapped_column(Integer, primary_key=True, autoincrement=True)
+    meeting_id: Mapped[int]             = mapped_column(Integer, ForeignKey("meetings.id"), nullable=False)
+    created_by: Mapped[int]             = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    format:     Mapped[ReportFormat]    = mapped_column(Enum(ReportFormat), nullable=False)
+    title:      Mapped[str]             = mapped_column(String(200), nullable=False)
+    content:    Mapped[str | None]      = mapped_column(Text, nullable=True)
+    file_url:   Mapped[str | None]      = mapped_column(String(500), nullable=True)
+    thumbnail_url:Mapped[str | None]    = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime]        = mapped_column(DateTime, default=func.now(), nullable=False)
+    updated_at: Mapped[datetime]        = mapped_column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)

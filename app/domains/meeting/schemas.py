@@ -1,7 +1,7 @@
 # app\domains\meeting\schemas.py
 from pydantic import BaseModel, Field
 from datetime import date, datetime
-from typing import Optional
+from typing import Literal, Optional
 
 
 class CreateMeetingRequest(BaseModel):
@@ -10,6 +10,7 @@ class CreateMeetingRequest(BaseModel):
     scheduled_at: datetime
     participant_ids: list[int] = Field(default_factory=list)
     sync_google_calendar: bool = False
+    duration_minutes: int = 60
 
 
 class CreateMeetingResponseData(BaseModel):
@@ -29,6 +30,8 @@ class UpdateMeetingRequest(BaseModel):
     meeting_type: str
     scheduled_at: datetime
     participant_ids: list[int] = Field(default_factory=list)
+    sync_google_calendar: bool | None = None
+    duration_minutes: int = 60
 
 class DeleteMeetingResponse(BaseModel):
     success: bool = True
@@ -114,58 +117,28 @@ class MeetingHistoryResponse(BaseModel):
     meetings: list[MeetingHistoryItemOut] = Field(default_factory=list)
 
 
-# ── Agenda (POST/PATCH/DELETE under /api/v1/meetings/{meeting_id}/...) ───────
+# ── Speaker profiles (GET/POST /api/v1/meetings/workspaces/{id}/speaker-profiles) ─
 
 
-class AgendaItemCreate(BaseModel):
-    title: str
-    presenter_id: Optional[int] = None
-    estimated_minutes: Optional[int] = None
-    reference_url: Optional[str] = None
-    order_index: int
+class SpeakerProfileItem(BaseModel):
+    user_id: int
+    name: str
+    email: str
+    role: str
+    is_verified: bool
+    diarization_method: Literal["stereo", "diarization"] | None = None
+    updated_at: Optional[datetime] = None
 
 
-class AgendaBulkCreateRequest(BaseModel):
-    items: list[AgendaItemCreate] = Field(..., min_length=1)
+class SpeakerProfileListResponse(BaseModel):
+    profiles: list[SpeakerProfileItem] = Field(default_factory=list)
 
 
-class AgendaItemCreatedOut(BaseModel):
-    id: int
-    title: str
-    order_index: int
+class SpeakerProfileRegisterRequest(BaseModel):
+    user_id: int | None = None
+    diarization_method: Literal["stereo", "diarization"] = "diarization"
 
 
-class AgendaBulkCreateResponse(BaseModel):
-    success: bool = True
-    agenda_id: int
-    items: list[AgendaItemCreatedOut] = Field(default_factory=list)
-    message: str = "OK"
-
-
-class AgendaItemPatch(BaseModel):
-    title: Optional[str] = None
-    presenter_id: Optional[int] = None
-    estimated_minutes: Optional[int] = None
-    reference_url: Optional[str] = None
-    order_index: Optional[int] = None
-
-
-class AgendaItemOut(BaseModel):
-    id: int
-    agenda_id: int
-    title: str
-    presenter_id: Optional[int] = None
-    estimated_minutes: Optional[int] = None
-    reference_url: Optional[str] = None
-    order_index: int
-
-
-class AgendaItemPatchResponse(BaseModel):
-    success: bool = True
-    data: AgendaItemOut
-    message: str = "OK"
-
-
-class AgendaItemDeleteResponse(BaseModel):
-    success: bool = True
-    message: str = "OK"
+class SpeakerProfileRegisterResponse(BaseModel):
+    profile: SpeakerProfileItem
+    message: str

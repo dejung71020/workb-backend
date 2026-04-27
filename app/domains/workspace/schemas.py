@@ -8,7 +8,7 @@
 from datetime import date, datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 from app.domains.user.schemas import UserRole
 
@@ -42,6 +42,7 @@ class DashboardMeetingOut(BaseModel):
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     meeting_type: Optional[str] = None
+    google_calendar_event_id: Optional[str] = None
     participants: list[DashboardParticipantOut] = Field(default_factory=list)
 
 
@@ -54,6 +55,8 @@ class DashboardMeetingsBundle(BaseModel):
 class WeeklySummaryOut(BaseModel):
     total_count: int = 0
     total_duration_min: int = 0
+    action_items_total: int = 0
+    action_items_done: int = 0
     summary_cards: list[Any] = Field(default_factory=list)
 
 
@@ -134,6 +137,21 @@ class InviteCodeIssueResponse(BaseModel):
 
     workspace_id: int
     invite_code: str
+
+
+class WorkspaceInviteEmailItem(BaseModel):
+    email: EmailStr
+    role: UserRole = UserRole.MEMBER
+
+
+class WorkspaceInviteEmailRequest(BaseModel):
+    invites: list[WorkspaceInviteEmailItem] = Field(min_length=1, max_length=20)
+
+
+class WorkspaceInviteEmailResponse(BaseModel):
+    sent_count: int
+    failed_count: int
+    message: str
 
 
 class WorkspaceMemberResponse(BaseModel):

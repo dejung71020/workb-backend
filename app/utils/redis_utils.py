@@ -97,3 +97,12 @@ async def is_meeting_live(meeting_id: int) -> bool:
     """
     count = await r.llen(f"meeting:{meeting_id}:utterances")
     return count > 0
+
+async def clear_meeting_context(meeting_id: int) -> None:
+    """
+    회의 종료 시 partial_summary 캐시 명시적 삭제.
+
+    utterances/speakers는 24h TTL로 자동 만료되지만
+    partial_summary는 회의 종료 즉시 불필요하므로 바로 삭제.
+    """
+    await r.delete(f"meeting:{meeting_id}:partial_summary")

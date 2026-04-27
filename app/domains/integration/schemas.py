@@ -39,3 +39,26 @@ class SlackChannelSelectRequest(BaseModel):
 
 class OAuthUrlResponse(BaseModel):
     auth_url: str
+
+# --- Slack ---
+class SlackChannelItem(BaseModel):
+    id: str
+    name: str
+
+class SlackChannelListResponse(BaseModel):
+    channels: List[SlackChannelItem]
+
+class TestIntegrationResponse(BaseModel):
+    success: bool
+    message: str
+
+class GoogleCalendarEventItem(BaseModel):
+    id: str
+    title: str
+    start: str
+    end: str
+    description: Optional[str] = None
+    html_link: Optional[str] = None
+
+class GoogleCalendarEventsResponse(BaseModel):
+    events: List[GoogleCalendarEventItem]

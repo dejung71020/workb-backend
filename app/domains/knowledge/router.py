@@ -1,5 +1,7 @@
 # app\domains\knowledge\router.py
-from datetime import date, datetime
+import uuid
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from datetime import date
 from typing import Optional
 
 from fastapi import (
@@ -15,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.core.graph.workflow import knowledge_app
+from app.domains.workspace.deps import require_workspace_member
 from app.domains.knowledge.schemas import (
     ChatbotHistoryMessage,
     ChatbotHistoryResponse,
@@ -23,11 +26,14 @@ from app.domains.knowledge.schemas import (
     ChatbotSummaryRequest,
     ChatbotSummaryResponse,
     DocumentUploadResponse,
+    PastMeetingsResponse,
+    PastMeetingItem,
 )
 from app.domains.meeting.schemas import MeetingSearchParams, MeetingSearchResponse
 from app.domains.meeting.service import MeetingSearchService
 from app.domains.knowledge import repository
 from app.utils.redis_utils import get_meeting_context
+from app.utils.time_utils import now_kst
 from app.domains.knowledge.agent_utils import summary_node
 from app.domains.knowledge.service import ingest_document
 
@@ -41,6 +47,7 @@ router = APIRouter()
 def search_workspace_meetings(
     workspace_id: int,
     db: Session = Depends(get_db),
+    _member: int = Depends(require_workspace_member),
     keyword: Optional[str] = Query(None, description="회의 제목 부분 일치 검색"),
     from_date: Optional[date] = Query(None, description="scheduled_at 기준 시작일(포함)"),
     to_date: Optional[date] = Query(None, description="scheduled_at 기준 종료일(포함)"),
@@ -70,29 +77,31 @@ _EXT_MAP = {
 }
 
 @router.post("/workspace/{workspace_id}/chatbot/message")
-async def chatbot_message(workspace_id: int, req: ChatbotMessageRequest):
-    meeting_id = req.meeting_id
+async def chatbot_message(workspace_id: int, req: ChatbotMessageRequest, session_id: Optional[str] = None):
+    session_id = session_id or str(uuid.uuid4())
+    meeting_id = req.meeting_id # 회의 중일 때만 전달
     state = {
         "meeting_id": meeting_id,
         "workspace_id": workspace_id,
         "user_question": req.message,
+        "past_meeting_ids": req.past_meeting_ids,
         "function_type": "",
         "chat_response": ""
     }
     result = await knowledge_app.ainvoke(state)
 
-    await repository.save_chat_log(meeting_id, req.session_id, "user", req.message, "")
+    await repository.save_chat_log(meeting_id, session_id, "user", req.message, "")
     await repository.save_chat_log(
-        meeting_id, req.session_id, "assistant", 
+        meeting_id, session_id, "assistant", 
         result["chat_response"], result["function_type"]
     )
 
     return ChatbotMessageResponse(
-        session_id=req.session_id,
+        session_id=session_id,
         function_type=result["function_type"],
         answer=result["chat_response"],
         result={},
-        timestamp=datetime.now()
+        timestamp=now_kst()
     )
 
 @router.get("/workspace/{workspace_id}/chatbot/history", response_model=ChatbotHistoryResponse)
@@ -114,6 +123,7 @@ async def chatbot_summary(workspace_id: int, req: ChatbotSummaryRequest):
     state = {
         "meeting_id": req.meeting_id,
         "workspace_id": workspace_id,
+        "past_meeting_ids": req.past_meeting_ids,
         "user_question": "",
         "function_type": "",
         "chat_response": ""
@@ -123,7 +133,15 @@ async def chatbot_summary(workspace_id: int, req: ChatbotSummaryRequest):
 
     return ChatbotSummaryResponse(
         summary=result["summary"],
-        generated_at=datetime.now()
+        generated_at=now_kst()
+    )
+
+@router.get("/workspace/{workspace_id}/past_meetings", response_model=PastMeetingsResponse)
+async def get_past_meetings(workspace_id: int):
+    meetings = await repository.get_past_meetings(workspace_id)
+    return PastMeetingsResponse(
+        meetings=[PastMeetingItem(**m) for m in meetings],
+        total=len(meetings),
     )
 
 @router.post("/workspaces/{workspace_id}/documents", response_model=DocumentUploadResponse)
@@ -159,5 +177,5 @@ async def upload_document(
         doc_id=result["doc_id"],
         chunks=result["chunks"],
         title=result["title"],
-        uploaded_at=datetime.now()
+        uploaded_at=now_kst()
     )

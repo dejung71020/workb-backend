@@ -20,6 +20,8 @@ from app.domains.workspace.schemas import (
     InviteCodeIssueResponse,
     InviteCodeValidateRequest,
     InviteCodeValidateResponse,
+    WorkspaceInviteEmailRequest,
+    WorkspaceInviteEmailResponse,
     WorkspaceListResponse,
     WorkspaceMemberDepartmentUpdateRequest,
     WorkspaceMemberDepartmentUpdateResponse,
@@ -29,15 +31,18 @@ from app.domains.workspace.schemas import (
     WorkspaceResponse,
     WorkspaceUpdateRequest,
 )
+from app.domains.user.schemas import MessageResponse
 
 from app.domains.workspace.service import (
     DashboardService,
     create_workspace_department_service,
+    delete_workspace_service,
     delete_workspace_department_service,
     get_workspace_members_service,
     get_workspace_departments_service,
     get_workspace_service,
     issue_workspace_invite_code_service,
+    send_workspace_invite_emails_service,
     update_workspace_department_service,
     update_workspace_member_department_service,
     update_workspace_member_role_service,
@@ -45,7 +50,7 @@ from app.domains.workspace.service import (
     validate_invite_code_service,
     list_my_workspaces_service,
 )
-from app.domains.user.dependencies import require_workspace_admin
+from app.domains.workspace.deps import require_workspace_admin
 
 
 router = APIRouter()
@@ -113,6 +118,23 @@ async def patch_workspace(
     return update_workspace_service(db, workspace_id, payload)
 
 
+@router.delete(
+    "/{workspace_id}",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def delete_workspace(
+    workspace_id: int,
+    db: Session = Depends(get_db),
+    _admin = Depends(require_workspace_admin),
+) -> MessageResponse:
+    """
+    워크스페이스와 관련 데이터를 삭제합니다. 워크스페이스 관리자만 수행할 수 있습니다.
+    """
+    delete_workspace_service(db, workspace_id)
+    return MessageResponse(message="워크스페이스가 삭제되었습니다.")
+
+
 @router.post(
     "/invite-codes/validate",
     response_model=InviteCodeValidateResponse,
@@ -159,6 +181,23 @@ async def issue_workspace_invite_code(
         새로 발급된 초대코드 정보를 반환합니다.
     """
     return issue_workspace_invite_code_service(db, workspace_id)
+
+
+@router.post(
+    "/{workspace_id}/invites/email",
+    response_model=WorkspaceInviteEmailResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def send_workspace_invite_emails(
+    workspace_id: int,
+    payload: WorkspaceInviteEmailRequest,
+    db: Session = Depends(get_db),
+    _admin = Depends(require_workspace_admin),
+) -> WorkspaceInviteEmailResponse:
+    """
+    워크스페이스 초대코드를 이메일로 발송합니다.
+    """
+    return send_workspace_invite_emails_service(db, workspace_id, payload)
 
 
 @router.get(

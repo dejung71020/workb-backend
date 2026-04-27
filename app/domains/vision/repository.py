@@ -1,6 +1,6 @@
 # app\domains\vision\repository.py
 from pymongo import MongoClient
-from datetime import datetime
+from app.utils.time_utils import now_kst
 from app.core.config import settings
 
 mongo_db = MongoClient(settings.MONGODB_URL)["workb"]
@@ -11,7 +11,7 @@ def save_analysis(meeting_id: int, data: dict) -> None:
         "ocr_text": data.get("ocr_text", ""),
         "chart_description": data.get("chart_description", ""),
         "key_points": data.get("key_points", []),
-        "timestamp": datetime.now()
+        "timestamp": now_kst()
     })
 
 def get_analyses(meeting_id: int) -> list[dict]:

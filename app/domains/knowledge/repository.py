@@ -5,6 +5,7 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.infra.database.session import SessionLocal
+from app.utils.time_utils import now_kst
 
 mongo_db = AsyncIOMotorClient(settings.MONGODB_URL)["workb"]
 
@@ -18,8 +19,41 @@ async def save_chat_log(workspace_id: int, session_id: str, role: str, content: 
         "role": role,
         "content": content,
         "function_type": function_type,
-        "timestamp": datetime.now()
+        "timestamp": now_kst()
     })
+
+async def get_past_meetings_by_ids(meeting_ids: list[int]) -> list[dict]:
+    """선택된 meeting_id 목록으로 이전 회의 요약 조회."""
+    cursor = mongo_db["meeting_contexts"].find(
+        {"meeting_id": {"$in": meeting_ids}},
+        {"_id": 0}
+    ).sort("created_at", 1) # 날짜 오름차순 (오래된 것 먼저)
+    return await cursor.to_list(length=None)
+
+async def get_all_past_meetings_by_workspace(workspace_id: int) -> list[dict]:
+    """workspace_id 기준 전체 이전 회의 조회 (선택 안 했을 때 fallback)."""
+    cursor = mongo_db["meeting_contexts"].find(
+        {"$or": [
+            {"workspace_id": workspace_id},
+            {"workspace_id": {"$exists": False}},
+        ]},
+        {"_id": 0}
+    ).sort("created_at", 1)
+    return await cursor.to_list(length=None)
+
+async def get_past_meetings(workspace_id: int) -> list[dict]:
+    """
+    워크스페이스 이전 회의 목록 반환.
+    workspace_id 없는 문서도 포함 - 기존 seed 데이터 하위 호환용.
+    """
+    cursor = mongo_db["meeting_contexts"].find(
+        {"$or": [
+            {"workspace_id": workspace_id},
+            {"workspace_id": {"$exists": False}}, # 구버전 데이터 호환
+        ]},
+        {"_id": 0, "meeting_id": 1, "title": 1, "created_at": 1}
+    ).sort("created_at", -1)
+    return await cursor.to_list(length=None)
 
 async def get_chat_history(workspace_id: int, session_id: str) -> list[dict]:
     cursor = mongo_db["chatbot_logs"].find(
@@ -41,7 +75,7 @@ async def save_meeting_summary(workspace_id: int, meeting_id: int, summary: dict
         최초 생성 시각(created_at)과 마지막 갱신 시각(updated_at)을 구분해
         "이 요약이 언제 처음 만들어졌고 마지막으로 언제 업데이트됐는지" 추적 가능.
     """
-    now = datetime.now()
+    now = now_kst()
     await mongo_db["meeting_summaries"].update_one(
         {"meeting_id": meeting_id},
         {

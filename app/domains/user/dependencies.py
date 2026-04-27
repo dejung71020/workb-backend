@@ -62,3 +62,40 @@ def require_workspace_admin(
         )
 
     return user
+
+def require_workspace_member(
+    workspace_id: int,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> User:
+    token = _get_bearer_token(authorization)
+
+    try:
+        payload = decode_token(token)
+        user_id = int(payload.get("sub"))
+    except (JWTError, TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="유효하지 않은 인증 토큰입니다.",
+        )
+
+    if payload.get("type") != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="access token이 필요합니다.",
+        )
+
+    user = get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
+    if user.workspace_id != workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="해당 워크스페이스 접근 권한이 없습니다.",
+        )
+
+    return user

@@ -7,6 +7,7 @@ from app.domains.action.services.google import (
     export_google_calendar,
     suggest_next_meeting,
     register_next_meeting,
+    update_next_meeting,
 ) 
 
 __all__ = [
@@ -17,4 +18,5 @@ __all__ = [
     "export_google_calendar",
     "suggest_next_meeting",
     "register_next_meeting",
+    "update_next_meeting",
 ]

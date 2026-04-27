@@ -12,7 +12,6 @@ class SharedState(TypedDict):
     # --- 2. Meeting 도메인 (Scribe) ---
     # 실시간 발화 스트림 및 화자 정보를 누적 저장
     transcript: Annotated[List[dict], operator.add] # [{speaker: str, text: str, timestamp: str}]
-    agenda: List[dict]           # [회의 전] 설정된 안건 목록 [{"topic": str, "speaker": str}]
     
     # --- 3. Knowledge 도메인 (Researcher) ---
     search_query: str            # RAG 검색 및 외부 지식 탐색을 위한 쿼리
@@ -20,6 +19,7 @@ class SharedState(TypedDict):
     chat_history: Annotated[List[dict], operator.add] # [챗봇] 대화 맥락 유지용 히스토리
     user_question: str           # 사용자가 챗봇에게 던진 개별 질문
     chat_response: str           # 챗봇의 최종 답변
+    past_meeting_ids: Optional[List[int]] # None = 전체, [1, 2, 3] = 선택된 이전 회의만
     
     # --- 4. Intelligence 도메인 (Analyst) ---
     summary: dict                 # 회의 전체 요약본 (초안 및 최종본)

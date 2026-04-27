@@ -7,7 +7,7 @@
 
 from sqlalchemy.orm import Session
 
-from app.domains.workspace.models import Department, Workspace, WorkspaceMember
+from app.domains.workspace.models import Department, InviteCode, MemberRole, Workspace, WorkspaceMember
 
 
 def get_workspace_by_invite_code(db: Session, invite_code: str) -> Workspace | None:
@@ -43,6 +43,98 @@ def get_workspace_membership(
         )
         .one_or_none()
     )
+
+
+def create_workspace_membership(
+    db: Session,
+    workspace_id: int,
+    user_id: int,
+    role: MemberRole,
+) -> WorkspaceMember:
+    """
+    사용자와 워크스페이스의 멤버십 row를 생성합니다.
+
+    이미 같은 멤버십이 있으면 중복 생성하지 않고 기존 row를 반환합니다.
+    """
+    existing = get_workspace_membership(db, workspace_id, user_id)
+    if existing:
+        return existing
+
+    membership = WorkspaceMember(
+        workspace_id=workspace_id,
+        user_id=user_id,
+        role=role,
+    )
+    db.add(membership)
+    db.commit()
+    db.refresh(membership)
+    return membership
+
+
+def count_workspace_admins(db: Session, workspace_id: int) -> int:
+    """
+    워크스페이스에 남아 있는 관리자 수를 조회합니다.
+    """
+    return (
+        db.query(WorkspaceMember)
+        .filter(
+            WorkspaceMember.workspace_id == workspace_id,
+            WorkspaceMember.role == MemberRole.admin,
+        )
+        .count()
+    )
+
+
+def delete_workspace_membership(
+    db: Session,
+    workspace_id: int,
+    user_id: int,
+) -> bool:
+    """
+    사용자 1명의 워크스페이스 멤버십을 삭제합니다.
+    """
+    membership = get_workspace_membership(db, workspace_id, user_id)
+    if not membership:
+        return False
+
+    db.delete(membership)
+    db.commit()
+    return True
+
+
+def get_invite_code_by_code(db: Session, code: str) -> InviteCode | None:
+    return db.query(InviteCode).filter(InviteCode.code == code).one_or_none()
+
+
+def create_invite_code(
+    db: Session,
+    workspace_id: int,
+    code: str,
+    role: MemberRole,
+    expires_at,
+) -> InviteCode:
+    invite = InviteCode(
+        workspace_id=workspace_id,
+        code=code,
+        role=role,
+        expires_at=expires_at,
+    )
+    db.add(invite)
+    db.commit()
+    db.refresh(invite)
+    return invite
+
+
+def mark_invite_code_used(
+    db: Session,
+    invite: InviteCode,
+    user_id: int,
+) -> InviteCode:
+    invite.is_used = True
+    invite.used_by = user_id
+    db.commit()
+    db.refresh(invite)
+    return invite
 
 
 def get_workspace_by_id(db: Session, workspace_id: int) -> Workspace | None:

@@ -15,6 +15,7 @@ from typing import Any, Optional
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.domains.knowledge.agent_utils import chroma_client, get_collection
+from app.utils.time_utils import now_kst
 
 
 _splitter = RecursiveCharacterTextSplitter(
@@ -125,7 +126,7 @@ def ingest_document(
     # 3단계: 메타데이터 구성
     doc_id = f"{workspace_id}_{filename}"
     title = title or filename
-    uploaded_at = datetime.now().isoformat()
+    uploaded_at = now_kst().isoformat()
 
     ids = [f"{doc_id}_chunk{i}" for i in range(len(chunks))]
     metadatas = [

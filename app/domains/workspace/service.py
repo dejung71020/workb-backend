@@ -13,8 +13,12 @@ from datetime import date, datetime, timedelta
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.domains.action.models import ActionItem, ActionStatus
-from app.domains.meeting.models import Meeting, MeetingParticipant, MeetingStatus
+from app.utils.time_utils import KST
+from app.core.email import send_workspace_invite_email
+from app.domains.action.models import ActionItem, ActionStatus, Report, WbsEpic, WbsTask
+from app.domains.integration.models import Integration
+from app.domains.intelligence.models import Decision, MeetingMinute, MinutePhoto, ReviewRequest
+from app.domains.meeting.models import Meeting, MeetingParticipant, MeetingStatus, SpeakerProfile
 from app.domains.user.models import User
 from app.domains.user.repository import (
     count_users_by_department_id,
@@ -23,19 +27,23 @@ from app.domains.user.repository import (
     update_user_department,
     update_user_role,
 )
+from app.domains.notification.models import NotificationType
+from app.domains.notification import service as notification_service
 from app.domains.workspace.repository import (
+    create_invite_code,
     create_department,
     delete_department,
     get_department_by_id,
     get_departments_by_workspace_id,
     get_workspace_by_id,
     get_workspace_by_invite_code,
+    get_invite_code_by_code,
     update_department,
     update_workspace,
     update_workspace_invite_code,
 )
 
-from app.domains.workspace.models import Workspace, WorkspaceMember
+from app.domains.workspace.models import Department, DeviceSetting, InviteCode, MemberRole, Workspace, WorkspaceMember
 from app.domains.workspace.schemas import (
     DashboardMeetingOut,
     DashboardMeetingsBundle,
@@ -51,6 +59,8 @@ from app.domains.workspace.schemas import (
     WeeklySummaryOut,
     WorkspaceListItem,
     WorkspaceListResponse,
+    WorkspaceInviteEmailRequest,
+    WorkspaceInviteEmailResponse,
     WorkspaceMemberDepartmentUpdateRequest,
     WorkspaceMemberDepartmentUpdateResponse,
     WorkspaceMemberListResponse,
@@ -70,6 +80,13 @@ def _generate_invite_code() -> str:
     service 계층 내부에 별도 함수로 둡니다.
     """
     return secrets.token_hex(4).upper()
+
+
+def _generate_unique_invite_code(db: Session) -> str:
+    while True:
+        code = _generate_invite_code()
+        if not get_workspace_by_invite_code(db, code) and not get_invite_code_by_code(db, code):
+            return code
 
 
 def get_workspace_service(db: Session, workspace_id: int) -> WorkspaceResponse:
@@ -151,6 +168,83 @@ def update_workspace_service(
     )
 
 
+def delete_workspace_service(db: Session, workspace_id: int) -> None:
+    """
+    워크스페이스와 워크스페이스에 종속된 데이터를 삭제합니다.
+
+    현재 모델에는 DB cascade 옵션이 없으므로 FK 제약을 피하기 위해
+    하위 테이블부터 명시적으로 정리합니다.
+    """
+    workspace = get_workspace_by_id(db, workspace_id)
+    if not workspace:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="워크스페이스를 찾을 수 없습니다.",
+        )
+
+    meeting_ids = [
+        meeting_id
+        for (meeting_id,) in db.query(Meeting.id)
+        .filter(Meeting.workspace_id == workspace_id)
+        .all()
+    ]
+    minute_ids: list[int] = []
+    epic_ids: list[int] = []
+
+    if meeting_ids:
+        minute_ids = [
+            minute_id
+            for (minute_id,) in db.query(MeetingMinute.id)
+            .filter(MeetingMinute.meeting_id.in_(meeting_ids))
+            .all()
+        ]
+        epic_ids = [
+            epic_id
+            for (epic_id,) in db.query(WbsEpic.id)
+            .filter(WbsEpic.meeting_id.in_(meeting_ids))
+            .all()
+        ]
+
+    if minute_ids:
+        db.query(ReviewRequest).filter(ReviewRequest.minute_id.in_(minute_ids)).delete(synchronize_session=False)
+        db.query(MinutePhoto).filter(MinutePhoto.minute_id.in_(minute_ids)).delete(synchronize_session=False)
+
+    if epic_ids:
+        db.query(WbsTask).filter(WbsTask.epic_id.in_(epic_ids)).delete(synchronize_session=False)
+
+    if meeting_ids:
+        db.query(MeetingMinute).filter(MeetingMinute.meeting_id.in_(meeting_ids)).delete(synchronize_session=False)
+        db.query(Decision).filter(Decision.meeting_id.in_(meeting_ids)).delete(synchronize_session=False)
+        db.query(WbsEpic).filter(WbsEpic.meeting_id.in_(meeting_ids)).delete(synchronize_session=False)
+        db.query(ActionItem).filter(ActionItem.meeting_id.in_(meeting_ids)).delete(synchronize_session=False)
+        db.query(Report).filter(Report.meeting_id.in_(meeting_ids)).delete(synchronize_session=False)
+        db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id.in_(meeting_ids)).delete(synchronize_session=False)
+        db.query(Meeting).filter(Meeting.id.in_(meeting_ids)).delete(synchronize_session=False)
+
+    db.query(SpeakerProfile).filter(SpeakerProfile.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(Integration).filter(Integration.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(InviteCode).filter(InviteCode.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(DeviceSetting).filter(DeviceSetting.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(WorkspaceMember).filter(WorkspaceMember.workspace_id == workspace_id).delete(synchronize_session=False)
+
+    (
+        db.query(User)
+        .filter(User.workspace_id == workspace_id)
+        .update(
+            {
+                User.is_active: False,
+                User.workspace_id: None,
+                User.department_id: None,
+            },
+            synchronize_session=False,
+        )
+    )
+
+    db.query(Department).filter(Department.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.delete(workspace)
+    db.commit()
+
+
 def validate_invite_code_service(
     db: Session,
     invite_code: str,
@@ -174,6 +268,11 @@ def validate_invite_code_service(
         HTTPException: 초대코드가 유효하지 않을 경우 400 Bad Request 예외를 발생시킵니다.
     """
     workspace = get_workspace_by_invite_code(db, invite_code)
+
+    if not workspace:
+        invite = get_invite_code_by_code(db, invite_code)
+        if invite and not invite.is_used and invite.expires_at >= datetime.utcnow():
+            workspace = get_workspace_by_id(db, invite.workspace_id)
 
     if not workspace:
         raise HTTPException(
@@ -299,12 +398,29 @@ def update_workspace_member_role_service(
             detail="해당 워크스페이스 소속 사용자가 아닙니다.",
         )
 
+    prev_role = str(user.role)
     updated_user = update_user_role(db, user_id, role)
     if not updated_user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="사용자를 찾을 수 없습니다.",
         )
+
+    # 알림: 권한 변경 (본인에게)
+    try:
+        if str(updated_user.role) != prev_role:
+            notification_service.create_notification(
+                db,
+                workspace_id=workspace_id,
+                user_id=int(updated_user.id),
+                type_=NotificationType.role_changed,
+                title="권한 변경",
+                body=f"워크스페이스 내 내 역할이 변경되었습니다. ({prev_role} → {updated_user.role})",
+                link="/settings/profile",
+                dedupe_key=f"role_changed:{updated_user.id}:{prev_role}->{updated_user.role}",
+            )
+    except Exception:
+        pass
 
     return WorkspaceMemberRoleUpdateResponse(
         user_id=updated_user.id,
@@ -438,6 +554,63 @@ def issue_workspace_invite_code_service(
     return InviteCodeIssueResponse(
         workspace_id=updated_workspace.id,
         invite_code=updated_workspace.invite_code,
+    )
+
+
+def send_workspace_invite_emails_service(
+    db: Session,
+    workspace_id: int,
+    payload: WorkspaceInviteEmailRequest,
+) -> WorkspaceInviteEmailResponse:
+    workspace = get_workspace_by_id(db, workspace_id)
+    if not workspace:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="워크스페이스를 찾을 수 없습니다.",
+        )
+    role_labels = {
+        "admin": "관리자",
+        "member": "멤버",
+        "viewer": "뷰어",
+    }
+    seen: set[str] = set()
+    sent_count = 0
+    failed_count = 0
+
+    for invite in payload.invites:
+        email = str(invite.email).strip().lower()
+        if email in seen:
+            continue
+        seen.add(email)
+        code = _generate_unique_invite_code(db)
+        create_invite_code(
+            db=db,
+            workspace_id=workspace.id,
+            code=code,
+            role=MemberRole(invite.role.value),
+            expires_at=datetime.utcnow() + timedelta(days=7),
+        )
+
+        sent = send_workspace_invite_email(
+            to_email=email,
+            workspace_name=workspace.name,
+            invite_code=code,
+            role_label=role_labels.get(invite.role.value, invite.role.value),
+        )
+        if sent:
+            sent_count += 1
+        else:
+            failed_count += 1
+
+    message = (
+        f"초대 메일 {sent_count}건을 발송했습니다."
+        if sent_count > 0
+        else "초대 메일을 발송하지 못했습니다."
+    )
+    return WorkspaceInviteEmailResponse(
+        sent_count=sent_count,
+        failed_count=failed_count,
+        message=message,
     )
 
 
@@ -615,8 +788,10 @@ def _dashboard_meeting_status_value(m: Meeting) -> str:
 
 
 def _dashboard_week_start_local(d: date) -> datetime:
-    monday = d - timedelta(days=d.weekday())
-    return datetime.combine(monday, datetime.min.time())
+    # 주 시작: 일요일 00:00 (로컬 naive datetime)
+    # date.weekday(): Monday=0 ... Sunday=6
+    sunday = d - timedelta(days=(d.weekday() + 1) % 7)
+    return datetime.combine(sunday, datetime.min.time())
 
 
 class DashboardService:
@@ -648,23 +823,57 @@ class DashboardService:
                     DashboardParticipantOut(user_id=int(u.id), name=str(u.name))
                 )
 
+        def to_kst_aware(dt: datetime | None) -> datetime | None:
+            if dt is None:
+                return None
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=KST)
+            return dt.astimezone(KST)
+
         def to_out(m: Meeting) -> DashboardMeetingOut:
             return DashboardMeetingOut(
                 id=int(m.id),
                 title=str(m.title),
                 status=_dashboard_meeting_status_value(m),
-                scheduled_at=m.scheduled_at,
-                started_at=m.started_at,
-                ended_at=m.ended_at,
+                scheduled_at=to_kst_aware(m.scheduled_at),
+                started_at=to_kst_aware(m.started_at),
+                ended_at=to_kst_aware(m.ended_at),
                 meeting_type=m.meeting_type,
+                google_calendar_event_id=m.google_calendar_event_id,
                 participants=parts_by_mid.get(int(m.id), []),
             )
+
+        today = date.today()
+        # "이번주" 기준: 로컬 기준 일요일 00:00 ~ 토요일 23:59:59 (inclusive)
+        week_start_naive = _dashboard_week_start_local(today)
+        week_end_naive = week_start_naive + timedelta(days=6, hours=23, minutes=59, seconds=59)
+
+        def in_this_week(dt: datetime | None) -> bool:
+            if dt is None:
+                return False
+            dt_cmp = dt.replace(tzinfo=None) if dt.tzinfo else dt
+            return week_start_naive <= dt_cmp <= week_end_naive
+
+        def meeting_in_this_week(m: Meeting, status_str: str) -> bool:
+            """
+            대시보드에는 "이번주에 해당하는 회의만" 노출한다.
+            상태별로 기준 시간이 다르므로 기존 집계 로직과 동일한 규칙을 사용한다.
+            """
+            if status_str == MeetingStatus.scheduled.value:
+                return in_this_week(m.scheduled_at)
+            if status_str == MeetingStatus.in_progress.value:
+                return in_this_week(m.started_at or m.scheduled_at)
+            if status_str == MeetingStatus.done.value:
+                return in_this_week(m.ended_at or m.started_at or m.scheduled_at)
+            return False
 
         in_progress: list[DashboardMeetingOut] = []
         scheduled: list[DashboardMeetingOut] = []
         done: list[DashboardMeetingOut] = []
         for m in meetings:
             st = _dashboard_meeting_status_value(m)
+            if not meeting_in_this_week(m, st):
+                continue
             if st == MeetingStatus.in_progress.value:
                 in_progress.append(to_out(m))
             elif st == MeetingStatus.scheduled.value:
@@ -683,17 +892,6 @@ class DashboardService:
             key=lambda x: x.ended_at or x.started_at or _min,
             reverse=True,
         )
-
-        today = date.today()
-        # "이번주" 기준: 로컬 기준 월요일 00:00 ~ 다음주 월요일 00:00 (exclusive)
-        week_start_naive = _dashboard_week_start_local(today)
-        week_end_naive = week_start_naive + timedelta(days=7)
-
-        def in_this_week(dt: datetime | None) -> bool:
-            if dt is None:
-                return False
-            dt_cmp = dt.replace(tzinfo=None) if dt.tzinfo else dt
-            return week_start_naive <= dt_cmp < week_end_naive
 
         # NOTE: 메인(Home) "회의 수"는 이번주 scheduled + in_progress + done을 모두 합산합니다.
         week_meeting_count = 0
@@ -717,7 +915,7 @@ class DashboardService:
                     continue
                 ended = m.ended_at
                 ended_cmp = ended.replace(tzinfo=None) if ended.tzinfo else ended
-                if ended_cmp < week_start_naive or ended_cmp >= week_end_naive:
+                if ended_cmp < week_start_naive or ended_cmp > week_end_naive:
                     continue
                 if m.started_at:
                     start = m.started_at
@@ -728,8 +926,29 @@ class DashboardService:
         weekly = WeeklySummaryOut(
             total_count=week_meeting_count,
             total_duration_min=total_minutes,
+            action_items_total=0,
+            action_items_done=0,
             summary_cards=[],
         )
+
+        # 액션 아이템 완료율: 워크스페이스 전체(모든 회의)의 액션 아이템 기준 집계
+        action_total = (
+            db.query(ActionItem.id)
+            .join(Meeting, Meeting.id == ActionItem.meeting_id)
+            .filter(Meeting.workspace_id == workspace_id)
+            .count()
+        )
+        action_done = (
+            db.query(ActionItem.id)
+            .join(Meeting, Meeting.id == ActionItem.meeting_id)
+            .filter(
+                Meeting.workspace_id == workspace_id,
+                ActionItem.status == ActionStatus.done,
+            )
+            .count()
+        )
+        weekly.action_items_total = int(action_total)
+        weekly.action_items_done = int(action_done)
 
         pending_rows = (
             db.query(ActionItem, Meeting.title)
