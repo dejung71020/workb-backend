@@ -15,10 +15,12 @@ async def build_and_save_minutes(db: Session, meeting_id: int) -> MeetingMinute:
     if existing:
         return existing
     
+    # 회의 요약 데이터 몽고 DB['meeting_summaires']의 meeting_id에 해당하는 데이터 가져오기
     summary = get_meeting_summary(meeting_id)
     if not summary:
         raise ValueError(f"회의 요약 데이터가 없습니다. (meeting_id: {meeting_id})")
     
+    # 회의록 만들기 content에 우리가 정해놓은 형식으로 넣기
     minute = MeetingMinute(
         meeting_id=meeting_id,
         content=_format_minutes(summary),
@@ -59,7 +61,29 @@ async def build_and_save_minutes(db: Session, meeting_id: int) -> MeetingMinute:
 
 def _format_minutes(summary: dict) -> str:
     """
-    회의록 형식 템플릿
+    회의록 형식 템플릿 형식
+
+    ## 개요 
+    - 목적: 사랑해요 이한마디 참좋은말
+    - 일시: 2025-04-26 14:00
+    - 참석자: 이대중, 박예린, 김정우
+
+    ## 논의 사항
+    ### WBS 일정 확정
+    4월 말까지 백엔드 API 완성 목표. 각자 담당 도메인 기준으로 분배.
+    ### Slack 연동 테스트
+    Slack 내보내기 기능 구현 완료. 회의록과 보고서를 채널에 자동 전송.
+
+    ## 결정 사항
+    - 보고서 포맷은 Markdown과 Excel 우선 지원
+
+    ## 액션 아이템
+    - [이대중] Notion 내보내기 클라이언트 구현 (~2025-05-03)
+    - [박예린] 워크스페이스 생성 시 integration 5개 자동 INSERT 추가 (~2025-05-01)
+
+    ## 미결 사항
+    - 등등
+
     """
     lines = []
 

@@ -1,5 +1,8 @@
 # app\domains\meeting\models.py
 from sqlalchemy import Column, String, Enum, DateTime, Boolean, ForeignKey, Integer, func
+from sqlalchemy.dialects.mysql import LONGTEXT
+from sqlalchemy.orm import Mapped, mapped_column
+from datetime import datetime, date
 from app.infra.database.base import Base
 import enum
 
@@ -41,12 +44,13 @@ class MeetingParticipant(Base):
 class SpeakerProfile(Base):
     __tablename__ = "speaker_profiles"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    workspace_id = Column(Integer, ForeignKey("workspaces.id"), nullable=False)
-    voice_model_path = Column(String(500), nullable=True)
-    diarization_method = Column(Enum(DiarizationMethod), nullable=False)
-    is_verified = Column(Boolean, default=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    workspace_id: Mapped[int] = mapped_column(Integer, ForeignKey("workspaces.id"), nullable=False)
+    voice_model_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    diarization_method: Mapped[DiarizationMethod] = mapped_column(Enum(DiarizationMethod), nullable=False)
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    voice_embedding: Mapped[str | None] = mapped_column(LONGTEXT, nullable=True)
     
     created_at = Column(DateTime, default=func.now(), nullable=False)
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
