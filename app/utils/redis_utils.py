@@ -1,5 +1,4 @@
 # app/utils/redis_utils.py
-from numpy._core.numerictypes import int32
 import redis
 import json
 from motor.motor_asyncio import AsyncIOMotorClient

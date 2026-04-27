@@ -46,6 +46,13 @@ pip-delete-this-directory.txt
 secrets.json
 *.pem
 *.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+credentials.json
+token.json
 
 # =================================================================
 # [IDE & 에디터] - 개인 취향 설정 (충돌 방지)
@@ -64,7 +71,7 @@ secrets.json
 # =================================================================
 /.cursor/
 /.claude/
-/.vsxode/
+/.vscode/
 /.cursorrules
 /AGENTS.md
 /docs/
@@ -75,12 +82,19 @@ CLAUDE.md
 # =================================================================
 *.db
 *.sqlite3
+*.sqlite
+*.db-shm
+*.db-wal
+*.sqlite-shm
+*.sqlite-wal
 logs/
 *.log
 .coverage
 htmlcov/
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+.hypothesis/
 
 # [Vector DB 관련 임시 데이터]
 data/
