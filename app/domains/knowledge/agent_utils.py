@@ -457,10 +457,10 @@ async def summary_node(state: SharedState) -> dict:
     # 검증 대상: decisions + action_items (요약 중 사실 관계 오류가 가장 치명적인 섹션)
     check_targets = [
         (d.get("decision", ""), d.get("citiation", "")) 
-        for d in summary_dict.get("decisions", [])
+        for d in summary_dict.get("decisions", []) or []
     ] + [
         (a.get("content", ""), a.get("citiation", "")) 
-        for a in summary_dict.get("action_items", [])
+        for a in summary_dict.get("action_items", []) or []
     ]
 
     for item_text, citation in check_targets:
@@ -598,7 +598,7 @@ async def past_summary_node(state: SharedState) -> dict:
 
     # 회의별 텍스트 블록 구성
     meetings_text = "\n\n".join([
-        f"[회의 {m['meeting_id']}] {m.get('title', '')}\n{m.get('summary', '')}"
+        f"[회의 {m['meeting_id']}] {m.get('title', '')}\n{m.get('summary', '')}" 
         for m in meetings
     ])
 
