@@ -512,8 +512,10 @@ async def summary_node(state: SharedState) -> dict:
         "function_type": "summary"
     }
 
-async def _get_meetings_by_question(question: str, workspace_id: int) -> list[dict]:
-    """user_question에서 날짜 범위 추출해서 MongoDB 필터링. 날짜 없으면 전체 반환."""
+async def _get_meetings_by_question(question: str, workspace_id: int) -> tuple[list[dict], bool]:
+    """user_question에서 날짜 범위 추출해서 MongoDB 필터링.
+    반환: (meetings, has_date_range) — has_date_range=True면 날짜 조건으로 필터링된 결과.
+    """
     from app.domains.knowledge.repository import get_all_past_meetings_by_workspace
     all_meetings = await get_all_past_meetings_by_workspace(workspace_id)
 
@@ -535,13 +537,14 @@ async def _get_meetings_by_question(question: str, workspace_id: int) -> list[di
         start, end = None, None
 
     if start or end:
-        return [
+        filtered = [
             m for m in all_meetings
             if (not start or m.get("created_at", now_kst().min) >= start)
             and (not end or m.get("created_at", now_kst().max) <= end)
         ]
+        return filtered, True
 
-    return all_meetings
+    return all_meetings, False
 
 async def past_summary_node(state: SharedState) -> dict:
     """
@@ -559,10 +562,10 @@ async def past_summary_node(state: SharedState) -> dict:
 
     if not past_meeting_ids:
         # 날짜 범위가 있는 경우만 자동 검색
-        meetings = await _get_meetings_by_question(state.get("user_question", ""), workspace_id)
+        meetings, has_date_range = await _get_meetings_by_question(state.get("user_question", ""), workspace_id)
 
         # 날짜 범위도 없이 전체가 나오는 건 의도한 동작이 아님
-        if not meetings or len(meetings) > 1:
+        if not has_date_range:
             return {
                 "chat_response": "어떤 회의를 요약할지 선택해주세요.",
                 "function_type": "past_summary",
