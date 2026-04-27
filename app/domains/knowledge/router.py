@@ -100,7 +100,7 @@ async def chatbot_message(workspace_id: int, req: ChatbotMessageRequest, session
         session_id=session_id,
         function_type=result["function_type"],
         answer=result["chat_response"],
-        result={},
+        result={"sources": result.get("web_sources", [])},
         timestamp=now_kst()
     )
 

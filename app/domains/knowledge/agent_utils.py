@@ -274,7 +274,11 @@ async def knowledge_node(state: SharedState) -> dict:
     - high: 발화에 명확한 근거 있음
     - medium: 발화에 간접적으로 언급됨
     - Low: 발화에 근거 없거나 추측
-    citations: 도구 사용 결과나 외부 정보면 []. 회의 내용 기반이면 반드시 원문 발췌.
+    
+    citations 규칙:                                                                          
+    - web_search 도구를 사용했으면 반드시 []. 절대 웹 검색 내용을 citations에 넣지 마세요.   
+    - search_past_meetings 도구를 사용했으면 반환된 snippet 원문을 그대로 복사.              
+    - 회의 발화 기반이면 [화자명] 발화내용 형식으로 원문 발췌.
 
     {meeting_filter_hint}
     """
@@ -285,6 +289,24 @@ async def knowledge_node(state: SharedState) -> dict:
             {"role": "user", "content": state["user_question"]}
         ]
     })
+
+    # Tavily ToolMessage에서 웹 소스 추출
+    web_sources = []
+    for msg in result["messages"]:
+        if getattr(msg, "name", None) == "tavily_search_results_json":
+            try:
+                raw = json.loads(msg.content) if isinstance(msg.content, str) else msg.content
+                if isinstance(raw, list):
+                    web_sources = [
+                        {
+                            "title": s.get("title", ""),
+                            "url": s.get("url", ""),
+                            "snippet": s.get("content", "")[:200],
+                        }
+                        for s in raw if s.get("url")
+                    ]
+            except Exception:
+                pass
 
     # 도구 사용 여부 확인 - tool_calls 있으면 웹검색/캘린더 등 외부 도구 사용한 것
     tool_used = any(
@@ -305,9 +327,10 @@ async def knowledge_node(state: SharedState) -> dict:
     citations = parsed.get("citations", [])
 
     if tool_used:
-        # search_past_meetings: 이전 회의 발화가 citations로 오면 표시                                                 
-        # web_search: LLM이 citations=[]로 반환하므로 아무것도 추가 안 됨 
-        if citations:
+        if web_sources:
+            pass
+        # search_past_meetings: 이전 회의 발화가 citations로 오면 표시
+        elif citations:
             citation_block = "\n\n**📎 근거 발화:**\n" + "\n".join(f"> {c}" for c in citations)                          
             answer += citation_block
     else:
@@ -347,7 +370,8 @@ async def knowledge_node(state: SharedState) -> dict:
 
     return {
         "chat_response": answer,
-        "function_type": "agent"
+        "function_type": "agent",
+        "web_sources": web_sources,
     }
 
 async def summary_node(state: SharedState) -> dict:
