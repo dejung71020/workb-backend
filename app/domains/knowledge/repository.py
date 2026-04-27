@@ -132,3 +132,14 @@ def get_workspace_id(meeting_id: int) -> int:
         return row.workspace_id if row else None
     finally:
         db.close()
+
+def get_user_name_by_id(user_id: int) -> str | None:
+    db = SessionLocal()
+    try:
+        row = db.execute(
+            text("SELECT name FROM users WHERE id = :user_id"),
+            {"user_id": user_id}
+        ).fetchone()
+        return row.name if row else None
+    finally:
+        db.close()
