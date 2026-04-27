@@ -86,6 +86,10 @@ async def test_integration(db: Session, workspace_id: int, service: ServiceType)
 # --- Google Calendar OAuth ---
 
 def get_google_auth_url(workspace_id: int):
+    if not settings.GOOGLE_CLIENT_ID:
+        raise ValueError("GOOGLE_CLIENT_ID가 설정되어 있지 않습니다. (.env 또는 환경변수 확인)")
+    if not settings.GOOGLE_REDIRECT_URI:
+        raise ValueError("GOOGLE_REDIRECT_URI가 설정되어 있지 않습니다. (.env 또는 환경변수 확인)")
     state = _encode_state(workspace_id)
     params = (
         f"https://accounts.google.com/o/oauth2/v2/auth"
@@ -100,6 +104,8 @@ def get_google_auth_url(workspace_id: int):
     return params
 
 async def handle_google_callback(db: Session, code: str, state: str) -> int:
+    if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
+        raise ValueError("Google OAuth 설정이 누락되었습니다. (GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET 확인)")
     workspace_id = _decode_state(state)
     client = await ClientSessionManager.get_client()
 

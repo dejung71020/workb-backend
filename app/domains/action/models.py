@@ -22,8 +22,9 @@ class Priority(str, enum.Enum):
     critical = "critical"
 
 class ReportFormat(str, enum.Enum):
-    xlsx = "xlsx"
-    pptx = "pptx"
+    markdown = "markdown"
+    excel = "excel"
+    wbs = "wbs"
     html = "html"
 
 class ActionItem(Base):
@@ -47,6 +48,7 @@ class WbsEpic(Base):
     title:          Mapped[str]         = mapped_column(String(200), nullable=False)
     order_index:    Mapped[int]         = mapped_column(Integer, nullable=False)
     jira_epic_id:   Mapped[str | None]  = mapped_column(String(100), nullable=True)
+    notion_page_id: Mapped[str | None]  = mapped_column(String(100), nullable=True)
 
 
 class WbsTask(Base):
@@ -73,5 +75,9 @@ class Report(Base):
     meeting_id: Mapped[int]             = mapped_column(Integer, ForeignKey("meetings.id"), nullable=False)
     created_by: Mapped[int]             = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
     format:     Mapped[ReportFormat]    = mapped_column(Enum(ReportFormat), nullable=False)
+    title:      Mapped[str]             = mapped_column(String(200), nullable=False)
+    content:    Mapped[str | None]      = mapped_column(Text, nullable=True)
     file_url:   Mapped[str | None]      = mapped_column(String(500), nullable=True)
+    thumbnail_url:Mapped[str | None]    = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime]        = mapped_column(DateTime, default=func.now(), nullable=False)
+    updated_at: Mapped[datetime]        = mapped_column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
