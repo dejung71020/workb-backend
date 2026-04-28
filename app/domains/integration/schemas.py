@@ -11,6 +11,8 @@ class IntegrationResponse(BaseModel):
     service: ServiceType
     is_connected: bool
     selected_channel_id: Optional[str] = None
+    selected_calendar_id: Optional[str] = None
+    selected_calendar_name: Optional[str] = None
     
     updated_at: datetime
 
@@ -86,3 +88,4 @@ class GoogleCalendarCreateResponse(BaseModel):
 
 class GoogleCalendarSelectRequest(BaseModel):
     calendar_id: str
+    calendar_name: Optional[str] = None

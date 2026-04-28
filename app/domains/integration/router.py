@@ -40,6 +40,8 @@ def _to_response(item: Integration) -> IntegrationResponse:
         service=item.service,
         is_connected=item.is_connected,
         selected_channel_id=item.extra_config.get("channel_id") if item.extra_config else None,
+        selected_calendar_id=item.extra_config.get("calendar_id") if item.extra_config else None,
+        selected_calendar_name=item.extra_config.get("calendar_name") if item.extra_config else None,
         updated_at=item.updated_at,
     )
 
@@ -274,7 +276,7 @@ async def select_google_calendar(
     integrations.extra_config = {"calendar_id": "..."}
     """
     try:
-        item = service.save_workspace_google_calendar_id(db, workspace_id, body.calendar_id)
+        item = service.save_workspace_google_calendar_id(db, workspace_id, body.calendar_id, body.calendar_name)
         return _to_response(item)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
