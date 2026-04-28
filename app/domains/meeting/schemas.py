@@ -7,6 +7,7 @@ from typing import Literal, Optional
 class CreateMeetingRequest(BaseModel):
     title: str
     meeting_type: str
+    room_name: str | None = None
     scheduled_at: datetime
     participant_ids: list[int] = Field(default_factory=list)
     sync_google_calendar: bool = False
@@ -16,6 +17,7 @@ class CreateMeetingRequest(BaseModel):
 class CreateMeetingResponseData(BaseModel):
     meeting_id: int
     title: str
+    room_name: str | None = None
     scheduled_at: datetime
     google_calendar_event_id: Optional[str] = None
 
@@ -28,6 +30,7 @@ class CreateMeetingResponse(BaseModel):
 class UpdateMeetingRequest(BaseModel):
     title: str
     meeting_type: str
+    room_name: str | None = None
     scheduled_at: datetime
     participant_ids: list[int] = Field(default_factory=list)
     sync_google_calendar: bool | None = None
@@ -51,6 +54,7 @@ class MeetingDetailOut(BaseModel):
     title: str
     status: str
     meeting_type: Optional[str] = None
+    room_name: Optional[str] = None
     scheduled_at: Optional[datetime] = None
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
@@ -83,6 +87,7 @@ class MeetingSearchParticipantOut(BaseModel):
 class MeetingSearchItemOut(BaseModel):
     meeting_id: int
     title: str
+    room_name: Optional[str] = None
     scheduled_at: Optional[datetime] = None
     participants: list[MeetingSearchParticipantOut] = Field(default_factory=list)
     summary: Optional[str] = None

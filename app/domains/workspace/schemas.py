@@ -42,6 +42,7 @@ class DashboardMeetingOut(BaseModel):
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     meeting_type: Optional[str] = None
+    room_name: Optional[str] = None
     google_calendar_event_id: Optional[str] = None
     participants: list[DashboardParticipantOut] = Field(default_factory=list)
 

@@ -839,6 +839,7 @@ class DashboardService:
                 started_at=to_kst_aware(m.started_at),
                 ended_at=to_kst_aware(m.ended_at),
                 meeting_type=m.meeting_type,
+                room_name=getattr(m, "room_name", None),
                 google_calendar_event_id=m.google_calendar_event_id,
                 participants=parts_by_mid.get(int(m.id), []),
             )

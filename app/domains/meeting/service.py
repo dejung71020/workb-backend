@@ -95,6 +95,7 @@ class MeetingCreateService:
             created_by=created_by,
             title=payload.title,
             meeting_type=payload.meeting_type,
+            room_name=(payload.room_name or "미지정"),
             scheduled_at=_to_kst_naive(payload.scheduled_at),
             status=MeetingStatus.scheduled,
             google_calendar_event_id=None,
@@ -175,6 +176,7 @@ class MeetingCreateService:
             data=CreateMeetingResponseData(
                 meeting_id=int(meeting.id),
                 title=meeting.title,
+                room_name=getattr(meeting, "room_name", None),
                 scheduled_at=_to_kst_aware(meeting.scheduled_at),  # type: ignore[arg-type]
                 google_calendar_event_id=meeting.google_calendar_event_id,
             ),
@@ -312,6 +314,8 @@ class MeetingUpdateService:
         try:
             meeting.title = payload.title
             meeting.meeting_type = payload.meeting_type
+            if payload.room_name is not None:
+                meeting.room_name = payload.room_name or "미지정"
             meeting.scheduled_at = _to_kst_naive(payload.scheduled_at)
 
             # 참석자 갱신: 기존 제거 후 재삽입 (생성자는 host 유지)
@@ -413,6 +417,7 @@ class MeetingUpdateService:
             data=CreateMeetingResponseData(
                 meeting_id=int(meeting.id),
                 title=meeting.title,
+                room_name=getattr(meeting, "room_name", None),
                 scheduled_at=_to_kst_aware(meeting.scheduled_at),  # type: ignore[arg-type]
                 google_calendar_event_id=meeting.google_calendar_event_id,
             ),
@@ -547,6 +552,7 @@ class MeetingSearchService:
                 MeetingSearchItemOut(
                     meeting_id=mid,
                     title=m.title,
+                    room_name=getattr(m, "room_name", None),
                     scheduled_at=_to_kst_aware(m.scheduled_at),  # type: ignore[arg-type]
                     participants=participants_by_meeting.get(mid, []),
                     summary=summary_by_meeting.get(mid),
@@ -644,6 +650,7 @@ class MeetingDetailService:
                 title=str(meeting.title),
                 status=status_str,
                 meeting_type=meeting.meeting_type,
+                room_name=getattr(meeting, "room_name", None),
                 scheduled_at=_to_kst_aware(meeting.scheduled_at),  # type: ignore[arg-type]
                 started_at=_to_kst_aware(meeting.started_at),  # type: ignore[arg-type]
                 ended_at=_to_kst_aware(meeting.ended_at),  # type: ignore[arg-type]
