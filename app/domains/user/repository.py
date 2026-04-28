@@ -4,7 +4,7 @@
 
 from sqlalchemy.orm import Session
 
-from app.domains.user.models import User
+from app.domains.user.models import User, UserDeviceSetting
 
 
 def get_user_by_email(db: Session, email: str) -> User | None:
@@ -37,6 +37,21 @@ def get_user_by_id(db: Session, user_id: int) -> User | None:
     return db.query(User).filter(User.id == user_id).first()
 
 
+def get_user_by_social_identity(
+    db: Session,
+    provider: str,
+    social_id: str,
+) -> User | None:
+    return (
+        db.query(User)
+        .filter(
+            User.social_provider == provider,
+            User.social_id == social_id,
+        )
+        .first()
+    )
+
+
 def get_users_by_ids(db: Session, user_ids: list[int]) -> list[User]:
     """
     사용자 ID 목록을 기준으로 사용자들을 조회합니다.
@@ -56,6 +71,8 @@ def create_user(
     name: str,
     role: str,
     workspace_id: int | None = None,
+    social_provider: str = "none",
+    social_id: str | None = None,
 ) -> User:
     """
     새로운 사용자를 생성하고 데이터베이스에 저장합니다. 회원가입 시 service 계층에서 전달받은 데이터를 바탕으로 User 객체를 생성하고 저장합니다.
@@ -77,12 +94,27 @@ def create_user(
         name=name,
         role=role,
         workspace_id=workspace_id,
+        social_provider=social_provider,
+        social_id=social_id,
     )
 
     db.add(user)
     db.commit()
     db.refresh(user)
 
+    return user
+
+
+def update_user_social_identity(
+    db: Session,
+    user: User,
+    provider: str,
+    social_id: str,
+) -> User:
+    user.social_provider = provider
+    user.social_id = social_id
+    db.commit()
+    db.refresh(user)
     return user
 
 
@@ -233,3 +265,44 @@ def update_user_department(
     db.refresh(user)
 
     return user
+
+
+def get_user_device_setting(db: Session, user_id: int) -> UserDeviceSetting | None:
+    """
+    사용자별 장비 설정을 조회합니다.
+    """
+    return db.query(UserDeviceSetting).filter(UserDeviceSetting.user_id == user_id).first()
+
+
+def upsert_user_device_setting(
+    db: Session,
+    user_id: int,
+    workspace_id: int | None,
+    is_main_device: bool,
+    selected_mic_id: str | None,
+    selected_camera_id: str | None,
+    mic_enabled: bool,
+    camera_enabled: bool,
+) -> UserDeviceSetting:
+    """
+    사용자별 장비 설정을 생성하거나 갱신합니다.
+    """
+    setting = get_user_device_setting(db, user_id)
+
+    if not setting:
+        setting = UserDeviceSetting(
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
+        db.add(setting)
+
+    setting.workspace_id = workspace_id
+    setting.is_main_device = is_main_device
+    setting.selected_mic_id = selected_mic_id
+    setting.selected_camera_id = selected_camera_id
+    setting.mic_enabled = mic_enabled
+    setting.camera_enabled = camera_enabled
+
+    db.commit()
+    db.refresh(setting)
+    return setting

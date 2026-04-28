@@ -18,18 +18,25 @@ service.py에 넘김
 service가 repository로 DB 작업
 """
 
-from fastapi import APIRouter, Depends, status
+from urllib.parse import urlencode
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.deps import get_current_user_id
 from app.db.session import get_db
 from app.domains.user.schemas import (
     AdminSignupRequest,
     AdminSignupResponse,
+    DeviceSettingsRequest,
+    DeviceSettingsResponse,
     LoginRequest,
     LogoutRequest,
     MemberSignupRequest,
     MessageResponse,
+    OAuthUrlResponse,
     PasswordChangeRequest,
     PasswordResetConfirmRequest,
     PasswordResetRequest,
@@ -39,23 +46,66 @@ from app.domains.user.schemas import (
     UserProfileUpdateRequest,
     UserProfileUpdateResponse,
     UserResponse,
+    UserRole,
 )
 from app.domains.user.service import (
     change_password_service,
     confirm_password_reset_service,
+    get_my_device_settings_service,
     get_my_profile_service,
+    get_social_oauth_url_service,
     login_service,
     logout_service,
     request_password_reset_service,
     refresh_token_service,
+    social_login_callback_service,
     signup_admin_service,
     signup_member_service,
     update_my_profile_service,
+    update_my_device_settings_service,
     withdraw_my_account_service,
 )
 
 
 router = APIRouter()
+
+
+@router.get(
+    "/oauth/{provider}/auth",
+    response_model=OAuthUrlResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def social_oauth_auth(provider: str, role: UserRole = UserRole.MEMBER) -> OAuthUrlResponse:
+    """
+    Google/Kakao 소셜 로그인 시작 URL을 반환합니다.
+    """
+    return get_social_oauth_url_service(provider, role)
+
+
+@router.get("/oauth/{provider}/callback")
+async def social_oauth_callback(
+    provider: str,
+    code: str,
+    state: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """
+    OAuth provider callback을 처리하고 프론트 callback 페이지로 토큰을 전달합니다.
+    """
+    try:
+        tokens = await social_login_callback_service(db, provider, code, state)
+        params = urlencode({
+            "access_token": tokens.access_token,
+            "refresh_token": tokens.refresh_token,
+        })
+        return RedirectResponse(f"{settings.FRONTEND_URL.rstrip('/')}/oauth/callback?{params}")
+    except HTTPException as exc:
+        message = exc.detail if isinstance(exc.detail, str) else "소셜 로그인에 실패했습니다."
+        params = urlencode({"error": message})
+        return RedirectResponse(f"{settings.FRONTEND_URL.rstrip('/')}/login?{params}")
+    except Exception as exc:
+        params = urlencode({"error": str(exc)})
+        return RedirectResponse(f"{settings.FRONTEND_URL.rstrip('/')}/login?{params}")
 
 
 @router.post(
@@ -186,6 +236,37 @@ async def update_my_profile(
     로그인한 사용자의 이름을 수정하고 갱신된 토큰을 발급합니다.
     """
     return update_my_profile_service(db, current_user_id, payload)
+
+
+@router.get(
+    "/me/device-settings",
+    response_model=DeviceSettingsResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_my_device_settings(
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+) -> DeviceSettingsResponse:
+    """
+    로그인한 사용자의 장비 설정을 조회합니다.
+    """
+    return get_my_device_settings_service(db, current_user_id)
+
+
+@router.patch(
+    "/me/device-settings",
+    response_model=DeviceSettingsResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def update_my_device_settings(
+    payload: DeviceSettingsRequest,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+) -> DeviceSettingsResponse:
+    """
+    로그인한 사용자의 장비 설정을 저장합니다.
+    """
+    return update_my_device_settings_service(db, current_user_id, payload)
 
 
 @router.delete(

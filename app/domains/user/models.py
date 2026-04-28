@@ -61,6 +61,17 @@ class User(Base):
         default="member",
     )
 
+    social_provider: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default=SocialProvider.none.value,
+    )
+
+    social_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
     # 사용자가 속한 워크스페이스 ID입니다.
     # 관리자는 가입 시 생성된 워크스페이스와 연결되고,
     # 멤버는 초대코드 검증 후 해당 워크스페이스에 연결됩니다.
@@ -90,4 +101,35 @@ class User(Base):
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
+    )
+
+
+class UserDeviceSetting(Base):
+    __tablename__ = "user_device_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        unique=True,
+        nullable=False,
+    )
+    workspace_id: Mapped[int | None] = mapped_column(
+        ForeignKey("workspaces.id"),
+        nullable=True,
+    )
+    is_main_device: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    selected_mic_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    selected_camera_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    mic_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    camera_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )

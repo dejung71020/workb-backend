@@ -16,8 +16,11 @@ service 계층은 인증 기능의 전체 처리 흐름을 담당합니다.
 security 계층을 호출하여 비밀번호 해시 및 토큰 발급을 처리합니다.
 """
 
+import base64
+import json
 import secrets
 from datetime import datetime, timedelta
+from urllib.parse import urlencode
 
 from fastapi import HTTPException, status
 from jose import JWTError
@@ -36,10 +39,14 @@ from app.domains.integration.repository import create_default_integrations
 from app.domains.user.repository import (
     create_user,
     deactivate_user_account,
+    get_user_device_setting,
     get_user_by_email,
     get_user_by_id,
+    get_user_by_social_identity,
+    update_user_social_identity,
     update_user_profile,
     update_user_password,
+    upsert_user_device_setting,
 )
 from app.domains.workspace.models import MemberRole
 from app.domains.workspace.repository import (
@@ -56,10 +63,13 @@ from app.domains.workspace.repository import (
 from app.domains.user.schemas import (
     AdminSignupRequest,
     AdminSignupResponse,
+    DeviceSettingsRequest,
+    DeviceSettingsResponse,
     LoginRequest,
     LogoutRequest,
     MemberSignupRequest,
     MessageResponse,
+    OAuthUrlResponse,
     PasswordChangeRequest,
     PasswordResetConfirmRequest,
     PasswordResetRequest,
@@ -71,7 +81,8 @@ from app.domains.user.schemas import (
     UserResponse,
     UserRole,
 )
-from app.domains.user.models import User
+from app.domains.user.models import SocialProvider, User
+from app.infra.clients.session_manager import ClientSessionManager
 
 
 def _generate_invite_code() -> str:
@@ -82,6 +93,30 @@ def _generate_invite_code() -> str:
         대문자 기반의 8자리 초대코드를 반환합니다.
     """
     return secrets.token_hex(4).upper()
+
+
+def _encode_oauth_state(provider: str, role: str) -> str:
+    return base64.urlsafe_b64encode(
+        json.dumps({"provider": provider, "role": role}).encode("utf-8"),
+    ).decode("utf-8")
+
+
+def _decode_oauth_state(state: str) -> dict[str, str]:
+    try:
+        data = json.loads(base64.urlsafe_b64decode(state.encode("utf-8")).decode("utf-8"))
+    except (ValueError, json.JSONDecodeError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="유효하지 않은 OAuth state입니다.",
+        ) from None
+
+    provider = data.get("provider")
+    role = data.get("role")
+    if provider not in {SocialProvider.google.value, SocialProvider.kakao.value}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="지원하지 않는 소셜 로그인입니다.")
+    if role not in {UserRole.ADMIN.value, UserRole.MEMBER.value}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="지원하지 않는 사용자 역할입니다.")
+    return {"provider": provider, "role": role}
 
 
 def _access_token_claims(user: User) -> dict[str, str | int | None]:
@@ -97,6 +132,30 @@ def _access_token_claims(user: User) -> dict[str, str | int | None]:
     }
 
 
+def _token_response_for_user(user: User) -> TokenResponse:
+    return TokenResponse(
+        access_token=create_access_token(
+            subject=str(user.id),
+            extra_claims=_access_token_claims(user),
+        ),
+        refresh_token=create_refresh_token(subject=str(user.id)),
+    )
+
+
+def _ensure_requested_social_role(user: User, requested_role: str) -> None:
+    if requested_role == UserRole.ADMIN.value and user.role != UserRole.ADMIN.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="관리자 계정으로 로그인해주세요.",
+        )
+
+    if requested_role == UserRole.MEMBER.value and user.role == UserRole.ADMIN.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="멤버 계정으로 로그인해주세요.",
+        )
+
+
 def _user_profile_response(user: User) -> UserProfileResponse:
     return UserProfileResponse(
         id=user.id,
@@ -104,6 +163,26 @@ def _user_profile_response(user: User) -> UserProfileResponse:
         name=user.name,
         role=UserRole(user.role),
         workspace_id=user.workspace_id,
+    )
+
+
+def _device_settings_response(
+    user_id: int,
+    workspace_id: int | None,
+    is_main_device: bool = True,
+    selected_mic_id: str | None = None,
+    selected_camera_id: str | None = None,
+    mic_enabled: bool = True,
+    camera_enabled: bool = True,
+) -> DeviceSettingsResponse:
+    return DeviceSettingsResponse(
+        user_id=user_id,
+        workspace_id=workspace_id,
+        is_main_device=is_main_device,
+        selected_mic_id=selected_mic_id,
+        selected_camera_id=selected_camera_id,
+        mic_enabled=mic_enabled,
+        camera_enabled=camera_enabled,
     )
 
 
@@ -287,16 +366,160 @@ def login_service(db: Session, payload: LoginRequest) -> TokenResponse:
             detail="이메일 또는 비밀번호가 올바르지 않습니다.",
         )
 
-    access_token = create_access_token(
-        subject=str(user.id),
-        extra_claims=_access_token_claims(user),
-    )
-    refresh_token = create_refresh_token(subject=str(user.id))
+    return _token_response_for_user(user)
 
-    return TokenResponse(
-        access_token=access_token,
-        refresh_token=refresh_token,
+
+def get_social_oauth_url_service(provider: str, role: UserRole) -> OAuthUrlResponse:
+    state = _encode_oauth_state(provider, role.value)
+
+    if provider == SocialProvider.google.value:
+        if not settings.GOOGLE_CLIENT_ID:
+            raise HTTPException(status_code=500, detail="GOOGLE_CLIENT_ID가 설정되어 있지 않습니다.")
+        params = urlencode({
+            "client_id": settings.GOOGLE_CLIENT_ID,
+            "redirect_uri": settings.GOOGLE_LOGIN_REDIRECT_URI,
+            "response_type": "code",
+            "scope": "openid email profile",
+            "state": state,
+            "prompt": "select_account",
+        })
+        return OAuthUrlResponse(auth_url=f"https://accounts.google.com/o/oauth2/v2/auth?{params}")
+
+    if provider == SocialProvider.kakao.value:
+        if not settings.KAKAO_REST_API_KEY:
+            raise HTTPException(status_code=500, detail="KAKAO_REST_API_KEY가 설정되어 있지 않습니다.")
+        params = urlencode({
+            "client_id": settings.KAKAO_REST_API_KEY,
+            "redirect_uri": settings.KAKAO_LOGIN_REDIRECT_URI,
+            "response_type": "code",
+            "state": state,
+        })
+        return OAuthUrlResponse(auth_url=f"https://kauth.kakao.com/oauth/authorize?{params}")
+
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="지원하지 않는 소셜 로그인입니다.")
+
+
+async def _fetch_google_profile(code: str) -> dict[str, str]:
+    if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
+        raise HTTPException(status_code=500, detail="Google OAuth 설정이 누락되었습니다.")
+
+    client = await ClientSessionManager.get_client()
+    token_res = await client.post(
+        "https://oauth2.googleapis.com/token",
+        data={
+            "code": code,
+            "client_id": settings.GOOGLE_CLIENT_ID,
+            "client_secret": settings.GOOGLE_CLIENT_SECRET,
+            "redirect_uri": settings.GOOGLE_LOGIN_REDIRECT_URI,
+            "grant_type": "authorization_code",
+        },
     )
+    token_res.raise_for_status()
+    access_token = token_res.json()["access_token"]
+
+    user_res = await client.get(
+        "https://www.googleapis.com/oauth2/v2/userinfo",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    user_res.raise_for_status()
+    data = user_res.json()
+    return {
+        "social_id": str(data["id"]),
+        "email": data["email"],
+        "name": data.get("name") or data["email"].split("@")[0],
+    }
+
+
+async def _fetch_kakao_profile(code: str) -> dict[str, str]:
+    if not settings.KAKAO_REST_API_KEY:
+        raise HTTPException(status_code=500, detail="KAKAO_REST_API_KEY가 설정되어 있지 않습니다.")
+
+    client = await ClientSessionManager.get_client()
+    token_payload = {
+        "grant_type": "authorization_code",
+        "client_id": settings.KAKAO_REST_API_KEY,
+        "redirect_uri": settings.KAKAO_LOGIN_REDIRECT_URI,
+        "code": code,
+    }
+    if settings.KAKAO_CLIENT_SECRET:
+        token_payload["client_secret"] = settings.KAKAO_CLIENT_SECRET
+
+    token_res = await client.post("https://kauth.kakao.com/oauth/token", data=token_payload)
+    token_res.raise_for_status()
+    access_token = token_res.json()["access_token"]
+
+    user_res = await client.get(
+        "https://kapi.kakao.com/v2/user/me",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    user_res.raise_for_status()
+    data = user_res.json()
+    kakao_account = data.get("kakao_account") or {}
+    profile = kakao_account.get("profile") or {}
+    email = kakao_account.get("email")
+    if not email:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="카카오 계정 이메일 제공 동의가 필요합니다.")
+    return {
+        "social_id": str(data["id"]),
+        "email": email,
+        "name": profile.get("nickname") or email.split("@")[0],
+    }
+
+
+async def social_login_callback_service(db: Session, provider: str, code: str, state: str) -> TokenResponse:
+    state_data = _decode_oauth_state(state)
+    if state_data["provider"] != provider:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OAuth provider 정보가 일치하지 않습니다.")
+
+    profile = (
+        await _fetch_google_profile(code)
+        if provider == SocialProvider.google.value
+        else await _fetch_kakao_profile(code)
+    )
+
+    user = get_user_by_social_identity(db, provider, profile["social_id"])
+    if not user:
+        existing_user = get_user_by_email(db, profile["email"])
+        if existing_user:
+            _ensure_requested_social_role(existing_user, state_data["role"])
+            user = update_user_social_identity(db, existing_user, provider, profile["social_id"])
+
+    if not user:
+        if state_data["role"] != UserRole.ADMIN.value:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="멤버 소셜 로그인은 기존 가입 계정만 사용할 수 있습니다. 초대코드로 먼저 가입해주세요.",
+            )
+
+        workspace = create_workspace(
+            db=db,
+            name=f"{profile['name']} Workspace",
+            invite_code=_generate_invite_code(),
+        )
+        create_default_integrations(db=db, workspace_id=workspace.id)
+        user = create_user(
+            db=db,
+            email=profile["email"],
+            hashed_password=hash_password(secrets.token_urlsafe(32)),
+            name=profile["name"],
+            role=UserRole.ADMIN.value,
+            workspace_id=workspace.id,
+            social_provider=provider,
+            social_id=profile["social_id"],
+        )
+        create_workspace_membership(
+            db=db,
+            workspace_id=workspace.id,
+            user_id=user.id,
+            role=MemberRole.admin,
+        )
+
+    if not user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="탈퇴했거나 비활성화된 계정입니다.")
+
+    _ensure_requested_social_role(user, state_data["role"])
+
+    return _token_response_for_user(user)
 
 
 def refresh_token_service(db: Session, payload: RefreshTokenRequest) -> TokenResponse:
@@ -420,6 +643,69 @@ def update_my_profile_service(
         access_token=access_token,
         refresh_token=refresh_token,
         message="프로필이 변경되었습니다.",
+    )
+
+
+def get_my_device_settings_service(
+    db: Session,
+    current_user_id: int,
+) -> DeviceSettingsResponse:
+    user = get_user_by_id(db, current_user_id)
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
+    setting = get_user_device_setting(db, current_user_id)
+    if not setting:
+        return _device_settings_response(
+            user_id=user.id,
+            workspace_id=user.workspace_id,
+        )
+
+    return _device_settings_response(
+        user_id=user.id,
+        workspace_id=setting.workspace_id,
+        is_main_device=setting.is_main_device,
+        selected_mic_id=setting.selected_mic_id,
+        selected_camera_id=setting.selected_camera_id,
+        mic_enabled=setting.mic_enabled,
+        camera_enabled=setting.camera_enabled,
+    )
+
+
+def update_my_device_settings_service(
+    db: Session,
+    current_user_id: int,
+    payload: DeviceSettingsRequest,
+) -> DeviceSettingsResponse:
+    user = get_user_by_id(db, current_user_id)
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
+    setting = upsert_user_device_setting(
+        db=db,
+        user_id=user.id,
+        workspace_id=user.workspace_id,
+        is_main_device=payload.is_main_device,
+        selected_mic_id=payload.selected_mic_id,
+        selected_camera_id=payload.selected_camera_id,
+        mic_enabled=payload.mic_enabled,
+        camera_enabled=payload.camera_enabled,
+    )
+
+    return _device_settings_response(
+        user_id=user.id,
+        workspace_id=setting.workspace_id,
+        is_main_device=setting.is_main_device,
+        selected_mic_id=setting.selected_mic_id,
+        selected_camera_id=setting.selected_camera_id,
+        mic_enabled=setting.mic_enabled,
+        camera_enabled=setting.camera_enabled,
     )
 
 

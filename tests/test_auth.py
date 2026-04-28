@@ -11,8 +11,11 @@
 - POST /password-change : 비밀번호 변경
 """
 
+import asyncio
+
 import pytest
 from app.core.security import create_refresh_token
+from app.domains.user.service import _encode_oauth_state, social_login_callback_service
 
 
 BASE = "/api/v1/users"
@@ -161,6 +164,96 @@ class TestLogin:
             "password": "WrongPw1",
         })
         assert res.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# 소셜 로그인
+# ---------------------------------------------------------------------------
+
+class TestSocialLogin:
+    def test_google_auth_url_contains_role_state(self, client, monkeypatch):
+        monkeypatch.setattr("app.domains.user.service.settings.GOOGLE_CLIENT_ID", "google-client-id")
+
+        res = client.get(f"{BASE}/oauth/google/auth?role=admin")
+
+        assert res.status_code == 200
+        auth_url = res.json()["auth_url"]
+        assert "https://accounts.google.com/o/oauth2/v2/auth" in auth_url
+        assert "client_id=google-client-id" in auth_url
+        assert "scope=openid+email+profile" in auth_url
+        assert "state=" in auth_url
+
+    def test_existing_admin_can_login_with_google_by_email(self, db, admin_user, monkeypatch):
+        user, _ = admin_user
+
+        async def fake_google_profile(code: str):
+            return {
+                "social_id": "google-123",
+                "email": user.email,
+                "name": user.name,
+            }
+
+        monkeypatch.setattr("app.domains.user.service._fetch_google_profile", fake_google_profile)
+
+        tokens = asyncio.run(
+            social_login_callback_service(
+                db,
+                "google",
+                "auth-code",
+                _encode_oauth_state("google", "admin"),
+            ),
+        )
+
+        db.refresh(user)
+        assert tokens.token_type == "bearer"
+        assert user.social_provider == "google"
+        assert user.social_id == "google-123"
+
+    def test_admin_tab_rejects_existing_member_social_account(self, db, member_user, monkeypatch):
+        async def fake_google_profile(code: str):
+            return {
+                "social_id": "google-member",
+                "email": member_user.email,
+                "name": member_user.name,
+            }
+
+        monkeypatch.setattr("app.domains.user.service._fetch_google_profile", fake_google_profile)
+
+        with pytest.raises(Exception) as exc:
+            asyncio.run(
+                social_login_callback_service(
+                    db,
+                    "google",
+                    "auth-code",
+                    _encode_oauth_state("google", "admin"),
+                ),
+            )
+
+        assert "관리자 계정으로 로그인해주세요." in str(exc.value)
+
+    def test_member_tab_rejects_existing_admin_social_account(self, db, admin_user, monkeypatch):
+        user, _ = admin_user
+
+        async def fake_google_profile(code: str):
+            return {
+                "social_id": "google-admin",
+                "email": user.email,
+                "name": user.name,
+            }
+
+        monkeypatch.setattr("app.domains.user.service._fetch_google_profile", fake_google_profile)
+
+        with pytest.raises(Exception) as exc:
+            asyncio.run(
+                social_login_callback_service(
+                    db,
+                    "google",
+                    "auth-code",
+                    _encode_oauth_state("google", "member"),
+                ),
+            )
+
+        assert "멤버 계정으로 로그인해주세요." in str(exc.value)
 
 
 # ---------------------------------------------------------------------------

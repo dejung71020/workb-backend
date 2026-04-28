@@ -636,7 +636,7 @@ async def past_summary_node(state: SharedState) -> dict:
 
     # 회의별 텍스트 블록 구성
     meetings_text = "\n\n".join([
-        f"[회의 {m['meeting_id']}] {m.get('title', '')}\n{m.get('summary', '')}" 
+        f"[회의 {m['meeting_id']}] {m.get('title', '')}\n{m.get('summary', '')}"
         for m in meetings
     ])
 

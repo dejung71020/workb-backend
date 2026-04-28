@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: Optional[str] = None
     GOOGLE_CLIENT_SECRET: Optional[str] = None
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/integrations/google/callback"
+    GOOGLE_LOGIN_REDIRECT_URI: str = "http://localhost:8000/api/v1/users/oauth/google/callback"
 
     # 6. Notion
     NOTION_CLIENT_ID: Optional[str] = None
@@ -48,6 +49,8 @@ class Settings(BaseSettings):
 
     # 7. 카카오
     KAKAO_REST_API_KEY: Optional[str] = None
+    KAKAO_CLIENT_SECRET: Optional[str] = None
+    KAKAO_LOGIN_REDIRECT_URI: str = "http://localhost:8000/api/v1/users/oauth/kakao/callback"
 
     # 8. FRONTEND
     FRONTEND_URL: str = "http://localhost:5173"

@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 import contextlib
 
 from fastapi import FastAPI
+from sqlalchemy import inspect
 from sqlalchemy import text
 import asyncio
 
@@ -14,7 +15,7 @@ from scripts.seed import seed_test_data
 from app.domains.notification.jobs import notification_jobs_loop
 
 # 모든 모델을 import해야 Base가 테이블을 인식함
-from app.domains.user.models import User
+from app.domains.user.models import User, UserDeviceSetting
 from app.domains.workspace.models import Workspace, InviteCode, WorkspaceMember, DeviceSetting, Department
 from app.domains.meeting.models import Meeting, MeetingParticipant, SpeakerProfile
 from app.domains.intelligence.models import Decision, MeetingMinute, MinutePhoto, ReviewRequest
@@ -36,6 +37,32 @@ def _reset_mysql_schema() -> None:
         conn.execute(text("SET FOREIGN_KEY_CHECKS=1"))
 
 
+def _ensure_user_social_columns() -> None:
+    """
+    create_all() does not alter existing tables, so local databases created
+    before social login need these columns added explicitly.
+    """
+    inspector = inspect(engine)
+    if not inspector.has_table("users"):
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("users")}
+    statements: list[str] = []
+
+    if "social_provider" not in existing_columns:
+        statements.append("ALTER TABLE users ADD COLUMN social_provider VARCHAR(20) NOT NULL DEFAULT 'none'")
+
+    if "social_id" not in existing_columns:
+        statements.append("ALTER TABLE users ADD COLUMN social_id VARCHAR(255) NULL")
+
+    if not statements:
+        return
+
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     should_reset_db = settings.DEBUG and settings.RESET_DB_ON_STARTUP
@@ -46,6 +73,7 @@ async def lifespan(app: FastAPI):
         print("🗑️  [DEBUG] 전체 테이블 삭제 완료")
 
     Base.metadata.create_all(bind=engine)
+    _ensure_user_social_columns()
     print("테이블 생성 완료")
 
     # [시작 시] HTTP 클라이언트 세션 초기화
