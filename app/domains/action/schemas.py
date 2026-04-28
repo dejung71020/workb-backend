@@ -96,14 +96,15 @@ class NextMeetingUpdateRequest(BaseModel):
 # WBS
 # =================================================================
 class WbsTaskResponse(BaseModel):
-    id:          int
-    epic_id:     int
-    title:       str
-    assignee_id: Optional[int] = None
-    priority:    str
-    due_date:    Optional[date_type] = None
-    progress:    int
-    status:      str
+    id:             int
+    epic_id:        int
+    title:          str
+    assignee_id:    Optional[int] = None
+    assignee_name:  Optional[str] = None
+    priority:       str
+    due_date:       Optional[date_type] = None
+    progress:       int
+    status:         str
 
     class Config:
         from_attributes = True
@@ -132,12 +133,14 @@ class WbsTaskCreateRequest(BaseModel):
     epic_id:     int
     title:       str
     assignee_id: Optional[int] = None
+    assignee_name: Optional[str] = None
     priority:    Optional[str] = "medium"
     due_date:    Optional[date_type] = None
 
 class WbsTaskPatchRequest(BaseModel):
     title:       Optional[str] = None
     assignee_id: Optional[int] = None
+    assignee_name: Optional[str] = None
     priority:    Optional[str] = None
     due_date:    Optional[date_type] = None
     progress:    Optional[int] = None

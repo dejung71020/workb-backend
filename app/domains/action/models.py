@@ -58,6 +58,7 @@ class WbsTask(Base):
     epic_id:        Mapped[int]         = mapped_column(Integer, ForeignKey("wbs_epics.id"), nullable=False)
     title:          Mapped[str]         = mapped_column(String(200), nullable=False)
     assignee_id:    Mapped[int | None]  = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    assignee_name:  Mapped[str | None]  = mapped_column(String(100), nullable=True)
     priority:       Mapped[Priority]    = mapped_column(Enum(Priority), default=Priority.medium)
     due_date:       Mapped[date | None ]= mapped_column(Date, nullable=True)
     progress:       Mapped[int]         = mapped_column(Integer, default=0)

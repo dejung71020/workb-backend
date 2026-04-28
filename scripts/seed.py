@@ -5,7 +5,8 @@ from app.domains.workspace.models import Workspace, WorkspaceMember, Department,
 from app.domains.meeting.models import Meeting, MeetingStatus
 from app.domains.integration.models import Integration, ServiceType
 from app.core.security import hash_password
-from datetime import datetime
+from datetime import timedelta
+from app.utils.time_utils import now_kst
 from pymongo import MongoClient
 from app.core.config import settings
 
@@ -65,12 +66,15 @@ def _seed_mysql():
         ))
 
         # 5. 회의 (completed 상태)
+        _now = now_kst()
         db.add(Meeting(
             workspace_id=workspace.id,
             created_by=user.id,
             title="2025년 2분기 개발 킥오프 회의",
             status=MeetingStatus.done,
             room_name="A 회의실",
+            started_at=_now - timedelta(hours=2),
+            ended_at=_now - timedelta(hours=1),
         ))
 
         # 6. 연동 5개 (is_connected=False)
@@ -155,8 +159,8 @@ def _seed_mongo():
                 "previous_followups": [],
                 "hallucination_flags": [],
             },
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
+            "created_at": now_kst().isoformat(),
+            "updated_at": now_kst().isoformat(),
         })
 
         print("✅ [SEED] MongoDB 테스트 데이터 삽입 완료")

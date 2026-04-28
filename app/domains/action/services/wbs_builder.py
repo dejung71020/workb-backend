@@ -72,11 +72,12 @@ def _persist_and_build(
         for a in action_items:
             assignee = a.get("assignee", '')
             # 담당자 이름을 제목에 포함
-            title = f"[{assignee}] {a.get('content', '')}" if assignee else a.get("content", "")
+            title = a.get('content', '')
             task = repository.save_wbs_task(
                   db=db,
                   epic_id=action_epic.id,
                   title=title,
+                  assignee_name=assignee or None,
                   priority=_map_priority(a.get("priority", "medium")),
               )
             task_list.append({

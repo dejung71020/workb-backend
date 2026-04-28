@@ -94,6 +94,7 @@ def save_wbs_task(
         epic_id: int,
         title: str,
         assignee_id: Optional[int] = None,
+        assignee_name: Optional[str] = None,
         priority: str = Priority.medium,
         due_date: Optional[date] = None,
 ) -> WbsTask:
@@ -101,6 +102,7 @@ def save_wbs_task(
         epic_id=epic_id,
         title=title,
         assignee_id=assignee_id,
+        assignee_name=assignee_name,
         priority=priority if priority else Priority.medium,
         due_date=due_date
     )
@@ -166,6 +168,7 @@ def update_wbs_task(
         task_id: int,
         title: Optional[str] = None,
         assignee_id: Optional[int] = None,
+        assignee_name: Optional[str] = None,
         priority: Optional[str] = None,
         due_date: Optional[date] = None,
         progress: Optional[int] = None,
@@ -178,6 +181,8 @@ def update_wbs_task(
         task.title = title
     if assignee_id is not None:
         task.assignee_id = assignee_id
+    if assignee_name is not None:
+        task.assignee_name = assignee_name
     if priority is not None:
         task.priority = priority
     if due_date is not None:
