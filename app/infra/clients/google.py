@@ -236,7 +236,7 @@ class GoogleCalendarClient(BaseClient):
     async def delete_event(
             self,
             event_id: str,
-            calendar_id: str = "",
+            calendar_id: str = "primary",
     ) -> Dict[str, Any]:
         """
         Google Calendar 일정 삭제.
