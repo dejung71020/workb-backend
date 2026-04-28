@@ -2,7 +2,7 @@
 import redis
 import json
 from motor.motor_asyncio import AsyncIOMotorClient
-
+from app.domains.knowledge.repository import get_user_name_by_id
 from app.core.config import settings
 
 mongo_db = AsyncIOMotorClient(settings.MONGODB_URL)["workb"]
@@ -11,30 +11,35 @@ r = redis.asyncio.from_url(settings.REDIS_URL)
 
 def _resolve_speaker(speaker_id: str | None, speakers: dict, anon_map: dict) -> str:
     """
-    speaker_id -> 표시 이름 변환. 화자분리 실패 케이스를 모두 처리한다.
-
-    케이스:
-        1. speaker_id가 None / 빈 문자열: STT가 화자를 아예 못 잡은 발화 -> "알 수 없음"
-        2. speaker_id가 speakers 해시에 있음: 정상 케이스 -> 이름 반환
-        3. speaker_id가 있지만 해시에 없음: 분리는 됐으나 미명명 화자
-            -> anon_map에 순번 부여해 "화자1", "화자2" ...형태로 일관성 유지
-
-    anon_map은 호출 측에서 발화 루프 전체에 걸쳐 공유되어야
-    동일 speaker_id가 항상 같은 "화자N" 번호를 갖는다.
+    speaker_id(spk_01 형식) → 표시 이름 변환.                                            
+    speakers hash: Field=spk_01, Value=user.id → DB에서 이름 조회.                       
+    매칭 실패 화자는 speakers hash에 없으므로 순번 화자명 부여.
     """
     # 케이스 1: 화자 정보 자체가 없음
     if not speaker_id:
         return "알 수 없음"
     
-    # 케이스 2: 정상 매핑
+    # 케이스 2: speakers hash에서 user.id 조회
     if speaker_id in speakers:
-        return speakers[speaker_id]
-    
+        user_id = int(speakers[speaker_id])
+        name = get_user_name_by_id(user_id) # MySQL users 테이블 조회
+        return name if name else f"사용자{user_id}"
+
     # 케이스 3: speaker_id는 있지만 이름 미등록 -> 순번 화자명 부여
     if speaker_id not in anon_map:
         anon_map[speaker_id] = f"화자{len(anon_map) + 1}"
     return anon_map[speaker_id]
 
+async def get_latest_utterance(meeting_id: int) -> str:
+    """
+    meeting:{id}:latest — 화자분리 미확정 최신 발화 텍스트 반환.
+    ASR 스트리밍 중 가장 최근에 인식된 텍스트 (final=False 상태).                        
+    없으면 빈 문자열 반환.                                                               
+    """
+    val = await r.get(f"meeting:{meeting_id}:latest")
+    return val.decode() if val else ""
+
+# get_meeting_context, get_related_utterance는 await 
 async def get_meeting_context(meeting_id: int) -> str:
     """
     전체 발화를 "[이름] 내용" 형태 문자열로 반환.

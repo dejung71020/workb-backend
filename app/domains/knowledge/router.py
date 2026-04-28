@@ -71,9 +71,15 @@ def search_workspace_meetings(
 _EXT_MAP = {
     "pdf": "pdf",
     "pptx": "pptx",
-    "ppt": "ppt",
+    "ppt": "pptx",
     "html": "html",
-    "htm": "htm",
+    "htm": "html",
+    "md": "md",
+    "markdown": "md",
+    "docx": "docx",
+    "doc": "doc",
+    "xlsx": "xlsx",
+    "xls": "xls"
 }
 
 @router.post("/workspace/{workspace_id}/chatbot/message")
@@ -100,7 +106,7 @@ async def chatbot_message(workspace_id: int, req: ChatbotMessageRequest, session
         session_id=session_id,
         function_type=result["function_type"],
         answer=result["chat_response"],
-        result={},
+        result={"sources": result.get("web_sources", [])},
         timestamp=now_kst()
     )
 

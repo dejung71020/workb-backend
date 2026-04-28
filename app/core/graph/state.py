@@ -20,6 +20,8 @@ class SharedState(TypedDict):
     user_question: str           # 사용자가 챗봇에게 던진 개별 질문
     chat_response: str           # 챗봇의 최종 답변
     past_meeting_ids: Optional[List[int]] # None = 전체, [1, 2, 3] = 선택된 이전 회의만
+    function_type: str           # "chat|search|summary|report|calendar|agent"
+    web_sources: List[dict]      # 웹검색 결과 [{title, url, snippet}]
     
     # --- 4. Intelligence 도메인 (Analyst) ---
     summary: dict                 # 회의 전체 요약본 (초안 및 최종본)
@@ -38,5 +40,3 @@ class SharedState(TypedDict):
     integration_settings: dict   # OAuth로 연결된 서비스 상태 (Jira, Slack, Calendar 등)
     accuracy_score: float        # 결과물(요약, WBS)에 대한 품질 점수 (0~1)
     errors: List[str]            # 각 노드 실행 중 발생한 에러 로그 누적
-
-    function_type: str           # "chat|search|summary|report|calendar|agent"

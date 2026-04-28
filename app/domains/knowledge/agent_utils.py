@@ -51,31 +51,42 @@ async def search_past_meetings(query: str, meeting_ids: Optional[list[str]] = No
     """
     try:
         # meeting_ids가 있으면 해당 회의만 검색
-        base_filter = {}
+        match_filter = {}
         if meeting_ids:
-            base_filter["meeting_id"] = {"$in": meeting_ids}
+            match_filter["meeting_id"] = {"$in": [int(m) for m in meeting_ids]}
 
-        # $text 검색 시도 $meta 연산자를 사용하여 텍스트 검색 결과를 점수 순으로 정렬
-        cursor = mongo_db["meeting_contexts"].find(
-            {**base_filter, "$text": {"$search": query}},
-            {"score": {"$meta": "textScore"}}, # 점수를 'score' 필드에 저장
-        ).sort([("score", {"$meta": "textScore"})]).limit(5) # 점수 순으로 정렬
-        docs = await cursor.to_list(length=5)
+        # uterances 컬렌션: 회의당 문서 1개 + nested 배열
+        # aggregate로 unwind 후 text 필드 regex 검색
+        words = [w for w in query.split() if w][:5]
+        regex_pattern = "|".join(re.escape(w) for w in words)
 
-        # $text 매칭 없으면 base_filter 범위 내에서 최신순 fallback
+        pipeline = [
+            {"$match": match_filter},                                              
+            {"$unwind": "$utterances"},                                              
+            {"$sort": {"utterances.seq": 1}},
+            {"$limit": 8},
+        ]
+        cursor = mongo_db["utterances"].aggregate(pipeline)
+        docs = await cursor.to_list(length=8)
+
+        # $text 매칭 없으면 regex fallback
         if not docs:
-            cursor = mongo_db["meeting_contexts"].find(
-                base_filter, {"_id": 0}
-            ).sort("created_at", -1).limit(5)
-            docs = await cursor.to_list(length=5)
+            words = query.split()[:3]
+            regex_pattern = "|".join(re.escape(w) for w in words)
+            cursor = mongo_db["utterances"].find(
+                {**match_filter, "content": {"$regex": regex_pattern}},
+                {"_id": 0}
+            ).limit(8)
+            docs = await cursor.to_list(length=8)
 
         return [
             {
                 "source": "past_meetings",
-                "title": doc.get("title", "이전 회의"),
-                "snippet": doc.get("summary", ""),
-                "url": None,
-                "relevance_score": doc.get("score", 0.5)
+                "title": f"[이전회의 meeting_id={doc.get('meeting_id')}] {doc['utterances'].get('speaker_label', '?')}",                                          
+                # snippet = 실제 발화 원문 → LLM이 이걸 citations으로 인용               
+                "snippet": doc["utterances"].get("text", ""),                            
+                "url": None,                                                             
+                "relevance_score": 0.5,
             }
             for doc in docs
         ]
@@ -263,7 +274,11 @@ async def knowledge_node(state: SharedState) -> dict:
     - high: 발화에 명확한 근거 있음
     - medium: 발화에 간접적으로 언급됨
     - Low: 발화에 근거 없거나 추측
-    citations: 도구 사용 결과나 외부 정보면 []. 회의 내용 기반이면 반드시 원문 발췌.
+    
+    citations 규칙:                                                                          
+    - web_search 도구를 사용했으면 반드시 []. 절대 웹 검색 내용을 citations에 넣지 마세요.   
+    - search_past_meetings 도구를 사용했으면 반환된 snippet 원문을 그대로 복사.              
+    - 회의 발화 기반이면 [화자명] 발화내용 형식으로 원문 발췌.
 
     {meeting_filter_hint}
     """
@@ -274,6 +289,24 @@ async def knowledge_node(state: SharedState) -> dict:
             {"role": "user", "content": state["user_question"]}
         ]
     })
+
+    # Tavily ToolMessage에서 웹 소스 추출
+    web_sources = []
+    for msg in result["messages"]:
+        if getattr(msg, "name", None) == "tavily_search_results_json":
+            try:
+                raw = json.loads(msg.content) if isinstance(msg.content, str) else msg.content
+                if isinstance(raw, list):
+                    web_sources = [
+                        {
+                            "title": s.get("title", ""),
+                            "url": s.get("url", ""),
+                            "snippet": s.get("content", "")[:200],
+                        }
+                        for s in raw if s.get("url")
+                    ]
+            except Exception:
+                pass
 
     # 도구 사용 여부 확인 - tool_calls 있으면 웹검색/캘린더 등 외부 도구 사용한 것
     tool_used = any(
@@ -294,8 +327,12 @@ async def knowledge_node(state: SharedState) -> dict:
     citations = parsed.get("citations", [])
 
     if tool_used:
-        # 외부 도구 사용 결과 -> 발화 원문과 대조 불필요, 검증 생략
-        pass
+        if web_sources:
+            pass
+        # search_past_meetings: 이전 회의 발화가 citations로 오면 표시
+        elif citations:
+            citation_block = "\n\n**📎 근거 발화:**\n" + "\n".join(f"> {c}" for c in citations)                          
+            answer += citation_block
     else:
         # 회의 내용 기반 답변 -> citation이 실제 발화 원문에 존재하는지 검증
         context_words = set(re.findall(r"[가-힣a-zA-Z0-9]+", meeting_context))
@@ -333,7 +370,8 @@ async def knowledge_node(state: SharedState) -> dict:
 
     return {
         "chat_response": answer,
-        "function_type": "agent"
+        "function_type": "agent",
+        "web_sources": web_sources,
     }
 
 async def summary_node(state: SharedState) -> dict:
@@ -457,10 +495,10 @@ async def summary_node(state: SharedState) -> dict:
     # 검증 대상: decisions + action_items (요약 중 사실 관계 오류가 가장 치명적인 섹션)
     check_targets = [
         (d.get("decision", ""), d.get("citiation", "")) 
-        for d in summary_dict.get("decisions", [])
+        for d in summary_dict.get("decisions", []) or []
     ] + [
         (a.get("content", ""), a.get("citiation", "")) 
-        for a in summary_dict.get("action_items", [])
+        for a in summary_dict.get("action_items", []) or []
     ]
 
     for item_text, citation in check_targets:
@@ -598,7 +636,7 @@ async def past_summary_node(state: SharedState) -> dict:
 
     # 회의별 텍스트 블록 구성
     meetings_text = "\n\n".join([
-        f"[회의 {m['meeting_id']}] {m.get('title', '')}\n{m.get('summary', '')}"
+        f"[회의 {m['meeting_id']}] {m.get('title', '')}\n{m.get('summary', '')}" 
         for m in meetings
     ])
 

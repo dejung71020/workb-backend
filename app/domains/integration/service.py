@@ -7,6 +7,7 @@ from app.utils.time_utils import now_kst, KST
 
 from sqlalchemy.orm import Session
 from typing import List
+import httpx
 
 from app.core.graph.state import SharedState
 from app.domains.integration.models import Integration, ServiceType
@@ -277,6 +278,86 @@ async def get_valid_google_token(db: Session, workspace_id: int) -> str:
 
     return integration.access_token
 
+
+def get_required_workspace_google_calendar_id(db: Session, workspace_id: int) -> str:
+    """
+    workspace의 integrations(service=google_calendar).extra_config["calendar_id"]를 반환.
+    없으면 '캘린더 선택 필요' 에러를 발생시킨다.
+    """
+    integration = repository.get_integration(db, workspace_id, ServiceType.google_calendar)
+    cal_id = (integration.extra_config or {}).get("calendar_id") if integration else None
+    if isinstance(cal_id, str) and cal_id.strip():
+        return cal_id.strip()
+    raise ValueError("캘린더 선택이 필요합니다. (Google Calendar 서브 캘린더를 선택/생성해주세요)")
+
+
+async def list_google_calendars(db: Session, workspace_id: int) -> list[dict]:
+    """
+    연동된 계정의 캘린더 목록을 반환한다. (calendar.calendarList.list)
+    """
+    access_token = await get_valid_google_token(db, workspace_id)
+    client = GoogleCalendarClient(access_token)
+    try:
+        res = await client.list_calendars(min_access_role="reader")
+    except httpx.HTTPStatusError as e:
+        raise ValueError(f"Google Calendar 목록 조회 실패: {e.response.status_code}") from e
+
+    items = res.get("items", []) if isinstance(res, dict) else []
+    out: list[dict] = []
+    for it in items:
+        cid = str(it.get("id", "") or "")
+        if not cid:
+            continue
+        out.append(
+            {
+                "id": cid,
+                "summary": str(it.get("summary", "") or ""),
+                "primary": bool(it.get("primary", False)),
+                "access_role": str(it.get("accessRole", "") or "") if it.get("accessRole") is not None else None,
+            }
+        )
+    return out
+
+
+async def create_google_calendar(db: Session, workspace_id: int, name: str) -> dict:
+    """
+    새 캘린더 생성 (calendar.calendars.insert)
+    """
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("캘린더 이름(name)이 비어 있습니다.")
+    access_token = await get_valid_google_token(db, workspace_id)
+    client = GoogleCalendarClient(access_token)
+    try:
+        created = await client.create_calendar(summary=name, time_zone="Asia/Seoul")
+    except httpx.HTTPStatusError as e:
+        raise ValueError(f"Google Calendar 생성 실패: {e.response.status_code}") from e
+
+    calendar_id = str(created.get("id", "") or "")
+    if not calendar_id:
+        raise ValueError("Google Calendar 생성 응답에 id(calendar_id)가 없습니다.")
+    return {"calendar_id": calendar_id, "summary": name}
+
+
+def save_workspace_google_calendar_id(db: Session, workspace_id: int, calendar_id: str) -> Integration:
+    """
+    최종 선택된 calendar_id를 integrations.extra_config에 저장한다.
+    스키마 변경 없이 {"calendar_id": "..."} 형태로 저장.
+    """
+    calendar_id = (calendar_id or "").strip()
+    if not calendar_id:
+        raise ValueError("calendar_id가 비어 있습니다.")
+
+    integration = repository.get_integration(db, workspace_id, ServiceType.google_calendar)
+    if not integration or not integration.access_token:
+        raise ValueError("Google Calendar 연동이 필요합니다.")
+
+    # 요구사항대로 calendar_id만 저장 (다른 키는 유지하지 않음)
+    integration.extra_config = {"calendar_id": calendar_id}
+    db.commit()
+    db.refresh(integration)
+    return integration
+
 #===============================================================
 #
 #                   API service
@@ -323,7 +404,14 @@ async def list_google_calendar_events(
     
     access_token = await get_valid_google_token(db, workspace_id)
     client = GoogleCalendarClient(access_token)
-    result = await client.list_events(time_min=time_min, max_results=max_results)
+    calendar_id = get_required_workspace_google_calendar_id(db, workspace_id)
+    try:
+        result = await client.list_events(calendar_id=calendar_id, time_min=time_min, max_results=max_results)
+    except httpx.HTTPStatusError as e:
+        # 선택된 calendar_id가 삭제/권한 제거 등으로 유효하지 않은 경우
+        if e.response.status_code in (404, 410):
+            raise ValueError("선택된 Google 캘린더를 찾을 수 없습니다. 다시 선택해주세요.") from e
+        raise ValueError(f"Google Calendar 이벤트 조회 실패: {e.response.status_code}") from e
     events = []
     for item in result.get("items", []):
         start = item.get("start", {})

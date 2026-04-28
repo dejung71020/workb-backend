@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.utils.time_utils import now_kst, KST
 from app.domains.integration.models import ServiceType
 from app.domains.integration import repository as integration_repo
-from app.domains.integration.service import get_valid_google_token
+from app.domains.integration.service import get_valid_google_token, get_required_workspace_google_calendar_id
 from app.domains.action import repository
 from app.domains.action.mongo_repository import get_meeting_summary
 from app.infra.clients.google import GoogleCalendarClient
@@ -29,6 +29,7 @@ async def export_google_calendar(
     try:
         access_token = await get_valid_google_token(db, workspace_id)
         client = GoogleCalendarClient(access_token)
+        calendar_id = get_required_workspace_google_calendar_id(db, workspace_id)
 
         meeting = repository.get_meeting(db, meeting_id)
         if not meeting:
@@ -64,6 +65,7 @@ async def export_google_calendar(
             await client.update_event_description(
                 event_id=meeting.google_calendar_event_id,
                 description=description,
+                calendar_id=calendar_id,
             )
         
         else:
@@ -74,6 +76,7 @@ async def export_google_calendar(
                 start_datetime=started.strftime("%Y-%m-%dT%H:%M:%S"),
                 end_datetime=ended.strftime("%Y-%m-%dT%H:%M:%S"),
                 description=description,
+                calendar_id=calendar_id,
             )
         
         logger.info(f"[Google Calendar Export] 완료 - meeting_id={meeting_id}")
@@ -207,6 +210,7 @@ async def register_next_meeting(
                         attendee_emails.append(email)
     # 구글 클라이언트 꺼내기
     client = GoogleCalendarClient(access_token)
+    calendar_id = get_required_workspace_google_calendar_id(db, workspace_id)
     start_at = datetime.fromisoformat(scheduled_at)
     end_at = start_at + timedelta(minutes=duration_minutes)
 
@@ -215,6 +219,7 @@ async def register_next_meeting(
         start_datetime=start_at.strftime("%Y-%m-%dT%H:%M:%S"),
         end_datetime=end_at.strftime("%Y-%m-%dT%H:%M:%S"),
         attendees=attendee_emails if attendee_emails else None,
+        calendar_id=calendar_id,
     )
     event_id = result.get("id", "")
     logger.info(f"[Google Calendar] 다음 회의 등록 완료 - meeting_id={meeting_id}, event_id={event_id}")
@@ -249,6 +254,7 @@ async def update_next_meeting(
         raise ValueError(f"구글 연동이 되지 않았습니다. (workspace_id={workspace_id})")
     
     client = GoogleCalendarClient(access_token)
+    calendar_id = get_required_workspace_google_calendar_id(db, workspace_id)
 
     start_datetime = None
     end_datetime = None
@@ -265,6 +271,7 @@ async def update_next_meeting(
         end_datetime=end_datetime,
         attendees=attendee_emails,
         description=description,
+        calendar_id=calendar_id,
     )
 
     logger.info(f"[Google Calendar] 이벤트 수정 완료 - event_id={event_id}")
