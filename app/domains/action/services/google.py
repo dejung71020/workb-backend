@@ -69,7 +69,11 @@ async def export_google_calendar(
             )
         
         else:
-            started = meeting.started_at or meeting.scheduled_at or now_kst()
+            started = (
+                meeting.started_at
+                or meeting.scheduled_at
+                or (meeting.ended_at - timedelta(hours=1) if meeting.ended_at else now_kst())
+            )
             ended = meeting.ended_at or (started + timedelta(hours=1))
             await client.create_event(
                 title=meeting.title,
@@ -275,3 +279,15 @@ async def update_next_meeting(
     )
 
     logger.info(f"[Google Calendar] 이벤트 수정 완료 - event_id={event_id}")
+
+async def delete_next_meeting(
+        db: Session,
+        workspace_id: int,
+        event_id: int,
+) -> None:
+    access_token = await get_valid_google_token(db, workspace_id)
+    if not access_token:
+        raise ValueError(f"구글 연동이 되지 않았습니다. (workspace_id={workspace_id})")
+    client = GoogleCalendarClient(access_token)
+    await client.delete_event(event_id=event_id)
+    logger.info(f"[Google Calendar] 이벤트 삭제 완료 - event_id={event_id}")

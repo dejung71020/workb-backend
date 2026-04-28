@@ -2,6 +2,7 @@
 import logging
 from typing import Dict, Any, List, Optional
 from .base import BaseClient
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +154,49 @@ class SlackClient(BaseClient):
         result = await self._check_slack_error(result)
         return result['channel']['id']
     
-    
+    def _markdown_to_slack_blocks(self, text: str) -> list:
+        blocks = []
+        sections = re.split(r'\n(?=## )', text.strip())
+
+        for section in sections:
+            lines = section.strip().split("\n")
+            if not lines:
+                continue
+            
+            first_line = lines[0]
+            rest = "\n".join(lines[1:]).strip()
+
+            if first_line.startswith("## "):
+                header = first_line[3:].strip()
+                blocks.append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*{header}*"
+                    }
+                })
+                if rest:
+                    # 줄의 시작이 ### 이고, 뒤에오는 모든 문자를**로 감싸겠다.
+                    content = re.sub(r'^### (.+)$', r'*\1*', rest, flags=re.MULTILINE)
+                    blocks.append({
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": content[:3000]
+                        }
+                    })
+                else:
+                    if section.strip():
+                        blocks.append({
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": section.strip()[:3000]
+                            }
+                        })
+        return blocks
+                            
+
     async def send_minutes(
             self,
             channel_id: str,
@@ -188,13 +231,7 @@ class SlackClient(BaseClient):
             {
                 "type": "divider"
             },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": minutes_text[:3000],
-                },
-            },
+            *self._markdown_to_slack_blocks(minutes_text),
         ]
 
         if action_items:

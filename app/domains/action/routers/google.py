@@ -16,6 +16,7 @@ from app.domains.action.services.google import (
     suggest_next_meeting,
     register_next_meeting,
     update_next_meeting,
+    delete_next_meeting,
 )
 
 router = APIRouter()
@@ -88,5 +89,19 @@ async def update_next_meeting_slot(
         duration_minutes=request.duration_minutes,
         attendee_emails=request.attendee_emails,
         description=request.description,
+    )
+    return ExportResponse(status="ok")
+
+@router.delete("/next-meeting/{event_id}", response_model=ExportResponse)
+async def delete_next_meeting_slot(
+        meeting_id: int,
+        event_id: str,
+        workspace_id: int = Query(..., description="워크스페이스 ID"),
+        db: Session = Depends(get_db),
+):
+    await delete_next_meeting(
+            db=db, 
+            workspace_id=workspace_id, 
+            event_id=event_id
     )
     return ExportResponse(status="ok")
