@@ -1,9 +1,8 @@
 # app\api\v1\api_router.py
 from fastapi import APIRouter
 
-# from app.domains.meeting.router import router as meeting_router
-# from app.domains.intelligence.router import router as intelligence_router
 from app.domains.action.router import router as action_router
+from app.domains.intelligence.router import router as intelligence_router
 from app.domains.integration.router import router as integration_router
 from app.domains.knowledge.router import router as knowledge_router
 from app.domains.meeting.router import router as meeting_router
@@ -20,8 +19,8 @@ api_router.include_router(user_router, prefix="/users", tags=["Users"])
 # 2. 회의 도메인 (예약·히스토리·아젠다 등)
 api_router.include_router(meeting_router, prefix="/meetings", tags=["Meetings"])
 
-# 3. 인텔리전스 도메인 (회의 요약본 조회, 결정사항 리스트 확인)
-# api_router.include_router(intelligence_router, prefix="/intelligences", tags=["Intelligence"])
+# 3. 인텔리전스 도메인 (회의 요약본 조회, 결정사항 리스트, 전문 타임라인)
+api_router.include_router(intelligence_router, prefix="/intelligences", tags=["Intelligence"])
 
 # 4. 지식 베이스 도메인 (과거 자료 검색, 챗봇 대화 엔드포인트)
 api_router.include_router(knowledge_router, prefix="/knowledges", tags=["Knowledge"])
