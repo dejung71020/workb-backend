@@ -71,9 +71,15 @@ def search_workspace_meetings(
 _EXT_MAP = {
     "pdf": "pdf",
     "pptx": "pptx",
-    "ppt": "ppt",
+    "ppt": "pptx",
     "html": "html",
-    "htm": "htm",
+    "htm": "html",
+    "md": "md",
+    "markdown": "md",
+    "docx": "docx",
+    "doc": "doc",
+    "xlsx": "xlsx",
+    "xls": "xls"
 }
 
 @router.post("/workspace/{workspace_id}/chatbot/message")
