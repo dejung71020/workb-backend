@@ -36,6 +36,7 @@ async def get_wbs(
                 epic_id=epic.id,
                 title=t.title,
                 assignee_id=t.assignee_id,
+                assignee_name=t.assignee_name,
                 priority=t.priority.value if hasattr(t.priority, 'value') else t.priority,
                 due_date=t.due_date,
                 progress=t.progress,
@@ -65,6 +66,7 @@ async def generate_wbs(
                 epic_id=epic.id,
                 title=t.title,
                 assignee_id=t.assignee_id,
+                assignee_name=t.assignee_name,
                 priority=t.priority.value if hasattr(t.priority, 'value') else t.priority,
                 due_date=t.due_date,
                 progress=t.progress,
@@ -101,7 +103,7 @@ def create_task(
 ):
     task = repository.save_wbs_task(
         db, body.epic_id, body.title,
-        body.assignee_id,
+        body.assignee_id, body.assignee_name,
         body.priority or "medium", body.due_date,
     )
     return WbsTaskResponse(
@@ -109,6 +111,7 @@ def create_task(
         epic_id=task.epic_id,
         title=task.title,
         assignee_id=task.assignee_id,
+        assignee_name=task.assignee_name,
         priority=task.priority.value if hasattr(task.priority, 'value') else task.priority,
         due_date=task.due_date,
         progress=task.progress,
@@ -137,6 +140,7 @@ def patch_epic(
             epic_id=epic_id,
             title=t.title,
             assignee_id=t.assignee_id,
+            assignee_name=t.assignee_name,
             priority=t.priority.value if hasattr(t.priority, "value") else t.priority,
             due_date=t.due_date,
             progress=t.progress,
@@ -158,6 +162,7 @@ def patch_task(
         task_id=task_id,
         title=body.title,
         assignee_id=body.assignee_id,
+        assignee_name=body.assignee_name,
         priority=body.priority,
         due_date=body.due_date,
         progress=body.progress,
@@ -168,6 +173,7 @@ def patch_task(
     return WbsTaskResponse(
         id=task.id, epic_id=task.epic_id, title=task.title,
         assignee_id=task.assignee_id,
+        assignee_name=task.assignee_name,
         priority=task.priority.value if hasattr(task.priority, 'value') else task.priority,
         due_date=task.due_date, 
         progress=task.progress,
