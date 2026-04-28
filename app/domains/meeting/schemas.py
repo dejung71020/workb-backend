@@ -147,3 +147,20 @@ class SpeakerProfileRegisterRequest(BaseModel):
 class SpeakerProfileRegisterResponse(BaseModel):
     profile: SpeakerProfileItem
     message: str
+
+
+# ── Minute photos (captured images) ───────────────────────────────────────────
+
+
+class MinutePhotoOut(BaseModel):
+    id: int
+    minute_id: int
+    photo_url: str
+    taken_at: datetime
+    taken_by: int
+
+
+class MinutePhotoUploadResponse(BaseModel):
+    success: bool = True
+    photo: MinutePhotoOut
+    message: str = "OK"

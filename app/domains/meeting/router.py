@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File
 from sqlalchemy.orm import Session
 
 from app.domains.workspace.deps import require_workspace_admin, require_workspace_member
@@ -13,6 +13,8 @@ from app.domains.meeting.schemas import (
     DeleteMeetingResponse,
     MeetingDetailResponse,
     MeetingHistoryResponse,
+    MinutePhotoUploadResponse,
+    MinutePhotoOut,
     SpeakerProfileListResponse,
     SpeakerProfileRegisterRequest,
     SpeakerProfileRegisterResponse,
@@ -25,6 +27,7 @@ from app.domains.meeting.service import (
     MeetingHistoryService,
     MeetingLifecycleService,
     MeetingUpdateService,
+    MinutePhotoService,
     SpeakerProfileService,
 )
 
@@ -209,3 +212,66 @@ def end_workspace_meeting(
     """회의를 완료로 전환합니다."""
     MeetingLifecycleService.end_meeting(db, workspace_id, meeting_id)
     return {"status": "ok"}
+
+
+@router.post(
+    "/workspaces/{workspace_id}/{meeting_id}/minute-photos",
+    response_model=MinutePhotoUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_minute_photo(
+    workspace_id: int,
+    meeting_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(require_workspace_member),
+) -> MinutePhotoUploadResponse:
+    """
+    진행 중 회의에서 캡처한 이미지를 저장하고 minute_photos에 기록합니다.
+
+    - 파일 저장: storage/meetings/{meeting_id}/minute_photos/{filename}.png
+    - DB 저장: minute_photos(minute_id, photo_url, taken_at, taken_by)
+    """
+    filename = (file.filename or "").lower()
+    if filename.endswith(".png"):
+        ext = "png"
+    elif filename.endswith(".jpg") or filename.endswith(".jpeg"):
+        ext = "jpg"
+    elif filename.endswith(".webp"):
+        ext = "webp"
+    else:
+        # 캔버스 캡처 기본값은 png, 확장자 없으면 png로 처리
+        ext = "png"
+
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="빈 파일입니다.")
+
+    try:
+        photo = MinutePhotoService.save_captured_photo(
+            db=db,
+            workspace_id=workspace_id,
+            meeting_id=meeting_id,
+            taken_by_user_id=current_user_id,
+            image_bytes=image_bytes,
+            ext=ext,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"이미지 저장 중 오류가 발생했습니다: {e}",
+        )
+
+    return MinutePhotoUploadResponse(
+        success=True,
+        photo=MinutePhotoOut(
+            id=int(photo.id),
+            minute_id=int(photo.minute_id),
+            photo_url=str(photo.photo_url),
+            taken_at=photo.taken_at,
+            taken_by=int(photo.taken_by),
+        ),
+        message="OK",
+    )

@@ -36,7 +36,13 @@ from app.domains.meeting.schemas import (
     SpeakerProfileRegisterResponse,
 )
 from app.domains.user.models import User
-from app.domains.intelligence.models import Decision, MeetingMinute, MinutePhoto, ReviewRequest
+from app.domains.intelligence.models import (
+    Decision,
+    MeetingMinute,
+    MinutePhoto,
+    ReviewRequest,
+    MinuteStatus,
+)
 from app.domains.action.models import ActionItem, Report, WbsEpic, WbsTask
 from app.domains.meeting.repository import MeetingHistoryRepository
 from app.domains.workspace.models import MemberRole, WorkspaceMember
@@ -46,6 +52,11 @@ from app.infra.clients.google import GoogleCalendarClient
 from app.domains.notification.models import NotificationType
 from app.domains.notification import service as notification_service
 from app.utils.time_utils import now_kst
+
+from pathlib import Path
+import uuid
+
+STORAGE_ROOT = Path("storage")
 
 
 def _to_kst_naive(dt: datetime) -> datetime:
@@ -423,6 +434,70 @@ class MeetingUpdateService:
             ),
             message="OK",
         )
+
+
+class MinutePhotoService:
+    @staticmethod
+    def _ensure_minute_photo_dir(meeting_id: int) -> Path:
+        meeting_dir = STORAGE_ROOT / "meetings" / str(meeting_id)
+        meeting_dir.mkdir(parents=True, exist_ok=True)
+        photos_dir = meeting_dir / "minute_photos"
+        photos_dir.mkdir(parents=True, exist_ok=True)
+        return photos_dir
+
+    @staticmethod
+    def save_captured_photo(
+        db: Session,
+        workspace_id: int,
+        meeting_id: int,
+        taken_by_user_id: int,
+        image_bytes: bytes,
+        ext: str = "png",
+    ) -> MinutePhoto:
+        meeting = (
+            db.query(Meeting)
+            .filter(Meeting.id == meeting_id, Meeting.workspace_id == workspace_id)
+            .one_or_none()
+        )
+        if meeting is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="회의를 찾을 수 없습니다.",
+            )
+
+        minute = (
+            db.query(MeetingMinute)
+            .filter(MeetingMinute.meeting_id == meeting_id)
+            .one_or_none()
+        )
+        if minute is None:
+            minute = MeetingMinute(
+                meeting_id=meeting_id,
+                content=None,
+                summary=None,
+                status=MinuteStatus.draft,
+                reviewer_id=None,
+                review_status=None,
+            )
+            db.add(minute)
+            db.flush()
+
+        photos_dir = MinutePhotoService._ensure_minute_photo_dir(meeting_id)
+        filename = f"{now_kst().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:12]}.{ext}"
+        file_path = photos_dir / filename
+        file_path.write_bytes(image_bytes)
+
+        taken_at_naive = now_kst().replace(tzinfo=None)
+        photo = MinutePhoto(
+            minute_id=int(minute.id),
+            photo_url=str(file_path),
+            taken_at=taken_at_naive,
+            taken_by=taken_by_user_id,
+        )
+        db.add(photo)
+        db.commit()
+        db.refresh(photo)
+        return photo
 
 
 class MeetingLifecycleService:
