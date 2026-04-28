@@ -339,7 +339,7 @@ async def create_google_calendar(db: Session, workspace_id: int, name: str) -> d
     return {"calendar_id": calendar_id, "summary": name}
 
 
-def save_workspace_google_calendar_id(db: Session, workspace_id: int, calendar_id: str) -> Integration:
+def save_workspace_google_calendar_id(db: Session, workspace_id: int, calendar_id: str, calendar_name=None) -> Integration:
     """
     최종 선택된 calendar_id를 integrations.extra_config에 저장한다.
     스키마 변경 없이 {"calendar_id": "..."} 형태로 저장.
@@ -353,7 +353,10 @@ def save_workspace_google_calendar_id(db: Session, workspace_id: int, calendar_i
         raise ValueError("Google Calendar 연동이 필요합니다.")
 
     # 요구사항대로 calendar_id만 저장 (다른 키는 유지하지 않음)
-    integration.extra_config = {"calendar_id": calendar_id}
+    integration.extra_config = {
+        "calendar_id": calendar_id,
+        "calendar_name": calendar_name or calendar_id,
+    }
     db.commit()
     db.refresh(integration)
     return integration

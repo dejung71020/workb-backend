@@ -2,6 +2,7 @@
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
+from datetime import date as date_type
 
 # =================================================================
 # 공통
@@ -90,3 +91,54 @@ class NextMeetingUpdateRequest(BaseModel):
     duration_minutes: int = 60
     attendee_emails: List[str] | None = None
     description: str | None = None
+
+# =================================================================
+# WBS
+# =================================================================
+class WbsTaskResponse(BaseModel):
+    id:          int
+    epic_id:     int
+    title:       str
+    assignee_id: Optional[int] = None
+    priority:    str
+    due_date:    Optional[date_type] = None
+    progress:    int
+    status:      str
+
+    class Config:
+        from_attributes = True
+
+class WbsEpicResponse(BaseModel):
+    id:          int
+    title:       str
+    order_index: int
+    tasks:       List[WbsTaskResponse] = []
+
+    class Config:
+        from_attributes = True
+
+class WbsPageResponse(BaseModel):
+    epics: List[WbsEpicResponse]
+
+class WbsEpicCreateRequest(BaseModel):
+    title:       str
+    order_index: Optional[int] = None
+
+class WbsEpicPatchRequest(BaseModel):
+    title:       Optional[str] = None
+    order_index: Optional[int] = None
+
+class WbsTaskCreateRequest(BaseModel):
+    epic_id:     int
+    title:       str
+    assignee_id: Optional[int] = None
+    priority:    Optional[str] = "medium"
+    due_date:    Optional[date_type] = None
+
+class WbsTaskPatchRequest(BaseModel):
+    title:       Optional[str] = None
+    assignee_id: Optional[int] = None
+    priority:    Optional[str] = None
+    due_date:    Optional[date_type] = None
+    progress:    Optional[int] = None
+    status:      Optional[str] = None

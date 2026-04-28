@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+import markdown as md_lib
 
 from app.domains.action import repository
 from app.domains.action.models import ReportFormat
@@ -31,10 +32,27 @@ def _report_file_path(meeting_id: int, report_id: int, ext: str) -> Path:
 
 # ── Excel 스타일 헬퍼 ─────────────────────────────────────────────────────────
 def _thin_border() -> Border:
+    '''
+    셀 4면에 테두리를 얇은 연보라 테두리로 적용하는 함수
+
+    셀 4면에 동일한 얇은 테두리를 만든다. 
+    _BORDER_C = D0D5F5 => 연보라 16진수(Hex) 컬러 코드
+    '''
     s = Side(style="thin", color=_BORDER_C)
     return Border(left=s, right=s, top=s, bottom=s)
 
 def _apply_header(ws, row: int, headers: list[str], widths: list[int]) -> None:
+    '''
+    헤더의 배경을 파란색으로, 폰트를 흰색 등등으로 적용하는 함수
+
+    PatternFill : 셀의 배경색을 칠함 -> 파란색
+    FFFFFF : 하얀색
+    Alignment: 정렬 방식 설정
+        horizontal: 가로 ,vertical: 세로 -> 둘다 center면 정중앙
+        wrap_text: 자동 줄바꿈
+
+    각 셀마다 스타일 세팅
+    '''
     fill = PatternFill(start_color=_PRIMARY, end_color=_PRIMARY, fill_type="solid")
     font = Font(bold=True, color="FFFFFF", size=11, name="맑은 고딕")
     align = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -49,6 +67,17 @@ def _apply_header(ws, row: int, headers: list[str], widths: list[int]) -> None:
         ws.column_dimensions[get_column_letter(col)].width = width
 
 def _apply_row(ws, row: int, values: list, alt: bool = False) -> None:
+    '''
+    본문의 한줄은 흰색 다음줄은 보라색 계열로 적용하는 함수
+    -> 한줄 씩 완성시키는 함수
+    
+    _SECONDARY = EEF0FE -> 보라색 계열
+    보라색 계열의 배경을 격줄로 적용
+    헤더보다 1pt 작은 맑은 고딕 폰트
+    세로 중앙 정렬, 자동 줄바꿈
+    행의 높이를 20으로 세팅
+    리스트로 전달 받은 데이터대로 차례대로 입력
+    '''
     fill = PatternFill(start_color=_SECONDARY, end_color=_SECONDARY, fill_type="solid") if alt else None
     font = Font(size=10, name="맑은 고딕")
     align = Alignment(vertical="center", wrap_text=True)
@@ -63,6 +92,14 @@ def _apply_row(ws, row: int, values: list, alt: bool = False) -> None:
             cell.fill = fill
 
 def _section_title(ws, row: int, text: str, cols: int) -> None:
+    '''
+    ws.row_dimensions[row].height = 22
+    -> row에 해당하는 행의 높이를 22pt로 지정
+    해당 row의 첫번째 컬럼(열)을 text로 지정한다.
+    _PRIMARY = 5668F3 -> 파란색
+    font 바꾸기 -> 맑은 고딕 
+    merge_cells : 셀 병합
+    '''
     ws.row_dimensions[row].height = 22
     cell = ws.cell(row=row, column=1, value=text)
     cell.font = Font(bold=True, size=12, color=_PRIMARY, name="맑은 고딕")
@@ -101,6 +138,11 @@ _HTML_CSS = """
   li { margin-bottom: 6px; font-size: 14px; }
   .tag { background: #EEF0FE; color: #5668F3; border-radius: 6px;
          padding: 2px 8px; font-size: 12px; font-weight: 500; }
+  .minutes-content h2 { font-size: 16px; font-weight: 700; color: #5668F3; margin: 20px 0 8px; padding-bottom: 6px; border-bottom: 1px solid #EEF0FE; }
+  .minutes-content h3 { font-size: 14px; font-weight: 600; color: #1a1a2e; margin: 12px 0 6px; }
+  .minutes-content p  { margin-bottom: 8px; }
+  .minutes-content ul { padding-left: 18px; margin: 6px 0; }
+  .minutes-content li { margin-bottom: 4px; }
 </style>
 """
 
@@ -136,6 +178,11 @@ def _build_html(meeting_title: str, summary: dict, minutes_content: str) -> str:
         for p in pending
     ) or "<li>없음</li>"
 
+    minutes_html = md_lib.markdown(
+        minutes_content,
+        extensions=["tables", "fenced_code"]
+    )
+
     return f"""<!DOCTYPE html>
             <html lang="ko">
             <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -153,12 +200,12 @@ def _build_html(meeting_title: str, summary: dict, minutes_content: str) -> str:
 
             <div class="section">
                 <div class="section-title">회의 내용</div>
-                <pre style="white-space:pre-wrap;font-family:inherit;font-size:14px;line-height:1.8">{minutes_content}</pre>
+                <div class="minutes-content">{minutes_html}</div>
             </div>
 
             {'<div class="section"><div class="section-title">결정사항</div><table><thead><tr><th>결정</th><th>근거</th><th>반대의견</th></tr></thead><tbody>' + decisions_rows + '</tbody></table></div>' if decisions else ''}
 
-            {'<div class="section"><div class="section-title">액션 아이템</div><table><thead><tr><th>담당자</th><th>내용</th><th>마감</th><th>우선순위</th><th>긴급도</th></tr></thead><tbody>' + action_rows + '</tbody></table></div>' if actions else ''}
+            {'<div class="section"><div class="section-title">액션 아이템</div><table><thead><tr><th style="white-space:nowrap;min-width:80px">담당자</th><th>내용</th><th>마감</th><th>우선순위</th><th>긴급도</th></tr></thead><tbody>' + action_rows + '</tbody></table></div>' if actions else ''}
 
             {'<div class="section"><div class="section-title">미결사항</div><ul>' + pending_items + '</ul></div>' if pending else ''}
             </div>

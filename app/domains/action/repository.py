@@ -134,3 +134,75 @@ def update_task_jira_id(db: Session, task_id: int, jira_issue_id: str) -> None:
         "jira_issue_id": jira_issue_id
     })
     db.commit()
+
+# =================================================================
+# WBS
+# =================================================================
+def get_wbs_epic(db: Session, epic_id: int) -> Optional[WbsEpic]:
+    return db.query(WbsEpic).filter(WbsEpic.id==epic_id).first()
+
+def get_wbs_task(db: Session, task_id: int) -> Optional[WbsTask]:
+    return db.query(WbsTask).filter(WbsTask.id==task_id).first()
+
+def update_wbs_epic(
+        db: Session,
+        epic_id: int,
+        title: Optional[str] = None,
+        order_index: Optional[int] = None, 
+) -> Optional[WbsEpic]:
+    epic = get_wbs_epic(db, epic_id)
+    if not epic:
+        return None
+    if title is not None:
+        epic.title = title
+    if order_index is not None:
+        epic.order_index = order_index
+    db.commit()
+    db.refresh(epic)
+    return epic
+
+def update_wbs_task(
+        db: Session,
+        task_id: int,
+        title: Optional[str] = None,
+        assignee_id: Optional[int] = None,
+        priority: Optional[str] = None,
+        due_date: Optional[date] = None,
+        progress: Optional[int] = None,
+        status: Optional[str] = None,
+) -> Optional[WbsTask]:
+    task = get_wbs_task(db, task_id)
+    if not task:
+        return None
+    if title is not None:
+        task.title = title
+    if assignee_id is not None:
+        task.assignee_id = assignee_id
+    if priority is not None:
+        task.priority = priority
+    if due_date is not None:
+        task.due_date = due_date
+    if progress is not None:
+        task.progress = max(0, min(100, progress))
+    if status is not None:
+        task.status = status
+    db.commit()
+    db.refresh(task)
+    return task
+
+def delete_wbs_epic(db: Session, epic_id: int) -> bool:
+    epic = get_wbs_epic(db, epic_id)
+    if not epic:
+        return False
+    db.query(WbsTask).filter(WbsTask.epic_id == epic_id).delete()
+    db.delete(epic)
+    db.commit()
+    return True
+
+def delete_wbs_task(db: Session, task_id: int) -> bool:
+    task = get_wbs_task(db, task_id)
+    if not task:
+        return False
+    db.delete(task)
+    db.commit()
+    return True
