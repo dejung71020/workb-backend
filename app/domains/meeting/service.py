@@ -139,6 +139,7 @@ class MeetingCreateService:
                 # Workspace 단위 Google OAuth 토큰을 사용해 캘린더 이벤트 생성 후 event_id 저장
                 access_token = await integration_service.get_valid_google_token(db, workspace_id)
                 gcal = GoogleCalendarClient(access_token)
+                calendar_id = integration_service.get_required_workspace_google_calendar_id(db, workspace_id)
 
                 emails = [
                     str(row[0])
@@ -159,6 +160,7 @@ class MeetingCreateService:
                     end_datetime=end_dt.isoformat(),
                     attendees=emails or None,
                     description=f"WorkB 회의: {payload.meeting_type}",
+                    calendar_id=calendar_id,
                 )
                 meeting.google_calendar_event_id = ev.get("id") if isinstance(ev, dict) else None
 
@@ -207,8 +209,9 @@ class MeetingDeleteService:
             if meeting.google_calendar_event_id:
                 access_token = await integration_service.get_valid_google_token(db, workspace_id)
                 gcal = GoogleCalendarClient(access_token)
+                calendar_id = integration_service.get_required_workspace_google_calendar_id(db, workspace_id)
                 try:
-                    await gcal.delete_event(meeting.google_calendar_event_id)
+                    await gcal.delete_event(meeting.google_calendar_event_id, calendar_id=calendar_id)
                 except Exception:
                     # 캘린더 삭제 실패로 DB 삭제 전체를 막지 않음 (토큰/권한/이미 삭제됨 등)
                     pass
@@ -334,6 +337,7 @@ class MeetingUpdateService:
             if meeting.google_calendar_event_id:
                 access_token = await integration_service.get_valid_google_token(db, workspace_id)
                 gcal = GoogleCalendarClient(access_token)
+                calendar_id = integration_service.get_required_workspace_google_calendar_id(db, workspace_id)
 
                 emails = [
                     str(row[0])
@@ -355,11 +359,13 @@ class MeetingUpdateService:
                     end_datetime=end_dt.isoformat(),
                     attendees=emails or None,
                     description=f"WorkB 회의: {payload.meeting_type}",
+                    calendar_id=calendar_id,
                 )
             elif payload.sync_google_calendar:
                 # 기존에 연동되지 않았던 회의라도, 수정 시 연동 체크하면 새 이벤트를 생성
                 access_token = await integration_service.get_valid_google_token(db, workspace_id)
                 gcal = GoogleCalendarClient(access_token)
+                calendar_id = integration_service.get_required_workspace_google_calendar_id(db, workspace_id)
 
                 emails = [
                     str(row[0])
@@ -379,14 +385,16 @@ class MeetingUpdateService:
                     end_datetime=end_dt.isoformat(),
                     attendees=emails or None,
                     description=f"WorkB 회의: {payload.meeting_type}",
+                    calendar_id=calendar_id,
                 )
                 meeting.google_calendar_event_id = ev.get("id") if isinstance(ev, dict) else None
             elif payload.sync_google_calendar is False and meeting.google_calendar_event_id:
                 # 명시적으로 해제 요청이면 이벤트 삭제 후 연결 해제
                 access_token = await integration_service.get_valid_google_token(db, workspace_id)
                 gcal = GoogleCalendarClient(access_token)
+                calendar_id = integration_service.get_required_workspace_google_calendar_id(db, workspace_id)
                 try:
-                    await gcal.delete_event(meeting.google_calendar_event_id)
+                    await gcal.delete_event(meeting.google_calendar_event_id, calendar_id=calendar_id)
                 except Exception:
                     pass
                 meeting.google_calendar_event_id = None
