@@ -174,8 +174,6 @@ def _emit_integration_token_expiring(db: Session) -> None:
         ServiceType.google_calendar: "Google Calendar",
         ServiceType.jira: "JIRA",
         ServiceType.slack: "Slack",
-        ServiceType.notion: "Notion",
-        ServiceType.kakao: "Kakao",
     }
 
     for integ in integrations:

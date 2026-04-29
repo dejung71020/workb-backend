@@ -9,9 +9,7 @@ from datetime import datetime
 class ServiceType(str, enum.Enum):
     jira             = "jira"
     slack            = "slack"
-    notion           = "notion"
     google_calendar  = "google_calendar"
-    kakao            = "kakao"
 
 class Integration(Base):
     __tablename__ = "integrations"

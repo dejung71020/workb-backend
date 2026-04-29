@@ -55,7 +55,6 @@ class ReviewRequest(Base):
       requester_id = Column(Integer, ForeignKey("users.id"), nullable=False)
       reviewer_id  = Column(Integer, ForeignKey("users.id"), nullable=False)
       notify_slack = Column(Boolean, default=False)
-      notify_kakao = Column(Boolean, default=False)
       status       = Column(Enum(ReviewStatus), default=ReviewStatus.pending)
       requested_at = Column(DateTime, default=func.now(), nullable=False)
       reviewed_at  = Column(DateTime, nullable=True)

@@ -118,14 +118,6 @@ INSERT INTO integrations (id, workspace_id, service, access_token, refresh_token
     JSON_OBJECT('projectKey','WB','instance','https://your-domain.atlassian.net'),
     1,
     DATE_SUB(NOW(), INTERVAL 1 HOUR)
-  ),
-  (3, 3, 'notion',
-    NULL,
-    NULL,
-    NULL,
-    JSON_OBJECT('db','dummy','workspace','notion-test'),
-    0,
-    DATE_SUB(NOW(), INTERVAL 2 HOUR)
   );
 
 -- -------------------------------------------------------------------
@@ -231,10 +223,10 @@ INSERT INTO wbs_epics (id, meeting_id, title, order_index, jira_epic_id) VALUES
 -- -------------------------------------------------------------------
 -- wbs_tasks (3)
 -- -------------------------------------------------------------------
-INSERT INTO wbs_tasks (id, epic_id, title, assignee_id, priority, due_date, progress, status, jira_issue_id, notion_page_id, created_at, updated_at) VALUES
-  (1, 1, 'Define requirements', 1, 'high',    DATE_ADD(CURDATE(), INTERVAL 5 DAY),  20, 'in_progress', 'WB-101', 'NOTION-REQ-1', DATE_SUB(NOW(), INTERVAL 3 DAY), DATE_SUB(NOW(), INTERVAL 1 DAY)),
-  (2, 2, 'Implement API v1',    2, 'medium',  DATE_ADD(CURDATE(), INTERVAL 10 DAY), 40, 'in_progress', 'WB-201', 'NOTION-API-2', DATE_SUB(NOW(), INTERVAL 2 DAY), DATE_SUB(NOW(), INTERVAL 1 DAY)),
-  (3, 3, 'Write test cases',    3, 'medium',  DATE_ADD(CURDATE(), INTERVAL 12 DAY), 10, 'todo',        'WB-301', 'NOTION-QA-3',  DATE_SUB(NOW(), INTERVAL 2 DAY), DATE_SUB(NOW(), INTERVAL 2 DAY));
+INSERT INTO wbs_tasks (id, epic_id, title, assignee_id, priority, due_date, progress, status, jira_issue_id, created_at, updated_at) VALUES
+  (1, 1, 'Define requirements', 1, 'high',    DATE_ADD(CURDATE(), INTERVAL 5 DAY),  20, 'in_progress', 'WB-101', DATE_SUB(NOW(), INTERVAL 3 DAY), DATE_SUB(NOW(), INTERVAL 1 DAY)),
+  (2, 2, 'Implement API v1',    2, 'medium',  DATE_ADD(CURDATE(), INTERVAL 10 DAY), 40, 'in_progress', 'WB-201', DATE_SUB(NOW(), INTERVAL 2 DAY), DATE_SUB(NOW(), INTERVAL 1 DAY)),
+  (3, 3, 'Write test cases',    3, 'medium',  DATE_ADD(CURDATE(), INTERVAL 12 DAY), 10, 'todo',        'WB-301',  DATE_SUB(NOW(), INTERVAL 2 DAY), DATE_SUB(NOW(), INTERVAL 2 DAY));
 
 -- -------------------------------------------------------------------
 -- reports (3)

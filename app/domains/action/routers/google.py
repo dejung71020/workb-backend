@@ -1,5 +1,5 @@
 # app/domains/action/routers/google.py
-from fastapi import APIRouter, Depends, BackgroundTasks, Query
+from fastapi import APIRouter, Depends, BackgroundTasks, Query, HTTPException
 from sqlalchemy.orm import Session
 
 from app.infra.database.session import get_db
@@ -47,12 +47,15 @@ async def suggest_next_meeting_slot(
     workspace_id: int = Query(..., description="워크스페이스 ID"),
     db: Session = Depends(get_db),
 ):
-    slots = await suggest_next_meeting(
-        db=db,
-        workspace_id=workspace_id,
-        meeting_id= meeting_id,
-        duration_minutes=request.duration_minutes,
-    )
+    try:
+        slots = await suggest_next_meeting(
+            db=db,
+            workspace_id=workspace_id,
+            meeting_id= meeting_id,
+            duration_minutes=request.duration_minutes,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return NextMeetingSuggestResponse(slots=slots)
 
 @router.post("/next-meeting/register", response_model=NextMeetingRegisterResponse)

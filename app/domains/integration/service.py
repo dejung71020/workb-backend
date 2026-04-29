@@ -16,6 +16,7 @@ from app.infra.clients.session_manager import ClientSessionManager
 from app.core.config import settings
 from app.infra.clients.slack import SlackClient
 from app.infra.clients.google import GoogleCalendarClient
+from app.infra.clients.jira import JiraClient
 
 logger= logging.getLogger(__name__)
 
@@ -177,72 +178,82 @@ async def handle_slack_callback(db: Session, code: str, state: str) -> int:
     logger.info(f"slack 연동 완료 {workspace_id}번")
     return workspace_id
 
-# --- Notion OAuth ---
-def get_notion_auth_url(workspace_id: int) -> str:
+
+# --- JIRA OAuth 2.0 Key ---
+def get_jira_auth_url(workspace_id: int) -> str:
+    if not settings.JIRA_CLIENT_ID:
+        raise ValueError("JIRA_CLIENT_ID가 설정되어 있지 않습니다.")
+    if not settings.JIRA_REDIRECT_URI:
+        raise ValueError("JIRA_REDIRECT_URI가 설정되어 있지 않습니다.")
+    if not settings.JIRA_CLIENT_SECRET:
+        raise ValueError("JIRA_CLIENT_SECRET가 설정되어 있지 않습니다.")
     state = _encode_state(workspace_id)
     return (
-        f"https://api.notion.com/v1/oauth/authorize"
-        f"?client_id={settings.NOTION_CLIENT_ID}"
-        f"&redirect_uri={settings.NOTION_REDIRECT_URI}"
-        f"&response_type=code"
+        f"https://auth.atlassian.com/authorize"
+        f"?audience=api.atlassian.com"
+        f"&client_id={settings.JIRA_CLIENT_ID}"
+        f"&scope=read:jira-work%20write:jira-work%20read:jira-user%20read:me%20offline_access"
+        f"&redirect_uri={settings.JIRA_REDIRECT_URI}"
         f"&state={state}"
+        f"&response_type=code"
+        f"&prompt=consent"
     )
 
-async def handle_notion_callback(db: Session, code: str, state: str) -> int:
+async def handle_jira_callback(db: Session, code: str, state: str) -> int:
+    if not settings.JIRA_CLIENT_ID or not settings.JIRA_CLIENT_SECRET:
+        raise ValueError("JIRA OAuth 설정이 누락되어있습니다.")
     workspace_id = _decode_state(state)
     client = await ClientSessionManager.get_client()
 
-    credentials = base64.b64encode(
-        f"{settings.NOTION_CLIENT_ID}:{settings.NOTION_CLIENT_SECRET}".encode()
-    ).decode()
-
+    # 1. code -> token 교환
     res = await client.post(
-        "https://api.notion.com/v1/oauth/token",
+        "https://auth.atlassian.com/oauth/token",
         json={
             "grant_type": "authorization_code",
+            "client_id": settings.JIRA_CLIENT_ID,
+            "client_secret": settings.JIRA_CLIENT_SECRET,
             "code": code,
-            "redirect_uri": settings.NOTION_REDIRECT_URI,
+            "redirect_uri": settings.JIRA_REDIRECT_URI,
         },
-        headers={"Authorization": f"Basic {credentials}"},
     )
     res.raise_for_status()
-    data = res.json()
+    tokens = res.json()
+
+    # 60분 만료시간 세팅
+    expires_at = now_kst() + timedelta(seconds=tokens.get("expires_in", 3600))
+    
+    # 2. cloud_id 조회
+    resource_res = await client.get(
+        "https://api.atlassian.com/oauth/token/accessible-resources",
+        headers={
+            "Authorization": f"Bearer {tokens['access_token']}"
+        },
+    )
+    resource_res.raise_for_status()
+    resources = resource_res.json()
+
+    if not resources:
+        raise ValueError("접근 가능한 JIRA 사이트가 없습니다.")
+
+    # 첫 번째 사이트 선택
+    site = resources[0]
+    cloud_id = site['id']
+    site_url = site['url'].replace('https://', "")
 
     repository.update_tokens(
         db,
         workspace_id=workspace_id,
-        service=ServiceType.notion,
-        access_token=data["access_token"],
-        extra_config={"workspace_name": data.get("workspace_name", "")},
-    )
-    logger.info(f"Notion 연동 완료 (workspace_id={workspace_id})")
-    return workspace_id
-
-
-# --- JIRA API Key ---
-
-def connect_jira(
-    db: Session, workspace_id: int, domain: str, email: str, api_token: str, project_key: str
-) -> Integration:
-    return repository.update_tokens(
-        db,
-        workspace_id=workspace_id,
         service=ServiceType.jira,
-        access_token=api_token,
-        extra_config={"domain": domain, "email": email, "project_key": project_key},
+        access_token=tokens['access_token'],
+        refresh_token=tokens.get('refresh_token'),
+        token_expires_at=expires_at,
+        extra_config={
+            "cloud_id": cloud_id,
+            "site_url": site_url,
+        }
     )
-
-
-# --- 카카오 API Key ---
-
-def connect_kakao(db: Session, workspace_id: int, api_key: str) -> Integration:
-    return repository.update_tokens(
-        db,
-        workspace_id=workspace_id,
-        service=ServiceType.kakao,
-        access_token=api_key,
-    )
-
+    logger.info(f"JIRA 연동 완료 workspace_id={workspace_id}, site={site_url}")
+    return workspace_id
 
 # --- Google Token 확인 및 갱신 ---
 
@@ -428,5 +439,92 @@ async def list_google_calendar_events(
             "html_link": item.get("htmlLink"),
         })
     return events
+
+
+# jira API 
+async def get_valid_jira_token(db: Session, workspace_id: int) -> str:
+    integration = repository.get_integration(db, workspace_id, ServiceType.jira)
+    if not integration or not integration.access_token:
+        raise ValueError("JIRA 연동이 필요합니다.")
+    
+    expires_at = (integration.extra_config or {}).get("token_expires_at")
+    if expires_at:
+        exp = datetime.fromisoformat(expires_at)
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=KST)
+        if exp < now_kst() + timedelta(minutes=5):
+            client = await ClientSessionManager.get_client()
+            res = await client.post(
+                "https://auth.atlassian.com/oauth/token",
+                json={
+                    "grant_type": "refresh_token",
+                    "client_id": settings.JIRA_CLIENT_ID,
+                    "client_secret": settings.JIRA_CLIENT_SECRET,
+                    "refresh_token": integration.refresh_token,
+                },
+            )
+            res.raise_for_status()
+            new_tokens = res.json()
+            new_expires = now_kst() + timedelta(seconds=new_tokens.get("expires_in", 3600))
+            repository.update_tokens(
+                db,
+                workspace_id=workspace_id,
+                service=ServiceType.jira,
+                access_token=new_tokens['access_token'],
+                refresh_token=new_tokens.get('refresh_token', integration.refresh_token),
+                token_expires_at=new_expires,
+            )
+            return new_tokens['access_token']
+    return integration.access_token
+
+def get_jira_cloud_id(db: Session, workspace_id: int) -> str:
+    integration = repository.get_integration(db, workspace_id, ServiceType.jira)
+    if not integration:
+        raise ValueError("JIRA 연동이 필요합니다. 다시 시도하세요.")
+    cloud_id = (integration.extra_config or {}).get("cloud_id")
+    if not cloud_id:
+        raise ValueError("JIRA cloud_id가 설정되지 않았습니다. 다시 시도하세요.")
+    return cloud_id
+
+async def get_jira_projects(db: Session, workspace_id: int) -> list[dict]:
+    token = await get_valid_jira_token(db, workspace_id)
+    cloud_id = get_jira_cloud_id(db, workspace_id)
+    client = JiraClient(token, cloud_id)
+    projects = await client.get_projects()
+    return [{
+        "key": p["key"],
+        "name": p["name"]
+    } for p in projects
+    ]
+
+def save_jira_project(db: Session, workspace_id: int, project_key: str) -> None:
+    integration = repository.get_integration(db, workspace_id, ServiceType.jira)
+    if not integration:
+        raise ValueError("JIRA 연동이 필요합니다.")
+    extra = dict(integration.extra_config or {})
+    extra['project_key'] = project_key
+    integration.extra_config = extra
+    db.commit()
+
+async def get_jira_project_statuses(db: Session, workspace_id: int) -> list[str]:
+    token = await get_valid_jira_token(db, workspace_id)
+    cloud_id = get_jira_cloud_id(db, workspace_id)
+    integration = repository.get_integration(db, workspace_id, ServiceType.jira)
+    project_key = (integration.extra_config or {}).get("project_key")
+    if not project_key:
+        raise ValueError("프로젝트를 먼저 선택하세요.")
+    client = JiraClient(token, cloud_id)
+    return await client.get_project_statuses(project_key)
+
+def save_jira_status_mapping(db: Session, workspace_id: int, mapping: dict) -> None:
+    integration = repository.get_integration(db, workspace_id, ServiceType.jira)
+    if not integration:
+        raise ValueError("JIRA 연동이 필요합니다.")
+    extra = dict(integration.extra_config or {})
+    extra['status_mapping'] = mapping
+    integration.extra_config = extra
+    db.commit()
+
+
 
 

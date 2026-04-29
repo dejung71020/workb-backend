@@ -18,7 +18,7 @@ def seed_test_data():
 def _seed_mysql():
     db = SessionLocal()
     try:
-        if db.query(User).first():
+        if db.query(User).filter(User.email == "test@workb.com").first():
             return
 
         # 1. 유저
@@ -141,7 +141,7 @@ def _seed_mongo():
                 "action_items": [
                     {
                         "assignee": "이대중",
-                        "content": "Notion 내보내기 클라이언트 구현",
+                        "content": "JIRA 내보내기 클라이언트 구현",
                         "deadline": "2025-05-03",
                         "priority": "high",
                         "urgency": "urgent",

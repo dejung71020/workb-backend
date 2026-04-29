@@ -31,9 +31,6 @@ class JiraConnectRequest(BaseModel):
     api_token: str      # Atlassian API Token
     project_key: str    # PROJ
 
-class KakaoConnectRequest(BaseModel):
-    api_key: str        # kakao REST API Key
-
 class SlackChannelSelectRequest(BaseModel):
     channel_id: str
     

@@ -12,8 +12,6 @@ from app.domains.integration.models import Integration, ServiceType
 from app.domains.integration.schemas import (
     IntegrationListResponse,
     IntegrationResponse,
-    JiraConnectRequest,
-    KakaoConnectRequest,
     OAuthUrlResponse,
     SlackChannelSelectRequest,
     SlackChannelItem,
@@ -153,53 +151,76 @@ async def slack_callback(code: str, state: str, db: Session = Depends(get_db)):
     except Exception:
         return RedirectResponse(f"{FRONTEND_INTEGRATIONS}?service=slack&status=error")
 
-
-@router.get("/notion/auth", response_model=OAuthUrlResponse)
-async def notion_auth(
+@router.get("/jira/auth", response_model=OAuthUrlResponse)
+async def jira_auth(
     workspace_id: int = Query(..., description="워크스페이스 ID"),
-    _admin=Depends(require_workspace_admin),
+    _admin = Depends(require_workspace_admin),
 ) -> OAuthUrlResponse:
-    return OAuthUrlResponse(auth_url=service.get_notion_auth_url(workspace_id))
-
-
-@router.get("/notion/callback")
-async def notion_callback(code: str, state: str, db: Session = Depends(get_db)):
     try:
-        await service.handle_notion_callback(db, code, state)
-        return RedirectResponse(f"{FRONTEND_INTEGRATIONS}?service=notion&status=connected")
+        return OAuthUrlResponse(auth_url=service.get_jira_auth_url(workspace_id))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+@router.get("/jira/callback")
+async def jira_callback(code: str, state: str, db: Session = Depends(get_db)) :
+    try:
+        await service.handle_jira_callback(db, code, state)
+        return RedirectResponse(f"{FRONTEND_INTEGRATIONS}?service=jira&status=connected")
     except Exception:
-        return RedirectResponse(f"{FRONTEND_INTEGRATIONS}?service=notion&status=error")
+        return RedirectResponse(f"{FRONTEND_INTEGRATIONS}?service=jira&status=error")
 
-
-@router.post("/workspaces/{workspace_id}/jira/connect", response_model=IntegrationResponse)
-async def connect_jira(
+@router.get("/workspaces/{workspace_id}/jira/projects")
+async def list_jira_projects(
     workspace_id: int,
-    body: JiraConnectRequest,
+    db: Session = Depends(get_db),
+    _admin = Depends(require_workspace_admin),
+):
+    try:
+        projects = await service.get_jira_projects(db, workspace_id)
+        return {
+            "projects": projects
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+@router.post("/workspaces/{workspace_id}/jira/project/select")
+async def select_jira_project(
+    workspace_id: int,
+    body: dict = Body(...),
+    db: Session = Depends(get_db),
+    _admin = Depends(require_workspace_admin),
+):
+    try:
+        service.save_jira_project(db, workspace_id, body['project_key'])
+        return {"status": "ok"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+@router.get("/workspaces/{workspace_id}/jira/statuses")
+async def list_jira_statuses(
+    workspace_id: int,
     db: Session = Depends(get_db),
     _admin=Depends(require_workspace_admin),
-) -> IntegrationResponse:
-    item = service.connect_jira(
-        db,
-        workspace_id,
-        body.domain,
-        body.email,
-        body.api_token,
-        body.project_key,
-    )
-    return _to_response(item)
-
-
-@router.post("/workspaces/{workspace_id}/kakao/connect", response_model=IntegrationResponse)
-async def connect_kakao(
+):
+    try:
+        statuses = await service.get_jira_project_statuses(db, workspace_id)
+        return {"statuses": statuses}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    
+@router.post("/workspaces/{workspace_id}/jira/mapping")
+async def save_jira_mapping(
     workspace_id: int,
-    body: KakaoConnectRequest,
+    body: dict = Body(...),
     db: Session = Depends(get_db),
-    _admin=Depends(require_workspace_admin),
-) -> IntegrationResponse:
-    item = service.connect_kakao(db, workspace_id, body.api_key)
-    return _to_response(item)
-
-
+    _admin = Depends(require_workspace_admin),
+): 
+    try:
+        service.save_jira_status_mapping(db, workspace_id, body['status_mapping'])
+        return {"status": "ok"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    
 @router.get("/workspaces/{workspace_id}/slack/channels", response_model=SlackChannelListResponse)
 async def list_slack_channels(
     workspace_id: int,

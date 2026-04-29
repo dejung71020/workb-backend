@@ -113,18 +113,6 @@ def save_wbs_task(
 
 # --- 외부 ID 저장 ------------------------------------------
 
-def update_epic_notion_id(db: Session, epic_id: int, notion_page_id: str) -> None:
-    db.query(WbsEpic).filter(WbsEpic.id == epic_id).update({
-        "notion_page_id": notion_page_id
-    })
-    db.commit()
-
-def update_task_notion_id(db: Session, task_id: int, notion_page_id: str) -> None:
-    db.query(WbsTask).filter(WbsTask.id == task_id).update({
-        "notion_page_id": notion_page_id
-    })
-    db.commit()
-
 def update_epic_jira_id(db: Session, epic_id: int, jira_epic_id: str) -> None:
     db.query(WbsEpic).filter(WbsEpic.id == epic_id).update({
         "jira_epic_id": jira_epic_id

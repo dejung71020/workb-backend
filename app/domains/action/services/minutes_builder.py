@@ -78,7 +78,6 @@ def _format_minutes(summary: dict) -> str:
     - 보고서 포맷은 Markdown과 Excel 우선 지원
 
     ## 액션 아이템
-    - [이대중] Notion 내보내기 클라이언트 구현 (~2025-05-03)
     - [박예린] 워크스페이스 생성 시 integration 5개 자동 INSERT 추가 (~2025-05-01)
 
     ## 미결 사항

@@ -49,32 +49,25 @@ class SlackExportRequest(BaseModel):
     include_reports: bool = False
 
 # =================================================================
-# notion
-# =================================================================
-class NotionExportRequest(BaseModel):
-    page_id: Optional[str] = None
-    include_wbs: bool = False
-
-# =================================================================
 # jira
 # =================================================================
 
 
 
-# =================================================================
-# kakao
-# =================================================================
-class KakaoExportRequest(BaseModel):
-    include_action_items: bool = True
+
 
 # =================================================================
 # google calendar
 # =================================================================
-class NextMeetingSuggestRequest(BaseModel):
-    duration_minutes: int = 60
+class TimeSlot(BaseModel):
+      start: str
+      end: str
 
 class NextMeetingSuggestResponse(BaseModel):
-    slots: List[str]
+    slots: List[TimeSlot]
+
+class NextMeetingSuggestRequest(BaseModel):
+    duration_minutes: int = 60
 
 class NextMeetingRegisterRequest(BaseModel):
     title: str

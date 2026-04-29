@@ -21,9 +21,9 @@ _SECONDARY = "EEF0FE"  # 섹션 배경
 _BORDER_C  = "D0D5F5"  # 테두리
 
 def _thumb_path(meeting_id: int, suffix: str) -> Path:
-    p = STORAGE_ROOT / "meetings" / str(meeting_id)
+    p = STORAGE_ROOT / "meetings" / str(meeting_id) / "thumb"
     p.mkdir(parents=True, exist_ok=True)
-    return p / f"thumb_{suffix}.webp"
+    return Path(("/" + str(p / f"thumb_{suffix}.webp")).replace("\\", "/"))
 
 def _report_file_path(meeting_id: int, report_id: int, ext: str) -> Path:
     p = STORAGE_ROOT / "meetings" / str(meeting_id) / "reports"

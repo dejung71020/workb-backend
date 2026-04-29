@@ -106,26 +106,38 @@ async def suggest_next_meeting(
     return:
         추천 시간 리스트 레코드 3개
     """
-    slack_integration = integration_repo.get_integration(db, workspace_id, ServiceType.slack)
-    if not slack_integration or not slack_integration.access_token:
-        raise ValueError("Slack 연동이 필요합니다.")
-    
-    channel_id = (slack_integration.extra_config or {}).get("channel_id")
-    if not channel_id:
-        raise ValueError("Slack 기본 채널이 설정되지 않았습니다.")
-    
-    slack_client = SlackClient(slack_integration.access_token)
-    member_ids = await slack_client.get_channel_members(channel_id=channel_id)
+    attendee_emails: List[str] = []
 
-    attendee_emails = []
-    for uid in member_ids:
-        info = await slack_client.get_user_info(uid)
-        email = info.get("email", "")
-        if email:
-            attendee_emails.append(email)
-    
+    # 1차: Slack 채널 멤버 이메일
+    slack_integration = integration_repo.get_integration(db, workspace_id, ServiceType.slack)
+    if slack_integration and slack_integration.access_token:
+        channel_id = (slack_integration.extra_config or {}).get("channel_id")
+        if channel_id:
+            try:
+                slack_client = SlackClient(slack_integration.access_token)
+                member_ids = await slack_client.get_channel_members(channel_id=channel_id)
+                for uid in member_ids:
+                    info = await slack_client.get_user_info(uid)
+                    email = info.get("email", "")
+                    if email:
+                        attendee_emails.append(email)
+            except Exception:
+                pass
+
+    # 2차 fallback: WorkB DB 워크스페이스 멤버 이메일
     if not attendee_emails:
-        raise ValueError("Slack 채널에서 수집된 이메일이 없습니다.")
+        from app.domains.workspace.models import WorkspaceMember
+        from app.domains.user.models import User
+        rows = (
+            db.query(User.email)
+            .join(WorkspaceMember, WorkspaceMember.user_id == User.id)
+            .filter(WorkspaceMember.workspace_id == workspace_id)
+            .all()
+        )
+        attendee_emails = [r.email for r in rows if r.email]
+
+    if not attendee_emails:
+        raise ValueError("일정 제안에 사용할 이메일을 찾을 수 없습니다. 워크스페이스 멤버를 추가하거나 Slack 채널을 설정해주세요.")
     
     access_token = await get_valid_google_token(db, workspace_id)
     client = GoogleCalendarClient(access_token)
@@ -153,7 +165,7 @@ async def suggest_next_meeting(
             end = datetime.fromisoformat(slot["end"].replace("Z", "+00:00")).astimezone(KST)
             busy_intervals.append((start, end))
     
-    suggestions: List[str] = []
+    suggestions: List[dict] = []
     cursor = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
 
     while len(suggestions) < 3 and cursor < now + timedelta(days=14):
@@ -172,7 +184,10 @@ async def suggest_next_meeting(
             for b_start, b_end in busy_intervals
         )
         if not overlaps:
-            suggestions.append(cursor.strftime("%Y-%m-%dT%H:%M:%S"))
+            suggestions.append({
+                "start": cursor.strftime("%Y-%m-%dT%H:%M:%S+09:00"),
+                "end": (cursor + timedelta(minutes=duration_minutes)).strftime("%Y-%m-%dT%H:%M:%S+09:00"),
+            })
         cursor += timedelta(minutes=30)
 
     return suggestions

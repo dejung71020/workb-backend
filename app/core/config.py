@@ -30,11 +30,9 @@ class Settings(BaseSettings):
     SLACK_REDIRECT_URI: Optional[str] = "https://localhost/api/v1/integrations/slack/callback"
 
     # 4. JIRA
-    JIRA_INSTANCE_URL: Optional[str] = None
-    JIRA_API_KEY: Optional[str] = None
     JIRA_CLIENT_ID: Optional[str] = None
     JIRA_CLIENT_SECRET: Optional[str] = None
-    REDIRECT_URI: str = "http://localhost:8000/api/v1/integrations/jira/callback"
+    JIRA_REDIRECT_URI: str = "http://localhost:8000/api/v1/integrations/jira/callback"
 
     # 5. Google
     GOOGLE_CLIENT_ID: Optional[str] = None
@@ -42,20 +40,15 @@ class Settings(BaseSettings):
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/integrations/google/callback"
     GOOGLE_LOGIN_REDIRECT_URI: str = "http://localhost:8000/api/v1/users/oauth/google/callback"
 
-    # 6. Notion
-    NOTION_CLIENT_ID: Optional[str] = None
-    NOTION_CLIENT_SECRET: Optional[str] = None
-    NOTION_REDIRECT_URI: str = "https://localhost/api/v1/integrations/notion/callback"
-
-    # 7. 카카오
+    # 6. 카카오
     KAKAO_REST_API_KEY: Optional[str] = None
     KAKAO_CLIENT_SECRET: Optional[str] = None
     KAKAO_LOGIN_REDIRECT_URI: str = "http://localhost:8000/api/v1/users/oauth/kakao/callback"
 
-    # 8. FRONTEND
+    # 7. FRONTEND
     FRONTEND_URL: str = "http://localhost:5173"
 
-    # 9. Email
+    # 8. Email
     SMTP_HOST: Optional[str] = None
     SMTP_PORT: int = 587
     SMTP_USERNAME: Optional[str] = None
@@ -66,7 +59,7 @@ class Settings(BaseSettings):
     ADMIN_SIGNUP_EMAIL_ENABLED: bool = True
     PASSWORD_RESET_TOKEN_MINUTES: int = 30
 
-    # 10. Notifications (background jobs)
+    # 9. Notifications (background jobs)
     NOTIFICATION_JOBS_ENABLED: bool = True
     NOTIFICATION_JOB_INTERVAL_SEC: int = 60
 

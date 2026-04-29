@@ -1,8 +1,6 @@
 # app\domains\action\service.py
 from app.domains.action.services.slack import export_slack
-from app.domains.action.services.notion import export_notion
 from app.domains.action.services.jira import export_jira
-from app.domains.action.services.kakao import export_kakao
 from app.domains.action.services.google import (
     export_google_calendar,
     suggest_next_meeting,
@@ -12,9 +10,7 @@ from app.domains.action.services.google import (
 
 __all__ = [
     "export_slack",
-    "export_notion",
     "export_jira",
-    "export_kakao",
     "export_google_calendar",
     "suggest_next_meeting",
     "register_next_meeting",
