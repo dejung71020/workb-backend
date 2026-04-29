@@ -20,24 +20,25 @@ from app.domains.integration.models import Integration
 from app.domains.intelligence.models import Decision, MeetingMinute, MinutePhoto, ReviewRequest
 from app.domains.meeting.models import Meeting, MeetingParticipant, MeetingStatus, SpeakerProfile
 from app.domains.user.models import User
-from app.domains.user.repository import (
-    count_users_by_department_id,
-    get_user_by_id,
-    get_users_by_workspace_id,
-    update_user_department,
-    update_user_role,
-)
+from app.domains.user.repository import get_user_by_id
 from app.domains.notification.models import NotificationType
 from app.domains.notification import service as notification_service
 from app.domains.workspace.repository import (
     create_invite_code,
+    create_workspace_membership,
+    count_workspace_members_by_department_id,
     create_department,
     delete_department,
     get_department_by_id,
     get_departments_by_workspace_id,
+    get_workspace_membership,
+    get_workspace_member_rows,
     get_workspace_by_id,
     get_workspace_by_invite_code,
     get_invite_code_by_code,
+    mark_invite_code_used,
+    update_workspace_membership_department,
+    update_workspace_membership_role,
     update_department,
     update_workspace,
     update_workspace_invite_code,
@@ -57,6 +58,7 @@ from app.domains.workspace.schemas import (
     InviteCodeValidateResponse,
     PendingActionItemOut,
     WeeklySummaryOut,
+    WorkspaceJoinResponse,
     WorkspaceListItem,
     WorkspaceListResponse,
     WorkspaceInviteEmailRequest,
@@ -287,6 +289,65 @@ def validate_invite_code_service(
     )
 
 
+def join_workspace_by_invite_code_service(
+    db: Session,
+    user_id: int,
+    invite_code: str,
+) -> WorkspaceJoinResponse:
+    """초대코드로 현재 사용자를 다른 워크스페이스에 멤버로 추가합니다."""
+    normalized_code = invite_code.strip().upper()
+    if not normalized_code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="초대코드를 입력해주세요.",
+        )
+
+    user = get_user_by_id(db, user_id)
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
+    workspace = get_workspace_by_invite_code(db, normalized_code)
+    invite: InviteCode | None = None
+    role = MemberRole.member
+
+    if not workspace:
+        invite = get_invite_code_by_code(db, normalized_code)
+        if invite and not invite.is_used and invite.expires_at >= datetime.utcnow():
+            workspace = get_workspace_by_id(db, invite.workspace_id)
+            role = invite.role or MemberRole.member
+
+    if not workspace:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="유효하지 않은 초대코드입니다.",
+        )
+
+    existing = get_workspace_membership(db, workspace.id, user.id)
+    if existing:
+        existing_role = existing.role.value if hasattr(existing.role, "value") else str(existing.role)
+        return WorkspaceJoinResponse(
+            workspace_id=workspace.id,
+            workspace_name=workspace.name,
+            role=existing_role,
+            message="이미 참여 중인 워크스페이스입니다.",
+        )
+
+    membership = create_workspace_membership(db, workspace.id, user.id, role)
+    if invite:
+        mark_invite_code_used(db, invite, user.id)
+
+    joined_role = membership.role.value if hasattr(membership.role, "value") else str(membership.role)
+    return WorkspaceJoinResponse(
+        workspace_id=workspace.id,
+        workspace_name=workspace.name,
+        role=joined_role,
+        message=f"{workspace.name} 워크스페이스에 참여했습니다.",
+    )
+
+
 def get_workspace_members_service(
     db: Session,
     workspace_id: int,
@@ -327,7 +388,7 @@ def get_workspace_members_service(
                 detail="부서를 찾을 수 없습니다.",
             )
 
-    users = get_users_by_workspace_id(db, workspace_id, department_id)
+    member_rows = get_workspace_member_rows(db, workspace_id, department_id)
     departments = get_departments_by_workspace_id(db, workspace_id)
 
     # 사용자 응답에 부서 이름을 함께 넣기 위해 부서 ID -> 이름 매핑을 만듭니다.
@@ -342,11 +403,11 @@ def get_workspace_members_service(
                 user_id=user.id,
                 name=user.name,
                 email=user.email,
-                role=user.role,
-                department_id=user.department_id,
-                department=department_name_map.get(user.department_id),
+                role=membership.role.value if hasattr(membership.role, "value") else str(membership.role),
+                department_id=membership.department_id,
+                department=department_name_map.get(membership.department_id),
             )
-            for user in users
+            for membership, user in member_rows
         ]
     )
 
@@ -392,39 +453,47 @@ def update_workspace_member_role_service(
             detail="사용자를 찾을 수 없습니다.",
         )
 
-    if user.workspace_id != workspace_id:
+    membership = get_workspace_membership(db, workspace_id, user_id)
+    if not membership:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="해당 워크스페이스 소속 사용자가 아닙니다.",
         )
 
-    prev_role = str(user.role)
-    updated_user = update_user_role(db, user_id, role)
-    if not updated_user:
+    prev_role = str(membership.role.value if hasattr(membership.role, "value") else membership.role)
+    next_role = role.value if hasattr(role, "value") else str(role)
+    updated_membership = update_workspace_membership_role(db, workspace_id, user_id, MemberRole(next_role))
+    if not updated_membership:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="사용자를 찾을 수 없습니다.",
+            detail="워크스페이스 멤버를 찾을 수 없습니다.",
         )
+
+    updated_role = (
+        updated_membership.role.value
+        if hasattr(updated_membership.role, "value")
+        else str(updated_membership.role)
+    )
 
     # 알림: 권한 변경 (본인에게)
     try:
-        if str(updated_user.role) != prev_role:
+        if updated_role != prev_role:
             notification_service.create_notification(
                 db,
                 workspace_id=workspace_id,
-                user_id=int(updated_user.id),
+                user_id=int(user.id),
                 type_=NotificationType.role_changed,
                 title="권한 변경",
-                body=f"워크스페이스 내 내 역할이 변경되었습니다. ({prev_role} → {updated_user.role})",
+                body=f"워크스페이스 내 내 역할이 변경되었습니다. ({prev_role} → {updated_role})",
                 link="/settings/profile",
-                dedupe_key=f"role_changed:{updated_user.id}:{prev_role}->{updated_user.role}",
+                dedupe_key=f"role_changed:{user.id}:{prev_role}->{updated_role}",
             )
     except Exception:
         pass
 
     return WorkspaceMemberRoleUpdateResponse(
-        user_id=updated_user.id,
-        role=updated_user.role,
+        user_id=user.id,
+        role=updated_role,
     )
 
 def update_workspace_member_department_service(
@@ -469,7 +538,8 @@ def update_workspace_member_department_service(
             detail="사용자를 찾을 수 없습니다.",
         )
 
-    if user.workspace_id != workspace_id:
+    membership = get_workspace_membership(db, workspace_id, user_id)
+    if not membership:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="해당 워크스페이스 소속 사용자가 아닙니다.",
@@ -487,20 +557,21 @@ def update_workspace_member_department_service(
             )
         department_name = department.name
 
-    updated_user = update_user_department(
+    updated_membership = update_workspace_membership_department(
         db=db,
+        workspace_id=workspace_id,
         user_id=user_id,
         department_id=payload.department_id,
     )
-    if not updated_user:
+    if not updated_membership:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="사용자를 찾을 수 없습니다.",
+            detail="워크스페이스 멤버를 찾을 수 없습니다.",
         )
 
     return WorkspaceMemberDepartmentUpdateResponse(
-        user_id=updated_user.id,
-        department_id=updated_user.department_id,
+        user_id=user.id,
+        department_id=updated_membership.department_id,
         department=department_name,
     )
 
@@ -743,7 +814,7 @@ def delete_workspace_department_service(
             detail="부서를 찾을 수 없습니다.",
         )
 
-    member_count = count_users_by_department_id(db, department_id)
+    member_count = count_workspace_members_by_department_id(db, department_id)
     if member_count > 0:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

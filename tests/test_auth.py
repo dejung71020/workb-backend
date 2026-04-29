@@ -15,10 +15,12 @@ import asyncio
 
 import pytest
 from app.core.security import create_refresh_token
+from app.domains.user.models import User
 from app.domains.user.service import _encode_oauth_state, social_login_callback_service
 
 
 BASE = "/api/v1/users"
+LOGIN_FAILURE_MESSAGE = "아이디 또는 비밀번호가 틀렸습니다."
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +158,7 @@ class TestLogin:
             "password": "Login123",
         })
         assert res.status_code == 401
+        assert res.json()["detail"] == LOGIN_FAILURE_MESSAGE
 
     def test_wrong_password_returns_401(self, client):
         self._signup_admin(client)
@@ -164,6 +167,21 @@ class TestLogin:
             "password": "WrongPw1",
         })
         assert res.status_code == 401
+        assert res.json()["detail"] == LOGIN_FAILURE_MESSAGE
+
+    def test_inactive_user_returns_generic_login_failure(self, client, db):
+        self._signup_admin(client)
+        user = db.query(User).filter(User.email == "login@example.com").one()
+        user.is_active = False
+        db.commit()
+
+        res = client.post(f"{BASE}/login", json={
+            "email": "login@example.com",
+            "password": "Login123",
+        })
+
+        assert res.status_code == 401
+        assert res.json()["detail"] == LOGIN_FAILURE_MESSAGE
 
 
 # ---------------------------------------------------------------------------
