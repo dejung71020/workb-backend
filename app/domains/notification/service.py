@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.domains.notification.models import Notification, NotificationType
 from app.domains.notification.schemas import NotificationOut
+from app.domains.user.models import User
 from app.utils.time_utils import KST, now_kst
 
 
@@ -185,5 +186,42 @@ def emit_meeting_soon_if_needed(
             body=f"10분 뒤 [{meeting_title}] 회의가 시작됩니다. 입장 준비를 해주세요.",
             link=f"/meetings/{meeting_id}/upcoming",
             dedupe_key=f"meeting_soon:{meeting_id}:{target.isoformat()}:{uid}",
+        )
+
+
+def emit_workspace_member_joined(
+    db: Session,
+    workspace_id: int,
+    workspace_name: str,
+    new_user_id: int,
+    new_user_name: str,
+    role_display: str,
+) -> None:
+    """
+    워크스페이스에 기존에 속한 멤버·관리자에게 신규 합류 알림을 보냅니다 (신규 가입자 본인 제외).
+    """
+    rows = (
+        db.query(User.id)
+        .filter(
+            User.workspace_id == workspace_id,
+            User.id != new_user_id,
+            User.is_active.is_(True),
+        )
+        .all()
+    )
+    title = "새 멤버 합류"
+    body = f"{new_user_name}님이 [{workspace_name}] 워크스페이스에 {role_display}로 합류했습니다."
+    dedupe = f"workspace_member_joined:{new_user_id}"
+    link = "/settings/members"
+    for (uid,) in rows:
+        create_notification(
+            db,
+            workspace_id=workspace_id,
+            user_id=int(uid),
+            type_=NotificationType.workspace_member_joined,
+            title=title,
+            body=body,
+            link=link,
+            dedupe_key=dedupe,
         )
 
