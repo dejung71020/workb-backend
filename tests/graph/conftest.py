@@ -120,7 +120,7 @@ def summary_json_response():
     content = json.dumps({
         "overview": {"purpose": "스프린트 회고", "datetime_str": "2026-04-23 10:00"},
         "discussion_items": [{"topic": "배포 일정", "content": "2주 앞당기기로 결정"}],
-        "decisions": [{"decision": "배포 일정 단축", "citiation": "[홍길동] 2주 앞당기겠습니다."}],
+        "decisions": [{"decision": "배포 일정 단축", "citation": "[홍길동] 2주 앞당기겠습니다."}],
         "action_items": [
             {
                 "assignee": "홍길동",
@@ -128,7 +128,7 @@ def summary_json_response():
                 "deadline": "2026-04-30",
                 "priority": "high",
                 "urgency": "urgent",
-                "citiation": "[홍길동] 배포 스크립트 수정하겠습니다.",
+                "citation": "[홍길동] 배포 스크립트 수정하겠습니다.",
             }
         ],
         "pending_items": [],

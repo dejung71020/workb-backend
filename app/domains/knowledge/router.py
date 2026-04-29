@@ -1,6 +1,6 @@
 # app\domains\knowledge\router.py
 import uuid
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import BackgroundTasks, APIRouter, UploadFile, File, Form, HTTPException
 from datetime import date
 from typing import Optional
 
@@ -23,8 +23,8 @@ from app.domains.knowledge.schemas import (
     ChatbotHistoryResponse,
     ChatbotMessageRequest,
     ChatbotMessageResponse,
-    ChatbotSummaryRequest,
-    ChatbotSummaryResponse,
+    ChatbotReportRequest,
+    ChatbotReportResponse,
     DocumentUploadResponse,
     PastMeetingsResponse,
     PastMeetingItem,
@@ -34,8 +34,8 @@ from app.domains.meeting.service import MeetingSearchService
 from app.domains.knowledge import repository
 from app.utils.redis_utils import get_meeting_context
 from app.utils.time_utils import now_kst
-from app.domains.knowledge.agent_utils import summary_node
-from app.domains.knowledge.service import ingest_document
+from app.domains.knowledge.agent_utils import quick_report_node
+from app.domains.knowledge.service import ingest_document, analyze_document_for_display
 
 router = APIRouter()
 
@@ -124,8 +124,8 @@ async def chatbot_history(workspace_id: int, session_id: str):
         ]
     )
 
-@router.post("/workspace/{workspace_id}/chatbot/summary", response_model=ChatbotSummaryResponse)
-async def chatbot_summary(workspace_id: int, req: ChatbotSummaryRequest):
+@router.post("/workspace/{workspace_id}/chatbot/quick_report")
+async def chatbot_report(workspace_id: int, req: ChatbotReportRequest, background_tasks: BackgroundTasks,):
     state = {
         "meeting_id": req.meeting_id,
         "workspace_id": workspace_id,
@@ -134,13 +134,17 @@ async def chatbot_summary(workspace_id: int, req: ChatbotSummaryRequest):
         "function_type": "",
         "chat_response": ""
     }
-    result = await summary_node(state)
-    await repository.save_meeting_summary(workspace_id, req.meeting_id, result["summary"])
+    # 백그라운드로 실행 — 회의 종료 시 fire-and-forget 호출용
+    # quick_report_node 내부에서 meeting_summaries에 저장까지 처리
+    background_tasks.add_task(_run_quick_report, workspace_id, state)
+    return {"status": "accepted"}
 
-    return ChatbotSummaryResponse(
-        summary=result["summary"],
-        generated_at=now_kst()
-    )
+async def _run_quick_report(workspace_id: int, state: dict):
+    """백그라운드 quick_report 생성 헬퍼."""
+    try:
+        await quick_report_node(state)
+    except Exception:
+        pass  # 백그라운드 실패는 조용히 무시
 
 @router.get("/workspace/{workspace_id}/past_meetings", response_model=PastMeetingsResponse)
 async def get_past_meetings(workspace_id: int):
@@ -150,9 +154,10 @@ async def get_past_meetings(workspace_id: int):
         total=len(meetings),
     )
 
-@router.post("/workspaces/{workspace_id}/documents", response_model=DocumentUploadResponse)
+@router.post("/workspace/{workspace_id}/documents", response_model=DocumentUploadResponse)
 async def upload_document(
     workspace_id: int,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     title: Optional[str] = Form(None),
 ):
@@ -164,24 +169,56 @@ async def upload_document(
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
     file_type = _EXT_MAP.get(ext)
     if not file_type:
-        raise HTTPException(status_code=415, detail=f"지원하지 않는 파일 형식: .{ext}")
+        supported = ", ".join(f".{e}" for e in _EXT_MAP)
+        raise HTTPException(status_code=415, detail=f".{ext}는 지원하지 않는 형식입니다. 지원 형식: {supported}")
 
     file_bytes = await file.read()
 
-    try:
-        result = ingest_document(
-            workspace_id=workspace_id,
-            filename=file.filename,
-            file_type=file_type,
-            file_bytes=file_bytes,
-            title=title
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    background_tasks.add_task(
+        ingest_document,
+        workspace_id=workspace_id,
+        filename=file.filename,
+        file_type=file_type,
+        file_bytes=file_bytes,
+        title=title
+    )
 
     return DocumentUploadResponse(
-        doc_id=result["doc_id"],
-        chunks=result["chunks"],
-        title=result["title"],
+        doc_id=f"{workspace_id}_{file.filename}",
+        chunks=-1,
+        title=title or file.filename,
         uploaded_at=now_kst()
     )
+
+@router.post("/workspace/{workspace_id}/documents/analyze")
+async def analyze_document_endpoint(
+    workspace_id: int,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    title: Optional[str] = Form(None)
+): 
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower()
+    file_type = _EXT_MAP.get(ext)
+    if not file_type:
+        raise HTTPException(status_code=415, detail=f".{ext}는 지원하지 않는 형식입니다.")
+        
+    file_bytes = await file.read()
+
+    result = await analyze_document_for_display(
+        workspace_id=workspace_id,
+        filename=file.filename,
+        file_bytes=file_bytes,
+        file_type=file_type,
+        title=title,
+    )
+
+    background_tasks.add_task(                                                                                     
+        ingest_document,      
+        workspace_id=workspace_id,
+        filename=file.filename,   
+        file_type=file_type,                                                                                         
+        file_bytes=file_bytes,
+        title=title,                                                                                                 
+    )
+
+    return {**result, "timestamp": now_kst().isoformat()}

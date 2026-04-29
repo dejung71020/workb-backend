@@ -7,7 +7,7 @@ from app.core.config import settings
 from app.infra.database.session import SessionLocal
 from app.utils.time_utils import now_kst
 
-mongo_db = AsyncIOMotorClient(settings.MONGODB_URL)["workb"]
+mongo_db = AsyncIOMotorClient(settings.MONGODB_URL)["meeting_assistant"]
 
 # -------------------------------------------------------------
 # MongoDB
@@ -54,6 +54,19 @@ async def get_past_meetings(workspace_id: int) -> list[dict]:
         {"_id": 0, "meeting_id": 1, "title": 1, "created_at": 1}
     ).sort("created_at", -1)
     return await cursor.to_list(length=None)
+
+async def get_past_meeting_ids(workspace_id: int) -> list[dict]:
+    cursor = mongo_db["meeting_contexts"].find(
+        {"$or": [
+            {"workspace_id": workspace_id},
+            {"workspace_id": {"$exists": False}}, # 구버전 데이터 호환
+        ]},
+        {"_id": 0, "meeting_id": 1}
+    ).sort("created_at", -1)
+
+    docs = await cursor.to_list(length=None)
+
+    return [doc["meeting_id"] for doc in docs]
 
 async def get_chat_history(workspace_id: int, session_id: str) -> list[dict]:
     cursor = mongo_db["chatbot_logs"].find(

@@ -21,7 +21,7 @@ from app.core.config import settings
 
 # --- 클라이언트 ---
 r = redis.from_url(settings.REDIS_URL)
-mongo_db = MongoClient(settings.MONGODB_URL)["workb"]
+mongo_db = MongoClient(settings.MONGODB_URL)["meeting_assistant"]
 
 # 현재 회의 ID (Redis 발화 + MySQL in_progress)
 DEFAULT_MEETING_ID = "4"

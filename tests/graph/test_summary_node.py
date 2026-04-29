@@ -145,7 +145,7 @@ class TestSummaryNodeHallucination:
         summary_content = json.dumps({
             "overview": {"purpose": "테스트", "datetime_str": ""},
             "discussion_items": [],
-            "decisions": [{"decision": "배포 스크립트 수정", "citiation": "[홍길동] 배포 스크립트를 금요일까지 수정하겠습니다."}],
+            "decisions": [{"decision": "배포 스크립트 수정", "citation": "[홍길동] 배포 스크립트를 금요일까지 수정하겠습니다."}],
             "action_items": [],
             "pending_items": [],
             "next_meeting": None,
@@ -177,7 +177,7 @@ class TestSummaryNodeHallucination:
         summary_content = json.dumps({
             "overview": {"purpose": "테스트", "datetime_str": ""},
             "discussion_items": [],
-            "decisions": [{"decision": "예산 삭감", "citiation": None}],
+            "decisions": [{"decision": "예산 삭감", "citation": None}],
             "action_items": [],
             "pending_items": [],
             "next_meeting": None,

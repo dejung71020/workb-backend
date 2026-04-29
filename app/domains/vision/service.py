@@ -1,5 +1,6 @@
 # app\domains\vision\service.py
-import asyncio
+import asyncio, os
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 from app.domains.vision.agent_utils import (
@@ -8,10 +9,20 @@ from app.domains.vision.agent_utils import (
 from app.domains.vision import repository
 from app.utils.time_utils import now_kst
 
+def _save_capture_image(meeting_id: int, image_bytes: bytes) -> str:
+    """캡처 이미지를 로컬에 저장하고 file_url 반환"""
+    ts = now_kst().strftime("%Y%m%d_%H%M%S_%f")
+    dir_path = Path(f"storage/meetings/{meeting_id}/captures")
+    dir_path.mkdir(parents=True, exist_ok=True)
+    file_path = dir_path / f"{ts}.png"
+    file_path.write_bytes(image_bytes)
+    return str(file_path)
+
 async def analyze_screen_share(image_bytes: bytes, meeting_id: int, seq: int | None) -> dict:
+    file_url = _save_capture_image(meeting_id, image_bytes)
     analysis = await analyze_image(image_bytes, meeting_id, seq)
-    repository.save_analysis(meeting_id=meeting_id, data=analysis)
-    return {"timestamp": now_kst(), **analysis}
+    repository.save_analysis(meeting_id=meeting_id, data=analysis, file_url=file_url)
+    return {"timestamp": now_kst(), "file_url": file_url, **analysis}
 
 async def get_analyses(meeting_id: int) -> list[dict]:
     return repository.get_analyses(meeting_id)
