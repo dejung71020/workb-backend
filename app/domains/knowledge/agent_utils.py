@@ -145,7 +145,7 @@ def query_meetings_schedule(question: str, workspace_id: str) -> list:
     if '오늘' in question:
         start, end = today, today
     elif '이번 주' in question or '금주' in question:
-        start = today - timedelta(days=todays.weekday()) # 이번 주 월요일
+        start = today - timedelta(days=today.weekday()) # 이번 주 월요일
         end = start + timedelta(days=6)
     elif '다음 주' in question:
         start = today + timedelta(days=7 - today.weekday())
@@ -353,6 +353,7 @@ async def knowledge_node(state: SharedState) -> dict:
     {meeting_context}
     
     규칙:
+    - 회의 발화가 없을 때 일반 지식/개념/정보를 묻는 질문은 반드시 web_search를 먼저 사용하세요. 내부 지식만으로 답변하지 마세요.
     - 특정 문서를 요약하거나 전체 내용이 필요할 때는 get_document_full_content를 사용하세요. workspace_id는 반드시 "{workspace_id}"로 전달하세요.                                                                                
     - 사용자 질문에 파일명·문서명·자료명이 포함되어 있으면 반드시 get_document_full_content를 가장 먼저 호출하세요. search_internal_db보다 항상 우선합니다.                                                                    
     - get_document_full_content 도구를 사용했으면 citations는 반드시 []. 문서 내용 자체가 답변이므로 별도 인용 불필요.
@@ -401,20 +402,30 @@ async def knowledge_node(state: SharedState) -> dict:
     })
 
     # Tavily ToolMessage에서 웹 소스 추출
+    seen_urls = set()
+    seen_domains = set()
     web_sources = []
     for msg in result["messages"]:
         if getattr(msg, "name", None) == "tavily_search_results_json":
             try:
                 raw = json.loads(msg.content) if isinstance(msg.content, str) else msg.content
                 if isinstance(raw, list):
-                    web_sources = [
-                        {
-                            "title": s.get("title", ""),
-                            "url": s.get("url", ""),
-                            "snippet": s.get("content", "")[:200],
-                        }
-                        for s in raw if s.get("url")
-                    ]
+                    for s in raw:
+                        url = s.get("url", "")
+                        if url and url not in seen_urls:
+                            continue
+                        domain = urlparse(url).netloc
+                        if domain in seen_domains:
+                            continue
+                        seen_urls.add(url)
+                        seen_domains.add(domain)
+                        web_sources.append(
+                            {
+                                "title": s.get("title", ""),
+                                "url": s.get("url", ""),
+                                "snippet": s.get("content", "")[:200],
+                            }
+                        )
             except Exception:
                 pass
 
@@ -468,7 +479,7 @@ async def knowledge_node(state: SharedState) -> dict:
 
         if citation_failed or (not citations and confidence == "low"):
             # 불일치 또는 근거 없음 -> 답변 자체를 대체
-            if no_meeting_context:                                                                                           
+            if not tool_used and no_meeting_context:                                                                                           
                 # 회의 없는 상태에서 도구 미사용 → 내부 문서 검색 유도                                                       
                 answer = "관련 내용을 찾지 못했습니다. 해당 파일이 업로드되어 있는지 확인해주세요."                          
             else:                                                                                                          
