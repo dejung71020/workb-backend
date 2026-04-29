@@ -5,7 +5,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from app.domains.knowledge.repository import get_user_name_by_id
 from app.core.config import settings
 
-mongo_db = AsyncIOMotorClient(settings.MONGODB_URL)["workb"]
+mongo_db = AsyncIOMotorClient(settings.MONGODB_URL)["meeting_assistant"]
 
 r = redis.asyncio.from_url(settings.REDIS_URL)
 

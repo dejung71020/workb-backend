@@ -18,7 +18,7 @@ from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 
 # --- 클라이언트 초기화 ---
 # 모듈 로드 시 한 번만 연결. 요청마다 새로 연결하지 않음.
-mongo_db = AsyncIOMotorClient(settings.MONGODB_URL)["workb"]
+mongo_db = AsyncIOMotorClient(settings.MONGODB_URL)["meeting_assistant"]
 chroma_client = chromadb.HttpClient(
     host=settings.CHROMA_HOST,
     port=settings.CHROMA_PORT,
@@ -96,20 +96,24 @@ async def search_past_meetings(query: str, meeting_ids: Optional[list[str]] = No
 @tool
 def search_internal_db(query: str, workspace_id: str) -> list:
     """
-    회사 내부 문서에서 관련 정보를 시멘틱 검색한다.
+    회사 내부 문서(업로드 파일, 회의록, 보고서)에서 관련 정보를 시멘틱 검색한다.
     workspace_id: 현재 워크스페이스 ID
     """
     try:
         # get_collection()이 저장 때와 동일한 EF를 사용 → 벡터 공간 일치
         collection = get_collection(workspace_id)
+        count = collection.count()
+        if count == 0:
+            return []
         results = collection.query(
             query_texts=[query],
-            n_results=5
+            n_results=min(5, count) # count < 5 이면 ChromaDB InvalidArgumentError 방지
         )
         return [
             {
                 "source": "internal_db",
-                "title": meta.get("title", "내부 문서"),
+                "source_type": meta.get("source_type", "uploaded"), # uploaded | meeting_minutes | report
+                "title": meta.get("title") or "내부 문서",
                 "snippet": doc,
                 "url": meta.get("url", None),
                 # ChromaDB distance는 가까울수록 0에 가까움 -> 1에서 빼서 socre로 변환
@@ -123,6 +127,94 @@ def search_internal_db(query: str, workspace_id: str) -> list:
         ]
     except Exception:
         return []
+
+@tool
+def query_meetings_schedule(question: str, workspace_id: str) -> list:
+    """
+    워크스페이스의 회의 일정을 DB에서 조회한다.
+    "오늘 회의 몇 개야", "이번 주 회의 알려줘", "다음 회의 언제야" 같은 일정 질문에 사용.
+    workspace_id: 현재 워크스페이스 ID
+    """
+    from datetime import datetime, timedelta
+    from app.infra.database.session import SessionLocal
+    from app.domains.meeting.models import Meeting
+
+    today = now_kst().date()
+
+    # LLM 없이 키워드로 날짜 범위 결정 - 도구 내부에서 LLM 재호출 방지
+    if '오늘' in question:
+        start, end = today, today
+    elif '이번 주' in question or '금주' in question:
+        start = today - timedelta(days=todays.weekday()) # 이번 주 월요일
+        end = start + timedelta(days=6)
+    elif '다음 주' in question:
+        start = today + timedelta(days=7 - today.weekday())
+        end = start + timedelta(days=6)
+    elif '이번 달' in question:
+        start = today.replace(day=1)
+        end = (start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+    else:
+        # 기본: 오늘 이후 30일
+        start, end = today, today + timedelta(days=30)
+
+    start_dt = datetime.combine(start, datetime.min.time())
+    end_at = datetime.combine(end, datetime.max.time())
+
+    db = SessionLocal()
+    try:
+        meetings = (
+            db.query(Meeting)
+            .filter(
+                Meeting.workspace_id == int(workspace_id),
+                Meeting.scheduled_at >= start_dt,
+                Meeting.scheduled_at <= end_at,
+            )
+            .order_by(Meeting.scheduled_at)
+            .all()
+        )
+        return [
+            {
+                "meeting_id": m.id,
+                "title": m.title,
+                "scheduled_at": m.scheduled_at.strftime("%Y-%m-%d %H:%M") if m.scheduled_at else None,
+                "status": m.status.value if m.status else None,
+                "room_name": m.room_name,
+            }
+            for m in meetings
+        ]
+    except Exception:
+        return []
+    finally:
+        db.close()
+
+@tool
+def get_document_full_content(document_name: str, workspace_id: str) -> str:
+    """
+    특정 문서의 전체 내용을 순서대로 반환한다.
+    "X 요약해줘", "X 전체 내용 알려줘"처럼 특정 문서 전체가 필요할 때 사용
+    search_internal_db는 유사도 기반 일부만 반환하므로, 문서 전체가 필요한 경우 이 도구를 사용.
+    """
+    try:
+        collection = get_collection(workspace_id)
+        results = collection.get(include=["documents", "metadatas"])
+        all_docs = results.get("documents", [])
+        all_metadatas = results.get("metadatas", [])
+
+        # title 또는 filename에 document_name 포함되는 청크 필터링
+        matching = [
+            (doc, meta) for doc, meta in zip(all_docs, all_metadatas)
+            if document_name.lower() in (meta.get("title") or "").lower()
+            or document_name.lower() in (meta.get("filename") or "").lower()
+        ]
+        if not matching:
+            return ""
+
+        # chunk_index 순으로 정렬 -> 문서 원래 순서 유지
+        matching.sort(key=lambda x: x[1].get("chunk_index", 0))
+        title = matching[0][1].get("title") or document_name
+        return f"[{title}]\n\n" + "\n\n".join(doc for doc, _ in matching)
+    except Exception:
+        return ""
 
 @tool
 def register_calendar(
@@ -188,12 +280,18 @@ web_search = TavilySearchResults(
 tools = [
     web_search, 
     search_past_meetings, 
-    search_internal_db, 
+    search_internal_db,
+    get_document_full_content,
+    query_meetings_schedule,
     register_calendar,
     update_calendar_event,
     delete_calendar_event,
     get_calendar_events
 ]
+
+def _fmt_citation(c: str) -> str:
+    lines = [l for l in c.split('\n') if l.strip()]
+    return '\n'.join(f'> {l}' for l in lines) if lines else f'> {c}'
 
 # --- ReAct Agent 그래프 (ToolNode 방식) ---
 # llm_with_tools: LLM이 tool_schema 목록을 인식하고 필요 시 tool_call을 생성할 수 있게 바인딩.
@@ -225,8 +323,8 @@ async def knowledge_node(state: SharedState) -> dict:
         2. 현재 회의 발화 로드 (meeting_id 있을 때만)
         3. react_agent 호출
         4. 도구 사용 여부에 따라 분기:
-            - 도구 사용 (웹검색/캘린더/내부문서) -> citiation 검증 생략
-            - 회의 내용 기반 -> citiation이 원문에 실제 존재하는지 검증
+            - 도구 사용 (웹검색/캘린더/내부문서) -> citation 검증 생략
+            - 회의 내용 기반 -> citation이 원문에 실제 존재하는지 검증
         5. STT 딜레이 고지 prepend (회의 중일 때만)
     """
     meeting_id = state.get("meeting_id")
@@ -235,6 +333,7 @@ async def knowledge_node(state: SharedState) -> dict:
     meeting_context = await get_meeting_context(meeting_id) if meeting_id else ""
     workspace_id = state.get("workspace_id", "")
     past_meeting_ids = state.get("past_meeting_ids")
+    no_meeting_context = not meeting_context.strip()
 
     if past_meeting_ids:
         ids_str = ", ".join(f'"{i}"' for i in past_meeting_ids)
@@ -254,17 +353,22 @@ async def knowledge_node(state: SharedState) -> dict:
     {meeting_context}
     
     규칙:
+    - 특정 문서를 요약하거나 전체 내용이 필요할 때는 get_document_full_content를 사용하세요. workspace_id는 반드시 "{workspace_id}"로 전달하세요.                                                                                
+    - 사용자 질문에 파일명·문서명·자료명이 포함되어 있으면 반드시 get_document_full_content를 가장 먼저 호출하세요. search_internal_db보다 항상 우선합니다.                                                                    
+    - get_document_full_content 도구를 사용했으면 citations는 반드시 []. 문서 내용 자체가 답변이므로 별도 인용 불필요.
+    - search_internal_db는 여러 문서에 걸친 키워드·개념 검색에만 사용하세요
+    - 현재 회의 발화가 없거나("(없음)"), 질문이 문서·파일·보고서·업로드된 자료에 관한 것이면 search_internal_db를 반드시 먼저 사용하세요. workspace_id는 반드시 "{workspace_id}"로 전달하세요.
     - 회의 내용만으로 답할 수 있으면 도구 없이 답변하세요.
     - 정보가 불완전하더라도 회의에서 언급된 내용을 바탕으로 최대한 답변하세요.
     - 확실하지 않은 정보는 "~라고 언급됐습니다" 형식으로 답변하세요.
     - 특정 문서·파일·자료·브리프·보고서 내용이 필요하면 search_internal_db를 먼저 사용하세요. workspace_id는 반드시 "{workspace_id}"로 전달하세요.
+    - 회의 일정·스케줄 관련 질문("오늘 회의 몇 개야", "다음 회의 언제야" 등)은 query_meetings_schedule을 사용하세요. workspace_id는 반드시 "{workspace_id}"로 전달하세요.
     - 외부 자료가 필요하면 web_search를 사용하세요.
     - 이전 회의 내용이 필요하면 search_past_meetings를 사용하세요.
-    - 회사 내부 문서가 필요하면 search_internal_db를 사용하세요. workspace_id는 반드시 "{workspace_id}"로 전달하세요.
-
+    
     최종 답변은 반드시 아래 JSON 형식으로만 출력하세요.
     {{
-        "answer": "사용자 질문에 대한 답변",
+        "answer": "사용자 질문에 대해 마크다운 형식으로 작성된 답변",
         "confidence": "high" | "medium" | "low"
         "hedge_note": "근거 있음 | 근거 불충분 | 근거 없음",
         "citations": ["근거가 된 발화를 [화자명] 내용 형식 그대로 복사. 요약・재서술 금지. 최대 3개."]
@@ -277,8 +381,14 @@ async def knowledge_node(state: SharedState) -> dict:
     
     citations 규칙:                                                                          
     - web_search 도구를 사용했으면 반드시 []. 절대 웹 검색 내용을 citations에 넣지 마세요.   
-    - search_past_meetings 도구를 사용했으면 반환된 snippet 원문을 그대로 복사.              
+    - search_past_meetings 도구를 사용했으면 반환된 snippet 원문을 그대로 복사. 
+    - search_internal_db 도구를 사용했으면 반환된 snippet 원문을 그대로 복사.            
     - 회의 발화 기반이면 [화자명] 발화내용 형식으로 원문 발췌.
+
+    answer 작성 규칙:                                                                                                  
+    - # 헤딩 사용 금지. ## 이하만 사용.                                                                             
+    - 목록은 마크다운 bullet(-) 또는 번호 사용                                                                         
+    - 표 형태 데이터는 마크다운 테이블로 표현 
 
     {meeting_filter_hint}
     """
@@ -314,6 +424,13 @@ async def knowledge_node(state: SharedState) -> dict:
         for msg in result["messages"]
     )
 
+    # search_internal_db 사용 여부 별도 체크
+    internal_db_used = any(
+        tc.get("name") == ("search_internal_db", "get_document_full_content")
+        for msg in result["messages"]
+        for tc in (getattr(msg, "tool_calls", None) or [])
+    )
+
     # LLM이 앞뒤에 설명 텍스트를 붙이는 경우를 대비해 JSON 블록만 추출
     raw = result["messages"][-1].content
     json_match = re.search(r"\{.*\}", raw, re.DOTALL)
@@ -331,7 +448,8 @@ async def knowledge_node(state: SharedState) -> dict:
             pass
         # search_past_meetings: 이전 회의 발화가 citations로 오면 표시
         elif citations:
-            citation_block = "\n\n**📎 근거 발화:**\n" + "\n".join(f"> {c}" for c in citations)                          
+            label = "📎 근거 문서:" if internal_db_used else "📎 근거 발화:"
+            citation_block = f"\n\n**{label}**\n" + "\n\n".join(_fmt_citation(c) for c in citations)                          
             answer += citation_block
     else:
         # 회의 내용 기반 답변 -> citation이 실제 발화 원문에 존재하는지 검증
@@ -350,7 +468,11 @@ async def knowledge_node(state: SharedState) -> dict:
 
         if citation_failed or (not citations and confidence == "low"):
             # 불일치 또는 근거 없음 -> 답변 자체를 대체
-            answer = "해당 내용은 회의에서 확인되지 않았습니다."
+            if no_meeting_context:                                                                                           
+                # 회의 없는 상태에서 도구 미사용 → 내부 문서 검색 유도                                                       
+                answer = "관련 내용을 찾지 못했습니다. 해당 파일이 업로드되어 있는지 확인해주세요."                          
+            else:                                                                                                          
+                answer = "해당 내용은 회의에서 확인되지 않았습니다."
         else:
             # 검증 통과한 citations만 표시
             if verified_citations:
@@ -464,8 +586,8 @@ async def summary_node(state: SharedState) -> dict:
     {{
         "overview": {{"purpose": "...", "datetime_str": "..."}},
         "discussion_items": [{{"topic": "...", "content": "..."}}],
-        "decisions": [{{"decision": "...", "citiation": "..."}}],
-        "action_items": [{{"assignee": "...", "content": "...", "deadline": "...", "priority": "high|normal", "urgency": "urgent|normal|low", "citiation": "..."}}],
+        "decisions": [{{"decision": "...", "citation": "..."}}],
+        "action_items": [{{"assignee": "...", "content": "...", "deadline": "...", "priority": "high|normal", "urgency": "urgent|normal|low", "citation": "..."}}],
         "pending_items": [{{"content": "...", "carried_over": false, "first_mentioned_meeting": null}}],
         "next_meeting": "...",
         "previous_followups": [{{"previous_action": "...", "completed": false}}],
@@ -494,10 +616,10 @@ async def summary_node(state: SharedState) -> dict:
 
     # 검증 대상: decisions + action_items (요약 중 사실 관계 오류가 가장 치명적인 섹션)
     check_targets = [
-        (d.get("decision", ""), d.get("citiation", "")) 
+        (d.get("decision", ""), d.get("citation", "")) 
         for d in summary_dict.get("decisions", []) or []
     ] + [
-        (a.get("content", ""), a.get("citiation", "")) 
+        (a.get("content", ""), a.get("citation", "")) 
         for a in summary_dict.get("action_items", []) or []
     ]
 
@@ -514,7 +636,7 @@ async def summary_node(state: SharedState) -> dict:
 
         flags.append({
             "item": item_text,
-            "citiation": citation,
+            "citation": citation,
             "confidence": confidence,
         })
 
@@ -655,8 +777,8 @@ async def past_summary_node(state: SharedState) -> dict:
         "meetings": {meetings_meta_str},
         "overview": {{"purpose": "이전 회의 종합 요약", "datetime_str": "{dates_str}"}},
         "discussion_items": [{{"topic": "...", "content": "..."}}],
-        "decisions": [{{"decision": "...", "citiation": null}}],                                                     
-        "action_items": [{{"assignee": "...", "content": "...", "deadline": "...", "priority": "high|normal", "urgency": "urgent|normal|low", "citiation": null}}],                                                                
+        "decisions": [{{"decision": "...", "citation": null}}],                                                     
+        "action_items": [{{"assignee": "...", "content": "...", "deadline": "...", "priority": "high|normal", "urgency": "urgent|normal|low", "citation": null}}],                                                                
         "pending_items": [{{"content": "...", "carried_over": false, "first_mentioned_meeting": null}}],           
         "next_meeting": null,                                                                                        
         "previous_followups": []

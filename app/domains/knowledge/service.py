@@ -8,15 +8,19 @@ future knowledge-base API and keep the merged code importable.
 
 from __future__ import annotations
 
-import io, re, os, subprocess, tempfile
+import io, re, os, subprocess, tempfile, asyncio
+import json as _json
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+from openai import AsyncOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from app.core.config import settings
 from app.domains.knowledge.agent_utils import chroma_client, get_collection
 from app.utils.time_utils import now_kst
 
+_async_openai = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
 _splitter = RecursiveCharacterTextSplitter(
     chunk_size=800,
@@ -124,8 +128,8 @@ def _extrac_doc_legacy(file_bytes: bytes) -> str:
     vision 도메인의 PPTX->PDF 변환과 동일한 LibreOffice 의존성.
     변환 타임아웃 30초 - 대용량 파일은 초과 가능.
     """
-    with tempFile.TemporaryDirectory() as tmpdir:
-        doc_path = os.path.join(tmdir, "input, doc")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        doc_path = os.path.join(tmpdir, "input, doc")
         with open(doc_path, "wb") as f:
             f.write(file_bytes)
 
@@ -212,7 +216,24 @@ def _extract_xls_legacy(file_bytes: bytes) -> str:
         with open(xlsx_path, "rb") as f:
             return _extract_xlsx(f.read())
 
-def ingest_document(
+async def _embed_all(texts: list[str]) -> list[list[float]]:
+    """
+    청크 전체를 OpenAI 임베딩 API로 병렬 배치 처리.
+    OpenAI 단일 요청 최대 2048개 제한에 맞게 분할 후 asyncio.gather로 동시 실행.
+    ChromaDB EF의 순차 처리 대비 10배 이상 빠름
+    """
+    BATCH = 2048
+    batches = [texts[i:i+BATCH] for i in range(0, len(texts), BATCH)]
+    responses = await asyncio.gather(*[
+        _async_openai.embeddings.create(
+            model="text-embedding-3-small",
+            input=batch,
+        )
+        for batch in batches
+    ])
+    return [item.embedding for resp in responses for item in resp.data]
+
+async def ingest_document(
     workspace_id: int,
     filename: str,
     file_bytes: bytes,
@@ -238,26 +259,32 @@ def ingest_document(
         -> 같은 파일 재업로드 시 upsert가 덮어씀. 벡터 중복 없음
     """
     # 1단계: 텍스트 추출
-    if file_type == "pdf":
-        raw_text = _extract_pdf(file_bytes)
-    elif file_type == "pptx":
-        raw_text = _extract_pptx(file_bytes)
-    elif file_type == "html":
-        raw_text = _extract_html(file_bytes)
-    else:
-        raise ValueError(f"Unsupported file type: {file_type} pdf | pptx | html 만 가능")
+    extractors = {
+        "pdf":  _extract_pdf,                                                                                        
+        "pptx": _extract_pptx,                                                                                       
+        "html": _extract_html,                                                                                     
+        "md":   _extract_md,                                                                                         
+        "docx": _extract_docx,                                                                                     
+        "doc":  _extrac_doc_legacy,                                                                                
+        "xlsx": _extract_xlsx,
+        "xls":  _extract_xls_legacy,
+    } 
+    extractor = extractors.get(file_type)
+    if not extractor:
+        raise ValueError(f"Unsupported file type: {file_type}")
+    raw_text = extractor(file_bytes)
 
     if not raw_text.strip():
-        raise ValueError(
-            "텍스트를 추출할 수 없습니다. "
-            "스캔 이미지 PDF는 vision 도메인 OCR(/api/v1/vision)을 사용하세요."
-        )
+        raise ValueError("텍스트를 추출할 수 없습니다.")
 
     # 2단계: 청크 분할
     # 결과: 각 청크 <= 800자, 인접 청크 간 100자 overlap
     chunks = _splitter.split_text(raw_text)
 
-    # 3단계: 메타데이터 구성
+    # 3단계: 임베딩 - async 배치 병렬 처리
+    embeddings = await _embed_all(chunks)
+
+    # 4단계: 메타데이터 구성
     doc_id = f"{workspace_id}_{filename}"
     title = title or filename
     uploaded_at = now_kst().isoformat()
@@ -270,6 +297,7 @@ def ingest_document(
             "title": title,
             "filename": filename,
             "file_type": file_type,
+            "source_type": "uploaded",
             "chunk_index": i,
             "total_chunks": len(chunks),
             "uploaded_at": uploaded_at,
@@ -277,11 +305,161 @@ def ingest_document(
         for i in range(len(chunks))
     ]
 
-    # 4단계: ChromaDB upsert
+    # 5단계: ChromaDB upsert
     # add() 대신 upsert() 이유:
     #   add()는 동일 ID 존재 시 에러 → 재업로드 불가
     #   upsert()는 있으면 덮어쓰고 없으면 삽입 → 재업로드 안전
     collection = get_collection(workspace_id)
-    collection.upsert(documents=chunks, ids=ids, metadatas=metadatas)
+    collection.upsert(documents=chunks, embeddings=embeddings, ids=ids, metadatas=metadatas)
 
     return {"doc_id": doc_id, "chunks": len(chunks), "title": title}
+
+def _extract_wbs_json(content: str) -> str:
+    """
+    WBS JSON -> 검색 가능한 평문.
+    {"epics": [{"title": "...", "tasks": [{"title": "...", "assignee": "..."}]}]}
+    """
+    try:
+        wbs = _json.loads(content)
+    except Exception:
+        return content # JSON 파싱 실패 시 raw 반환
+    lines = []
+    for epic in wbs.get("epics", []):
+        lines.append(f"[에픽] {epic.get("title", '')}")
+        for task in epic.get("tasks", []):
+            assignee = task.get("assignee", "")
+            title = task.get("title", "")
+            priority = task.get("priority", "")
+            deadline = task.get("due_date", "")
+            lines.append(f" - {title} / 담당: {assignee} / 우선순위: {priority} / 마감: {deadline}")
+    return "\n".join(lines)
+
+async def ingest_db_content(
+    workspace_id: int,
+    doc_id: str,     # "minutes_{meeting_id}" | "report_{report_id}"
+    content: str,
+    format: str,    # "markdown" | "html" | "wbs"  (excel은 content 없으므로 호출 안 함)
+    title: str = "",
+    extra_metadata: dict = {},
+) -> dict:
+    """
+    content -> ChromaDB 인제스트.
+    meeting_minutes, reports 공통 파이프라인.
+    format별로 텍스트 추출 방법이 다름:
+        markdown -> _extract_md
+        html -> _extract_html
+        wbs -> _extract_wbs_json (JSON -> 평문)
+    """
+    if format == "markdown":
+        raw_text = _extract_md(content.encode("utf-8"))
+    elif format == "html":
+        raw_text = _extract_html(content.encode("utf-8"))
+    elif format == "wbs":
+        raw_text = _extract_wbs_json(content)
+    else:
+        raise ValueError(f"인제스트 미지원 포맷: {format}")
+
+    if not raw_text.strip():
+        raise ValueError("보고서 텍스트가 비어있습니다.")
+
+    chunks = _splitter.split_text(raw_text)
+    embeddings = await _embed_all(chunks)
+    uploaded_at = now_kst().isoformat()
+
+    ids = [f"{doc_id}_chunk{i}" for i in range(len(chunks))]
+    metadatas = [
+        {
+            "workspace_id": workspace_id,
+            "doc_id": doc_id,
+            "title": title,
+            "chunk_index": i,
+            "total_chunks": len(chunks),
+            "uploaded_at": uploaded_at,
+            **extra_metadata,
+        }
+        for i in range(len(chunks))
+    ]
+
+    collection = get_collection(workspace_id)
+    collection.upsert(documents=chunks, embeddings=embeddings, ids=ids, metadats=metadatas)
+    return {"doc_id": doc_id, "chunks": len(chunks)}
+
+async def analyze_document_for_display(
+    workspace_id: int,
+    filename: str,
+    file_bytes: bytes,
+    file_type: str,
+    title: str | None = None,
+) -> dict:
+    """
+    텍스트 추출 + LLM 요약 -> 화면 표시용 분석 결과.
+    200,000자 이하: 전체 전송 (gpt-4o-mini 128k 컨텍스트 내)
+    초과 시: Map-Reduce (청크별 미니 요약 → 최종 요약)
+    """
+    extractors = {
+        "pdf":  _extract_pdf,                                                                                        
+        "pptx": _extract_pptx,                                                                                       
+        "html": _extract_html,                                                                                     
+        "md":   _extract_md,                                                                                         
+        "docx": _extract_docx,                                                                                     
+        "doc":  _extrac_doc_legacy,                                                                                
+        "xlsx": _extract_xlsx,
+        "xls":  _extract_xls_legacy,
+    }.get(file_type)
+    if not extractors:
+        raise ValueError(f"Unsupported file type: {file_type}")
+
+    raw_text = extractors(file_bytes)
+    if not raw_text.strip():
+        raise ValueError("텍스트를 추출할 수 없습니다.")
+
+    MAX_DIRECT = 200_000
+
+    if len(raw_text) <= MAX_DIRECT:
+        # 전체 텍스트 직접 전송
+        content_for_llm = raw_text
+    else:
+        # Map-Reduce: 청크별 미니 요약 -> 합치기
+        chunks = _splitter.split_text(raw_text)
+        mini_responses = await asyncio.gather(*[
+            _async_openai.chat.completions.create(
+                model="gpt-5.4-mini",
+                messages=[{"role": "user", "content": f"다음 내용에서 중요한 정보를 빠짐없이 보존하며 핵심만 간결하게 정리하세요:\n{chunk}"}]
+            )
+            for chunk in chunks
+        ])
+        content_for_llm = "\n\n".join(
+            r.choices[0].message.content for r in mini_responses
+        )
+
+    result = await _async_openai.chat.completions.create(
+        model="gpt-5.4-mini",
+        messages=[{
+            "role": "user",
+            "content": f"""
+            다음은 문서 전체를 섹션별로 정리한 내용이다. 전체 문서를 바탕으로 분석해 JSON으로 답하세요.
+
+            문서용: {title or filename}
+            내용:
+            {content_for_llm}
+
+            {{
+                "summary": "문서 전체의 목적과 주요 내용을 5-7문장으로 요약",
+                "key_points": ["핵심 포인트 (최대 7개, 구체적으로)"]
+            }}
+            """
+        }],
+        response_format={"type": "json_object"}
+    )
+
+    try:
+        parsed = _json.loads(result.choices[0].message.content)
+    except Exception:
+        parsed = {"summary": result.choices[0].message.content, "key_points": []}
+
+    return {
+        "filename": filename,
+        "title": title or filename,
+        "summary": parsed.get("summary", ""),
+        "key_points": parsed.get("key_points", []),
+    }

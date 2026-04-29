@@ -7,7 +7,7 @@ from app.core.config import settings
 from app.infra.database.session import SessionLocal
 from app.utils.time_utils import now_kst
 
-mongo_db = AsyncIOMotorClient(settings.MONGODB_URL)["workb"]
+mongo_db = AsyncIOMotorClient(settings.MONGODB_URL)["meeting_assistant"]
 
 # -------------------------------------------------------------
 # MongoDB

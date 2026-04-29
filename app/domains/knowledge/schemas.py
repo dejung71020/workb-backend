@@ -27,7 +27,7 @@ class ChatbotHistoryResponse(BaseModel):
 class ChatbotSummaryRequest(BaseModel):
     meeting_id: Optional[int] = None
     past_meeting_ids: Optional[list[int]] = None
-    
+
 # ── 요약 구조화 스키마 (신규) ─────────────────────────────────────────────
 class MeetingOverview(BaseModel):
     """회의 기본 정보. STT 발화에서 목적/일시를 추출하지 못하면 None."""
@@ -45,7 +45,7 @@ class DiscussionItem(BaseModel):
 class Decision(BaseModel):
     """결정 사항 1개. rationale/opposing_opinion은 발화에 언급됐을 때만 채워짐."""
     decision: str
-    citiation: Optional[str] = None
+    citation: Optional[str] = None
 
 class ActionItem(BaseModel):
     """
@@ -67,7 +67,7 @@ class ActionItem(BaseModel):
     deadline: Optional[str] = None
     priority: Literal["high", "normal"] = "normal"
     urgency: Literal["urgent", "normal", "low"] = "low"
-    citiation: Optional[str] = None # 근거 발화 원문 - hallucination 검증용, 사용자 미표시
+    citation: Optional[str] = None # 근거 발화 원문 - hallucination 검증용, 사용자 미표시
 
 class PendingItem(BaseModel):
     """미결 사항 1개. 이전 회의에서도 미결이었던 경우 연속 여부 표시."""

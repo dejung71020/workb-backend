@@ -1,6 +1,6 @@
 # app\domains\knowledge\router.py
 import uuid
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import BackgroundTasks, APIRouter, UploadFile, File, Form, HTTPException
 from datetime import date
 from typing import Optional
 
@@ -35,7 +35,7 @@ from app.domains.knowledge import repository
 from app.utils.redis_utils import get_meeting_context
 from app.utils.time_utils import now_kst
 from app.domains.knowledge.agent_utils import summary_node
-from app.domains.knowledge.service import ingest_document
+from app.domains.knowledge.service import ingest_document, analyze_document_for_display
 
 router = APIRouter()
 
@@ -150,9 +150,10 @@ async def get_past_meetings(workspace_id: int):
         total=len(meetings),
     )
 
-@router.post("/workspaces/{workspace_id}/documents", response_model=DocumentUploadResponse)
+@router.post("/workspace/{workspace_id}/documents", response_model=DocumentUploadResponse)
 async def upload_document(
     workspace_id: int,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     title: Optional[str] = Form(None),
 ):
@@ -164,24 +165,56 @@ async def upload_document(
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
     file_type = _EXT_MAP.get(ext)
     if not file_type:
-        raise HTTPException(status_code=415, detail=f"지원하지 않는 파일 형식: .{ext}")
+        supported = ", ".join(f".{e}" for e in _EXT_MAP)
+        raise HTTPException(status_code=415, detail=f".{ext}는 지원하지 않는 형식입니다. 지원 형식: {supported}")
 
     file_bytes = await file.read()
 
-    try:
-        result = ingest_document(
-            workspace_id=workspace_id,
-            filename=file.filename,
-            file_type=file_type,
-            file_bytes=file_bytes,
-            title=title
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    background_tasks.add_task(
+        ingest_document,
+        workspace_id=workspace_id,
+        filename=file.filename,
+        file_type=file_type,
+        file_bytes=file_bytes,
+        title=title
+    )
 
     return DocumentUploadResponse(
-        doc_id=result["doc_id"],
-        chunks=result["chunks"],
-        title=result["title"],
+        doc_id=f"{workspace_id}_{file.filename}",
+        chunks=-1,
+        title=title or file.filename,
         uploaded_at=now_kst()
     )
+
+@router.post("/workspace/{workspace_id}/documents/analyze")
+async def analyze_document_endpoint(
+    workspace_id: int,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    title: Optional[str] = Form(None)
+): 
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower()
+    file_type = _EXT_MAP.get(ext)
+    if not file_type:
+        raise HTTPException(status_code=415, detail=f".{ext}는 지원하지 않는 형식입니다.")
+        
+    file_bytes = await file.read()
+
+    result = await analyze_document_for_display(
+        workspace_id=workspace_id,
+        filename=file.filename,
+        file_bytes=file_bytes,
+        file_type=file_type,
+        title=title,
+    )
+
+    background_tasks.add_task(                                                                                     
+        ingest_document,      
+        workspace_id=workspace_id,
+        filename=file.filename,   
+        file_type=file_type,                                                                                         
+        file_bytes=file_bytes,
+        title=title,                                                                                                 
+    )
+
+    return {**result, "timestamp": now_kst().isoformat()}
