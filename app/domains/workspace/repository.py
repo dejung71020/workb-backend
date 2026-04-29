@@ -71,6 +71,71 @@ def create_workspace_membership(
     return membership
 
 
+def get_workspace_member_rows(
+    db: Session,
+    workspace_id: int,
+    department_id: int | None = None,
+) -> list[tuple[WorkspaceMember, object]]:
+    """
+    워크스페이스 멤버십 기준으로 사용자 정보를 함께 조회합니다.
+    """
+    from app.domains.user.models import User
+
+    query = (
+        db.query(WorkspaceMember, User)
+        .join(User, User.id == WorkspaceMember.user_id)
+        .filter(
+            WorkspaceMember.workspace_id == workspace_id,
+            User.is_active.is_(True),
+        )
+    )
+
+    if department_id is not None:
+        query = query.filter(WorkspaceMember.department_id == department_id)
+
+    return query.order_by(WorkspaceMember.joined_at.asc(), User.id.asc()).all()
+
+
+def update_workspace_membership_role(
+    db: Session,
+    workspace_id: int,
+    user_id: int,
+    role: MemberRole,
+) -> WorkspaceMember | None:
+    membership = get_workspace_membership(db, workspace_id, user_id)
+    if not membership:
+        return None
+
+    membership.role = role
+    db.commit()
+    db.refresh(membership)
+    return membership
+
+
+def update_workspace_membership_department(
+    db: Session,
+    workspace_id: int,
+    user_id: int,
+    department_id: int | None,
+) -> WorkspaceMember | None:
+    membership = get_workspace_membership(db, workspace_id, user_id)
+    if not membership:
+        return None
+
+    membership.department_id = department_id
+    db.commit()
+    db.refresh(membership)
+    return membership
+
+
+def count_workspace_members_by_department_id(db: Session, department_id: int) -> int:
+    return (
+        db.query(WorkspaceMember)
+        .filter(WorkspaceMember.department_id == department_id)
+        .count()
+    )
+
+
 def count_workspace_admins(db: Session, workspace_id: int) -> int:
     """
     워크스페이스에 남아 있는 관리자 수를 조회합니다.

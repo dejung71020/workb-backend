@@ -7,6 +7,8 @@ from app.db.session import get_db
 from app.domains.user.models import User
 from app.domains.user.repository import get_user_by_id
 from app.domains.user.schemas import UserRole
+from app.domains.workspace.models import MemberRole
+from app.domains.workspace.repository import get_workspace_membership
 
 
 def _get_bearer_token(authorization: str | None) -> str:
@@ -55,7 +57,14 @@ def require_workspace_admin(
             detail="사용자를 찾을 수 없습니다.",
         )
 
-    if user.role != UserRole.ADMIN.value or user.workspace_id != workspace_id:
+    membership = get_workspace_membership(db, workspace_id, user.id)
+    if membership and membership.role == MemberRole.admin:
+        return user
+
+    if not membership and user.role == UserRole.ADMIN.value and user.workspace_id == workspace_id:
+        return user
+
+    if membership is None or membership.role != MemberRole.admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="워크스페이스 관리자 권한이 필요합니다.",
@@ -92,7 +101,11 @@ def require_workspace_member(
             detail="사용자를 찾을 수 없습니다.",
         )
 
-    if user.workspace_id != workspace_id:
+    membership = get_workspace_membership(db, workspace_id, user.id)
+    if membership or user.workspace_id == workspace_id:
+        return user
+
+    if membership is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="해당 워크스페이스 접근 권한이 없습니다.",

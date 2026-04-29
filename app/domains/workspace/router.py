@@ -20,6 +20,8 @@ from app.domains.workspace.schemas import (
     InviteCodeIssueResponse,
     InviteCodeValidateRequest,
     InviteCodeValidateResponse,
+    WorkspaceJoinRequest,
+    WorkspaceJoinResponse,
     WorkspaceInviteEmailRequest,
     WorkspaceInviteEmailResponse,
     WorkspaceListResponse,
@@ -42,6 +44,7 @@ from app.domains.workspace.service import (
     get_workspace_departments_service,
     get_workspace_service,
     issue_workspace_invite_code_service,
+    join_workspace_by_invite_code_service,
     send_workspace_invite_emails_service,
     update_workspace_department_service,
     update_workspace_member_department_service,
@@ -63,6 +66,16 @@ async def list_my_workspaces(
 ) -> WorkspaceListResponse:
     """현재 사용자가 속한 워크스페이스 목록."""
     return list_my_workspaces_service(db, current_user_id)
+
+
+@router.post("/join", response_model=WorkspaceJoinResponse, status_code=status.HTTP_200_OK)
+async def join_workspace(
+    payload: WorkspaceJoinRequest,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+) -> WorkspaceJoinResponse:
+    """초대코드로 현재 계정을 워크스페이스에 추가합니다."""
+    return join_workspace_by_invite_code_service(db, current_user_id, payload.invite_code)
 
 
 @router.get(

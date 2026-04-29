@@ -370,19 +370,19 @@ def login_service(db: Session, payload: LoginRequest) -> TokenResponse:
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="이메일 또는 비밀번호가 올바르지 않습니다.",
+            detail="아이디 또는 비밀번호가 틀렸습니다.",
         )
 
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="탈퇴했거나 비활성화된 계정입니다.",
+            detail="아이디 또는 비밀번호가 틀렸습니다.",
         )
 
     if not verify_password(payload.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="이메일 또는 비밀번호가 올바르지 않습니다.",
+            detail="아이디 또는 비밀번호가 틀렸습니다.",
         )
 
     return _token_response_for_user(user)

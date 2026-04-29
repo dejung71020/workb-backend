@@ -128,6 +128,18 @@ class InviteCodeValidateResponse(BaseModel):
     workspace_name: str
 
 
+class WorkspaceJoinRequest(BaseModel):
+    invite_code: str
+
+
+class WorkspaceJoinResponse(BaseModel):
+    success: bool = True
+    workspace_id: int
+    workspace_name: str
+    role: UserRole
+    message: str
+
+
 class InviteCodeIssueResponse(BaseModel):
     """
     초대코드 발급(재발급) 응답 시 사용하는 스키마입니다.
