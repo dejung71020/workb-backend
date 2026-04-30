@@ -800,14 +800,21 @@ class SpeakerProfileService:
         profile_rows = (
             db.query(SpeakerProfile)
             .filter(
-                SpeakerProfile.workspace_id == workspace_id,
                 SpeakerProfile.user_id.in_(user_ids),
+            )
+            .order_by(
+                SpeakerProfile.user_id.asc(),
+                SpeakerProfile.is_verified.desc(),
+                desc(SpeakerProfile.updated_at),
+                desc(SpeakerProfile.id),
             )
             .all()
             if user_ids
             else []
         )
-        profiles_by_user = {int(profile.user_id): profile for profile in profile_rows}
+        profiles_by_user: dict[int, SpeakerProfile] = {}
+        for profile in profile_rows:
+            profiles_by_user.setdefault(int(profile.user_id), profile)
 
         return SpeakerProfileListResponse(
             profiles=[
