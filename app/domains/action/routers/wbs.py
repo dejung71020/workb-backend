@@ -41,6 +41,7 @@ async def get_wbs(
                 due_date=t.due_date,
                 progress=t.progress,
                 status=t.status.value if hasattr(t.status, 'value') else t.status,
+                jira_issue_id=t.jira_issue_id,
             ) for t in tasks]
         ))
     return WbsPageResponse(epics=result)
@@ -71,6 +72,7 @@ async def generate_wbs(
                 due_date=t.due_date,
                 progress=t.progress,
                 status=t.status.value if hasattr(t.status, 'value') else t.status,
+                jira_issue_id=t.jira_issue_id,
             ) for t in tasks]
         ))
     return WbsPageResponse(epics=result)
@@ -116,6 +118,7 @@ def create_task(
         due_date=task.due_date,
         progress=task.progress,
         status=task.status.value if hasattr(task.status, 'value') else task.status,
+        jira_issue_id=task.jira_issue_id,
     )
 
 @router.patch("/wbs/epics/{epic_id}", response_model=WbsEpicResponse)
@@ -145,6 +148,7 @@ def patch_epic(
             due_date=t.due_date,
             progress=t.progress,
             status=t.status.value if hasattr(t.status, 'value') else t.status,
+            jira_issue_id=t.jira_issue_id,
         ) for t in tasks]
     ) 
 
@@ -178,6 +182,7 @@ def patch_task(
         due_date=task.due_date, 
         progress=task.progress,
         status=task.status.value if hasattr(task.status, 'value') else task.status,
+        jira_issue_id=task.jira_issue_id,
     )
 
 @router.delete("/wbs/epics/{epic_id}", response_model=ExportResponse)

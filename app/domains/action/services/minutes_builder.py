@@ -24,7 +24,7 @@ async def build_and_save_minutes(db: Session, meeting_id: int) -> MeetingMinute:
     minute = MeetingMinute(
         meeting_id=meeting_id,
         content=_format_minutes(summary),
-        summary=summary.get("overview", {}).get("purpose", ""),
+        summary=summary.get("overview_summary", ""),
         status=MinuteStatus.draft,
         created_at=now_kst(),
         updated_at=now_kst(),
