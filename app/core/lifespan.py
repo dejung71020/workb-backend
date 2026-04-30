@@ -37,10 +37,10 @@ def _reset_mysql_schema() -> None:
         conn.execute(text("SET FOREIGN_KEY_CHECKS=1"))
 
 
-def _ensure_user_social_columns() -> None:
+def _ensure_user_profile_columns() -> None:
     """
     create_all() does not alter existing tables, so local databases created
-    before social login need these columns added explicitly.
+    before social login/profile fields need these columns added explicitly.
     """
     inspector = inspect(engine)
     if not inspector.has_table("users"):
@@ -54,6 +54,15 @@ def _ensure_user_social_columns() -> None:
 
     if "social_id" not in existing_columns:
         statements.append("ALTER TABLE users ADD COLUMN social_id VARCHAR(255) NULL")
+
+    if "birth_date" not in existing_columns:
+        statements.append("ALTER TABLE users ADD COLUMN birth_date DATE NULL")
+
+    if "phone_number" not in existing_columns:
+        statements.append("ALTER TABLE users ADD COLUMN phone_number VARCHAR(30) NULL")
+
+    if "gender" not in existing_columns:
+        statements.append("ALTER TABLE users ADD COLUMN gender VARCHAR(20) NULL")
 
     if not statements:
         return
@@ -73,7 +82,7 @@ async def lifespan(app: FastAPI):
         print("🗑️  [DEBUG] 전체 테이블 삭제 완료")
 
     Base.metadata.create_all(bind=engine)
-    _ensure_user_social_columns()
+    _ensure_user_profile_columns()
     print("테이블 생성 완료")
 
     # [시작 시] HTTP 클라이언트 세션 초기화

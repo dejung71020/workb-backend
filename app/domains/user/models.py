@@ -4,10 +4,10 @@
 현재는 인증과 워크스페이스 소속 관리, 부서 연결까지 고려한 사용자 테이블 구조를 정의합니다.
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import enum
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -19,6 +19,12 @@ class SocialProvider(str, enum.Enum):
     none = "none"
     google = "google"
     kakao = "kakao"
+
+
+class Gender(str, enum.Enum):
+    male = "male"
+    female = "female"
+
 
 class User(Base):
     __tablename__ = "users"
@@ -50,6 +56,21 @@ class User(Base):
     name: Mapped[str] = mapped_column(
         String(100),
         nullable=False,
+    )
+
+    birth_date: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+    )
+
+    phone_number: Mapped[str | None] = mapped_column(
+        String(30),
+        nullable=True,
+    )
+
+    gender: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
     )
 
     # 사용자 역할입니다.

@@ -36,6 +36,8 @@ from app.utils.redis_utils import get_meeting_context
 from app.utils.time_utils import now_kst
 from app.domains.knowledge.agent_utils import quick_report_node
 from app.domains.knowledge.service import ingest_document, analyze_document_for_display
+from app.domains.user.repository import get_user_by_id
+from app.domains.user.service import user_profile_context
 
 router = APIRouter()
 
@@ -83,12 +85,20 @@ _EXT_MAP = {
 }
 
 @router.post("/workspace/{workspace_id}/chatbot/message")
-async def chatbot_message(workspace_id: int, req: ChatbotMessageRequest, session_id: Optional[str] = None):
+async def chatbot_message(
+    workspace_id: int,
+    req: ChatbotMessageRequest,
+    session_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(require_workspace_member),
+):
     session_id = session_id or str(uuid.uuid4())
     meeting_id = req.meeting_id # 회의 중일 때만 전달
+    user = get_user_by_id(db, current_user_id)
     state = {
         "meeting_id": meeting_id,
         "workspace_id": workspace_id,
+        "user_profile": user_profile_context(user) if user else {},
         "user_question": req.message,
         "past_meeting_ids": req.past_meeting_ids,
         "function_type": "",
@@ -96,9 +106,9 @@ async def chatbot_message(workspace_id: int, req: ChatbotMessageRequest, session
     }
     result = await knowledge_app.ainvoke(state)
 
-    await repository.save_chat_log(meeting_id, session_id, "user", req.message, "")
+    await repository.save_chat_log(workspace_id, session_id, "user", req.message, "")
     await repository.save_chat_log(
-        meeting_id, session_id, "assistant", 
+        workspace_id, session_id, "assistant",
         result["chat_response"], result["function_type"]
     )
 

@@ -1,5 +1,5 @@
 # app\domains\meeting\models.py
-from sqlalchemy import Column, String, Enum, DateTime, Boolean, ForeignKey, Integer, func
+from sqlalchemy import Column, String, Enum, DateTime, Boolean, ForeignKey, Integer, Text, func
 from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 from datetime import datetime, date
@@ -50,7 +50,7 @@ class SpeakerProfile(Base):
     voice_model_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     diarization_method: Mapped[DiarizationMethod] = mapped_column(Enum(DiarizationMethod), nullable=False)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
-    voice_embedding: Mapped[str | None] = mapped_column(LONGTEXT, nullable=True)
+    voice_embedding: Mapped[str | None] = mapped_column(LONGTEXT().with_variant(Text(), "sqlite"), nullable=True)
     
     created_at = Column(DateTime, default=func.now(), nullable=False)
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)

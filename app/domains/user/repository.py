@@ -73,6 +73,9 @@ def create_user(
     workspace_id: int | None = None,
     social_provider: str = "none",
     social_id: str | None = None,
+    birth_date=None,
+    phone_number: str | None = None,
+    gender: str | None = None,
 ) -> User:
     """
     새로운 사용자를 생성하고 데이터베이스에 저장합니다. 회원가입 시 service 계층에서 전달받은 데이터를 바탕으로 User 객체를 생성하고 저장합니다.
@@ -96,6 +99,9 @@ def create_user(
         workspace_id=workspace_id,
         social_provider=social_provider,
         social_id=social_id,
+        birth_date=birth_date,
+        phone_number=phone_number,
+        gender=gender,
     )
 
     db.add(user)
@@ -138,12 +144,21 @@ def update_user_profile(
     db: Session,
     user_id: int,
     name: str,
+    birth_date=None,
+    phone_number: str | None = None,
+    gender: str | None = None,
 ) -> User | None:
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         return None
 
     user.name = name
+    if birth_date is not None:
+        user.birth_date = birth_date
+    if phone_number is not None:
+        user.phone_number = phone_number
+    if gender is not None:
+        user.gender = gender
     db.commit()
     db.refresh(user)
 

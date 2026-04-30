@@ -18,6 +18,7 @@ class SharedState(TypedDict):
     retrieved_docs: List[dict]   # 검색된 과거 회의록 또는 외부 자료 리스트
     chat_history: Annotated[List[dict], operator.add] # [챗봇] 대화 맥락 유지용 히스토리
     user_question: str           # 사용자가 챗봇에게 던진 개별 질문
+    user_profile: dict           # 현재 로그인 사용자 프로필(이름, 나이, 연락처 등)
     chat_response: str           # 챗봇의 최종 답변
     past_meeting_ids: Optional[List[int]] # None = 전체, [1, 2, 3] = 선택된 이전 회의만
     function_type: str           # "chat|search|summary|report|calendar|agent"

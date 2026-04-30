@@ -19,7 +19,7 @@ security 계층을 호출하여 비밀번호 해시 및 토큰 발급을 처리�
 import base64
 import json
 import secrets
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from urllib.parse import urlencode
 
 from fastapi import HTTPException, status
@@ -129,6 +129,10 @@ def _access_token_claims(user: User) -> dict[str, str | int | None]:
         "email": user.email,
         "name": user.name,
         "workspace_id": user.workspace_id,
+        "birth_date": user.birth_date.isoformat() if user.birth_date else None,
+        "age": _calculate_age(user.birth_date),
+        "phone_number": user.phone_number,
+        "gender": user.gender,
     }
 
 
@@ -156,6 +160,31 @@ def _ensure_requested_social_role(user: User, requested_role: str) -> None:
         )
 
 
+def _calculate_age(birth_date: date | None) -> int | None:
+    if not birth_date:
+        return None
+
+    today = date.today()
+    return today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+
+
+def user_profile_context(user: User) -> dict[str, str | int | None]:
+    gender_labels = {
+        "male": "남성",
+        "female": "여성",
+    }
+    return {
+        "id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "birth_date": user.birth_date.isoformat() if user.birth_date else None,
+        "age": _calculate_age(user.birth_date),
+        "phone_number": user.phone_number,
+        "gender": user.gender,
+        "gender_label": gender_labels.get(user.gender or ""),
+    }
+
+
 def _user_profile_response(user: User) -> UserProfileResponse:
     return UserProfileResponse(
         id=user.id,
@@ -163,6 +192,10 @@ def _user_profile_response(user: User) -> UserProfileResponse:
         name=user.name,
         role=UserRole(user.role),
         workspace_id=user.workspace_id,
+        birth_date=user.birth_date,
+        age=_calculate_age(user.birth_date),
+        phone_number=user.phone_number,
+        gender=user.gender,
     )
 
 
@@ -231,6 +264,9 @@ def signup_admin_service(db: Session, payload: AdminSignupRequest) -> AdminSignu
         name=payload.name,
         role=UserRole.ADMIN.value,
         workspace_id=workspace.id,
+        birth_date=payload.birth_date,
+        phone_number=payload.phone_number,
+        gender=payload.gender.value,
     )
     create_workspace_membership(
         db=db,
@@ -253,6 +289,10 @@ def signup_admin_service(db: Session, payload: AdminSignupRequest) -> AdminSignu
         workspace_id=workspace.id,
         invite_code=workspace.invite_code,
         welcome_email_sent=welcome_email_sent,
+        birth_date=user.birth_date,
+        age=_calculate_age(user.birth_date),
+        phone_number=user.phone_number,
+        gender=user.gender,
     )
 
 
@@ -312,6 +352,9 @@ def signup_member_service(db: Session, payload: MemberSignupRequest) -> UserResp
         name=payload.name,
         role=invite_role.value,
         workspace_id=workspace.id,
+        birth_date=payload.birth_date,
+        phone_number=payload.phone_number,
+        gender=payload.gender.value,
     )
     create_workspace_membership(
         db=db,
@@ -327,6 +370,10 @@ def signup_member_service(db: Session, payload: MemberSignupRequest) -> UserResp
         email=user.email,
         name=user.name,
         role=UserRole(user.role),
+        birth_date=user.birth_date,
+        age=_calculate_age(user.birth_date),
+        phone_number=user.phone_number,
+        gender=user.gender,
     )
 
 
@@ -625,7 +672,14 @@ def update_my_profile_service(
     current_user_id: int,
     payload: UserProfileUpdateRequest,
 ) -> UserProfileUpdateResponse:
-    user = update_user_profile(db, current_user_id, payload.name.strip())
+    user = update_user_profile(
+        db,
+        current_user_id,
+        payload.name.strip(),
+        birth_date=payload.birth_date,
+        phone_number=payload.phone_number.strip() if payload.phone_number else None,
+        gender=payload.gender.value if payload.gender else None,
+    )
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

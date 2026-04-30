@@ -334,8 +334,46 @@ async def knowledge_node(state: SharedState) -> dict:
     is_live = await is_meeting_live(meeting_id) if meeting_id else False
     meeting_context = await get_meeting_context(meeting_id) if meeting_id else ""
     workspace_id = state.get("workspace_id", "")
+    user_profile = state.get("user_profile", {})
+    user_question = state.get("user_question", "")
     past_meeting_ids = state.get("past_meeting_ids")
     no_meeting_context = not meeting_context.strip()
+
+    profile_question_patterns = {
+        "age": r"나이|몇\s*살|연세",
+        "birth_date": r"생년월일|생일|출생",
+        "phone_number": r"전화번호|휴대폰|핸드폰|연락처",
+        "gender_label": r"성별|남자|여자|남성|여성",
+        "name": r"이름|성함",
+        "email": r"이메일|메일",
+    }
+    profile_labels = {
+        "age": "나이",
+        "birth_date": "생년월일",
+        "phone_number": "전화번호",
+        "gender_label": "성별",
+        "name": "이름",
+        "email": "이메일",
+    }
+    profile_subject_pattern = r"내|제|나의|저의|사용자|회원가입|가입|프로필"
+    profile_name = str(user_profile.get("name") or "")
+    mentions_current_user = bool(re.search(profile_subject_pattern, user_question)) or (
+        bool(profile_name) and profile_name in user_question
+    )
+    for key, pattern in profile_question_patterns.items():
+        if mentions_current_user and re.search(pattern, user_question):
+            value = user_profile.get(key)
+            if key == "age" and value is not None:
+                answer = f"{value}입니다!"
+            elif value:
+                answer = f"{profile_labels[key]}은(는) {value}입니다."
+            else:
+                answer = f"{profile_labels[key]}은(는) 가입 정보에 저장되어 있지 않습니다."
+            return {
+                "chat_response": answer,
+                "function_type": "profile",
+                "web_sources": [],
+            }
 
     if past_meeting_ids:
         ids_str = ", ".join(f'"{i}"' for i in past_meeting_ids)
@@ -351,10 +389,15 @@ async def knowledge_node(state: SharedState) -> dict:
     system_prompt = f"""
     당신은 회의 AI 어시스턴트입니다.
 
+    현재 로그인 사용자 프로필:
+    {json.dumps(user_profile, ensure_ascii=False)}
+
     현재 회의 발화 내용:
     {meeting_context}
     
     규칙:
+    - 사용자가 본인 또는 현재 로그인 사용자의 이름, 이메일, 생년월일, 나이, 전화번호, 성별을 물으면 현재 로그인 사용자 프로필만 근거로 답변하세요. 이 경우 web_search, search_internal_db, search_past_meetings를 사용하지 마세요.
+    - 사용자 프로필에 없는 항목은 "가입 정보에 저장되어 있지 않습니다."라고 답변하세요.
     - 회의 발화가 없을 때 일반 지식/개념/정보를 묻는 질문은 반드시 web_search를 먼저 사용하세요. 내부 지식만으로 답변하지 마세요.
     - 특정 문서를 요약하거나 전체 내용이 필요할 때는 get_document_full_content를 사용하세요. workspace_id는 반드시 "{workspace_id}"로 전달하세요.                                                                                
     - 사용자 질문에 파일명·문서명·자료명이 포함되어 있으면 반드시 get_document_full_content를 가장 먼저 호출하세요. search_internal_db보다 항상 우선합니다.                                                                    

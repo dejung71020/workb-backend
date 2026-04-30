@@ -21,6 +21,11 @@ from app.domains.user.service import _encode_oauth_state, social_login_callback_
 
 BASE = "/api/v1/users"
 LOGIN_FAILURE_MESSAGE = "아이디 또는 비밀번호가 틀렸습니다."
+PROFILE_PAYLOAD = {
+    "birth_date": "2000-01-01",
+    "phone_number": "010-1234-5678",
+    "gender": "female",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -33,16 +38,20 @@ class TestAdminSignup:
             "email": "admin@example.com",
             "password": "Secret123",
             "name": "홍길동",
+            **PROFILE_PAYLOAD,
         })
         assert res.status_code == 201
         body = res.json()
         assert body["email"] == "admin@example.com"
         assert body["role"] == "admin"
+        assert body["age"] is not None
+        assert body["phone_number"] == PROFILE_PAYLOAD["phone_number"]
+        assert body["gender"] == PROFILE_PAYLOAD["gender"]
         assert "workspace_id" in body
         assert "invite_code" in body
 
     def test_duplicate_email_returns_400(self, client):
-        payload = {"email": "dup@example.com", "password": "Secret123", "name": "중복이"}
+        payload = {"email": "dup@example.com", "password": "Secret123", "name": "중복이", **PROFILE_PAYLOAD}
         client.post(f"{BASE}/signup/admin", json=payload)
         res = client.post(f"{BASE}/signup/admin", json=payload)
         assert res.status_code == 400
@@ -52,6 +61,7 @@ class TestAdminSignup:
             "email": "short@example.com",
             "password": "Sh1",
             "name": "짧은비번",
+            **PROFILE_PAYLOAD,
         })
         assert res.status_code == 422
 
@@ -60,6 +70,7 @@ class TestAdminSignup:
             "email": "nonumber@example.com",
             "password": "NoNumber",
             "name": "숫자없음",
+            **PROFILE_PAYLOAD,
         })
         assert res.status_code == 422
 
@@ -68,6 +79,7 @@ class TestAdminSignup:
             "email": "noletter@example.com",
             "password": "12345678",
             "name": "문자없음",
+            **PROFILE_PAYLOAD,
         })
         assert res.status_code == 422
 
@@ -76,6 +88,7 @@ class TestAdminSignup:
             "email": "not-an-email",
             "password": "Secret123",
             "name": "이메일오류",
+            **PROFILE_PAYLOAD,
         })
         assert res.status_code == 422
 
@@ -91,11 +104,13 @@ class TestMemberSignup:
             "email": "member@example.com",
             "password": "Member123",
             "name": "멤버이름",
+            **PROFILE_PAYLOAD,
         })
         assert res.status_code == 201
         body = res.json()
         assert body["email"] == "member@example.com"
         assert body["role"] == "member"
+        assert body["age"] is not None
 
     def test_invite_code_normalized_to_uppercase(self, client, workspace):
         """초대코드는 소문자로 입력해도 대문자로 정규화됩니다."""
@@ -104,6 +119,7 @@ class TestMemberSignup:
             "email": "lower@example.com",
             "password": "Lower123",
             "name": "소문자코드",
+            **PROFILE_PAYLOAD,
         })
         assert res.status_code == 201
 
@@ -113,6 +129,7 @@ class TestMemberSignup:
             "email": "bad@example.com",
             "password": "Member123",
             "name": "잘못된코드",
+            **PROFILE_PAYLOAD,
         })
         assert res.status_code == 400
 
@@ -122,6 +139,7 @@ class TestMemberSignup:
             "email": "dup@example.com",
             "password": "Member123",
             "name": "중복멤버",
+            **PROFILE_PAYLOAD,
         }
         client.post(f"{BASE}/signup/member", json=payload)
         res = client.post(f"{BASE}/signup/member", json=payload)
@@ -138,6 +156,7 @@ class TestLogin:
             "email": "login@example.com",
             "password": "Login123",
             "name": "로그인테스트",
+            **PROFILE_PAYLOAD,
         })
 
     def test_success(self, client):

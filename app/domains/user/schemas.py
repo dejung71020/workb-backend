@@ -1,6 +1,8 @@
 # app\domains\user\schemas.py
 
+from datetime import date
 from enum import Enum
+import re
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
@@ -22,7 +24,42 @@ class UserRole(str, Enum):
     VIEWER = "viewer"
 
 
-class AdminSignupRequest(BaseModel):
+class Gender(str, Enum):
+    MALE = "male"
+    FEMALE = "female"
+
+
+class UserProfileFields(BaseModel):
+    birth_date: date
+    phone_number: str = Field(min_length=9, max_length=30)
+    gender: Gender
+
+    @field_validator("birth_date")
+    @classmethod
+    def validate_birth_date(cls, value: date) -> date:
+        today = date.today()
+        if value >= today:
+            raise ValueError("생년월일은 오늘 이전 날짜여야 합니다.")
+
+        age = today.year - value.year - ((today.month, today.day) < (value.month, value.day))
+        if age > 120:
+            raise ValueError("생년월일을 다시 확인해주세요.")
+        return value
+
+    @field_validator("phone_number")
+    @classmethod
+    def validate_phone_number(cls, value: str) -> str:
+        normalized = value.strip()
+        if not re.fullmatch(r"[\d+\-\s()]+", normalized):
+            raise ValueError("전화번호는 숫자와 +, -, 공백, 괄호만 사용할 수 있습니다.")
+
+        digit_count = sum(char.isdigit() for char in normalized)
+        if digit_count < 9 or digit_count > 15:
+            raise ValueError("전화번호는 숫자 기준 9자 이상 15자 이하로 입력해주세요.")
+        return normalized
+
+
+class AdminSignupRequest(UserProfileFields):
     """
     관리자 회원가입 요청 데이터를 검증하기 위한 스키마입니다.
 
@@ -70,7 +107,7 @@ class AdminSignupRequest(BaseModel):
         return value
 
 
-class MemberSignupRequest(BaseModel):
+class MemberSignupRequest(UserProfileFields):
     """
     멤버 회원가입 요청 데이터를 검증하기 위한 스키마입니다.
 
@@ -227,6 +264,23 @@ class UserProfileUpdateRequest(BaseModel):
     로그인한 사용자가 마이페이지에서 수정할 수 있는 프로필 정보입니다.
     """
     name: str = Field(min_length=2, max_length=30)
+    birth_date: date | None = None
+    phone_number: str | None = Field(default=None, min_length=9, max_length=30)
+    gender: Gender | None = None
+
+    @field_validator("birth_date")
+    @classmethod
+    def validate_optional_birth_date(cls, value: date | None) -> date | None:
+        if value is None:
+            return value
+        return UserProfileFields.validate_birth_date(value)
+
+    @field_validator("phone_number")
+    @classmethod
+    def validate_optional_phone_number(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return UserProfileFields.validate_phone_number(value)
 
 
 class DeviceSettingsRequest(BaseModel):
@@ -261,6 +315,10 @@ class UserResponse(BaseModel):
     email: EmailStr
     name: str
     role: UserRole
+    birth_date: date | None = None
+    age: int | None = None
+    phone_number: str | None = None
+    gender: Gender | None = None
 
 
 class UserProfileResponse(UserResponse):
