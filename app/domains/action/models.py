@@ -38,6 +38,8 @@ class ActionItem(Base):
     status:         Mapped[ActionStatus]= mapped_column(Enum(ActionStatus), default=ActionStatus.pending)
     detected_at:    Mapped[datetime]    = mapped_column(DateTime, nullable=False)
     jira_issue_id:  Mapped[str | None]  = mapped_column(String(100), nullable=True)
+    priority:    Mapped[Priority | None]= mapped_column(Enum(Priority), nullable=True)
+    urgency:        Mapped[str | None]  = mapped_column(String(20), nullable=True)
 
 
 class WbsEpic(Base):

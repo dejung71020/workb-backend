@@ -14,7 +14,6 @@ from app.domains.integration.schemas import (
     IntegrationResponse,
     OAuthUrlResponse,
     SlackChannelSelectRequest,
-    SlackChannelItem,
     SlackChannelListResponse,
     TestIntegrationResponse,
     GoogleCalendarEventsResponse,
@@ -24,6 +23,8 @@ from app.domains.integration.schemas import (
     GoogleCalendarCreateRequest,
     GoogleCalendarCreateResponse,
     GoogleCalendarSelectRequest,
+    JiraStatusListResponse,
+    JiraProjectListResponse,
 )
 from app.domains.user.dependencies import require_workspace_admin, require_workspace_member
 
@@ -169,7 +170,7 @@ async def jira_callback(code: str, state: str, db: Session = Depends(get_db)) :
     except Exception:
         return RedirectResponse(f"{FRONTEND_INTEGRATIONS}?service=jira&status=error")
 
-@router.get("/workspaces/{workspace_id}/jira/projects")
+@router.get("/workspaces/{workspace_id}/jira/projects", response_model=JiraProjectListResponse)
 async def list_jira_projects(
     workspace_id: int,
     db: Session = Depends(get_db),
@@ -177,13 +178,12 @@ async def list_jira_projects(
 ):
     try:
         projects = await service.get_jira_projects(db, workspace_id)
-        return {
-            "projects": projects
-        }
+        return JiraProjectListResponse(projects=projects)
+    
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-@router.post("/workspaces/{workspace_id}/jira/project/select")
+@router.post("/workspaces/{workspace_id}/jira/project/select", response_model=ExportResponse)
 async def select_jira_project(
     workspace_id: int,
     body: dict = Body(...),
@@ -192,11 +192,11 @@ async def select_jira_project(
 ):
     try:
         service.save_jira_project(db, workspace_id, body['project_key'])
-        return {"status": "ok"}
+        return ExportResponse(status="ok")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-@router.get("/workspaces/{workspace_id}/jira/statuses")
+@router.get("/workspaces/{workspace_id}/jira/statuses", response_model=JiraStatusListResponse)
 async def list_jira_statuses(
     workspace_id: int,
     db: Session = Depends(get_db),
@@ -204,11 +204,12 @@ async def list_jira_statuses(
 ):
     try:
         statuses = await service.get_jira_project_statuses(db, workspace_id)
-        return {"statuses": statuses}
+        return JiraStatusListResponse(statuses=statuses)
+    
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     
-@router.post("/workspaces/{workspace_id}/jira/mapping")
+@router.post("/workspaces/{workspace_id}/jira/mapping", response_model=ExportResponse)
 async def save_jira_mapping(
     workspace_id: int,
     body: dict = Body(...),
@@ -217,7 +218,7 @@ async def save_jira_mapping(
 ): 
     try:
         service.save_jira_status_mapping(db, workspace_id, body['status_mapping'])
-        return {"status": "ok"}
+        return ExportResponse(status="ok")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     

@@ -24,13 +24,6 @@ class IntegrationListResponse(BaseModel):
     integrations: List[IntegrationResponse]
 
 # --- Request Scheams (API Key 방식) ---
-
-class JiraConnectRequest(BaseModel):
-    domain: str         # http://company.atlassian.net/
-    email: str          # Atlassian 계정 이메일
-    api_token: str      # Atlassian API Token
-    project_key: str    # PROJ
-
 class SlackChannelSelectRequest(BaseModel):
     channel_id: str
     
@@ -86,3 +79,15 @@ class GoogleCalendarCreateResponse(BaseModel):
 class GoogleCalendarSelectRequest(BaseModel):
     calendar_id: str
     calendar_name: Optional[str] = None
+
+
+# JIRA
+class JiraProjectItem(BaseModel):
+    key: str
+    name: str
+
+class JiraProjectListResponse(BaseModel):
+    projects: List[JiraProjectItem]
+
+class JiraStatusListResponse(BaseModel):
+    statuses: List[str]

@@ -51,9 +51,17 @@ class SlackExportRequest(BaseModel):
 # =================================================================
 # jira
 # =================================================================
+class JiraSyncItem(BaseModel):
+    task_id: int
+    jira_key: str
+    field: str
+    old: str
+    new: str
 
-
-
+class JiraSyncResponse(BaseModel):
+    changed: List[JiraSyncItem]
+    unchanged: int
+    synced_at: str
 
 
 # =================================================================
@@ -98,6 +106,7 @@ class WbsTaskResponse(BaseModel):
     due_date:       Optional[date_type] = None
     progress:       int
     status:         str
+    jira_issue_id:  Optional[str] = None
 
     class Config:
         from_attributes = True

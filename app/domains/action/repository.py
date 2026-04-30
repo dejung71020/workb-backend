@@ -22,6 +22,12 @@ def get_action_items(db: Session, meeting_id: int) -> List[ActionItem]:
 def get_user(db: Session, user_id: int) -> Optional[User]:
     return db.query(User).filter(User.id == user_id).first()
 
+def get_users_by_ids(db: Session, user_ids: list[int]) -> dict[int, User]:
+    if not user_ids:
+        return {}
+    users = db.query(User).filter(User.id.in_(user_ids)).all()
+    return {u.id: u for u in users}
+
 # -----------보고서-------------------------------------------------------
 def save_report(
         db: Session,
