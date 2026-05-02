@@ -103,10 +103,12 @@ class WbsTaskResponse(BaseModel):
     assignee_id:    Optional[int] = None
     assignee_name:  Optional[str] = None
     priority:       str
+    urgency:        Optional[str] = None
     due_date:       Optional[date_type] = None
     progress:       int
     status:         str
     jira_issue_id:  Optional[str] = None
+    order_index:    int = 0
 
     class Config:
         from_attributes = True
@@ -137,13 +139,60 @@ class WbsTaskCreateRequest(BaseModel):
     assignee_id: Optional[int] = None
     assignee_name: Optional[str] = None
     priority:    Optional[str] = "medium"
+    urgency:     Optional[str] = None
     due_date:    Optional[date_type] = None
+    order_index: Optional[int] = None
 
 class WbsTaskPatchRequest(BaseModel):
+    epic_id:     Optional[int] = None
     title:       Optional[str] = None
     assignee_id: Optional[int] = None
     assignee_name: Optional[str] = None
     priority:    Optional[str] = None
+    urgency:     Optional[str] = None
     due_date:    Optional[date_type] = None
     progress:    Optional[int] = None
     status:      Optional[str] = None
+    order_index: Optional[int] = None
+
+# ===============================================================
+# WBS 이동 / 순서변경
+# ===============================================================
+class WbsMoveTaskRequest(BaseModel):
+    target_epic_id: int
+    order_index:    int = 0
+
+class WbsReorderItem(BaseModel):
+    id:         int
+    order_index:int
+
+class WbsReorderRequest(BaseModel):
+    epics: Optional[List[WbsReorderItem]] = None
+    tasks: Optional[List[WbsReorderItem]] = None
+
+# ===============================================================
+# JIRA 선택적 동기화 / 프리뷰
+# ===============================================================
+class JiraSelectiveSyncRequest(BaseModel):
+    # None이면 전체 동기화
+    epic_ids: Optional[List[int]] = None
+    task_ids: Optional[List[int]] = None
+
+class JiraPreviewTask(BaseModel):
+    id:     int
+    title:  str
+    action: str  # "create" | "update"
+
+class JiraPreviewEpic(BaseModel):
+    id:     int
+    title:  str
+    action: str
+    tasks:  List[JiraPreviewTask]
+
+class JiraPreviewResponse(BaseModel):
+    epics:        List[JiraPreviewEpic]
+    epic_create:  int
+    epic_update:  int
+    task_create:  int
+    task_update:  int
+    total:        int

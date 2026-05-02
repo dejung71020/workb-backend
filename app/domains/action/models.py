@@ -61,12 +61,14 @@ class WbsTask(Base):
     assignee_id:    Mapped[int | None]  = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
     assignee_name:  Mapped[str | None]  = mapped_column(String(100), nullable=True)
     priority:       Mapped[Priority]    = mapped_column(Enum(Priority), default=Priority.medium)
+    urgency:        Mapped[str | None]  = mapped_column(String(20), nullable=True)
     due_date:       Mapped[date | None ]= mapped_column(Date, nullable=True)
     progress:       Mapped[int]         = mapped_column(Integer, default=0)
     status:         Mapped[TaskStatus]  = mapped_column(Enum(TaskStatus), default=TaskStatus.todo)
     jira_issue_id:  Mapped[str | None]  = mapped_column(String(100), nullable=True)
     created_at:     Mapped[datetime]    = mapped_column(DateTime, default=func.now(), nullable=False)
     updated_at:     Mapped[datetime]    = mapped_column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+    order_index:    Mapped[int]         = mapped_column(Integer, default=0)
 
 
 class Report(Base):

@@ -2,6 +2,7 @@
 import logging
 from datetime import datetime
 from sqlalchemy.orm import Session
+from typing import Optional
 
 from app.domains.action import repository
 from app.domains.integration import repository as integration_repo
@@ -23,6 +24,9 @@ async def export_jira(
         db: Session,
         workspace_id: int,
         meeting_id: int,
+        epic_ids: Optional[list] = None,
+        task_ids: Optional[list] = None,
+        progress_queue = None,
 ) -> dict:
     '''
     웹 서비스 WBS를 JIRA로 내보내는 함수
@@ -36,6 +40,14 @@ async def export_jira(
     
     client = JiraClient(token, cloud_id)
     epics = repository.get_wbs_epics(db, meeting_id)
+    if epic_ids is not None:
+        epics = [e for e in epics if e.id in epic_ids]
+    
+    total_tasks = sum(
+        len([t for t in repository.get_wbs_tasks_by_epic(db, e.id) if task_ids is None or t.id in task_ids])
+        for e in epics
+    )
+    done = 0
 
     created, updated, failed = 0, 0, []
     for epic in epics:
@@ -59,6 +71,8 @@ async def export_jira(
 
         # epic에 속한 task 다 불러옴
         tasks = repository.get_wbs_tasks_by_epic(db, epic.id)
+        if task_ids is not None:
+            tasks = [t for t in tasks if t.id in task_ids]
         for task in tasks:
             try:
                 # 우선순위 매핑
@@ -94,21 +108,30 @@ async def export_jira(
                 
                 # 이미 있는 태스크 일 때 (기존 값만 업데이트)
                 else:
-                    fields = {
-                        "summary": task.title,
-                        'priority': {
-                            "name": priority
+                    try:
+                        fields = {
+                            "summary": task.title,
+                            "priority": {"name": priority}
                         }
-                    }
-                    if due_date:
-                        fields['duedate'] = due_date
-                    if assignee_id:
-                        fields['assignee'] = {"accountId": assignee_id}
-                    await client.update_issue(task.jira_issue_id, fields)
-                    updated += 1
+                        if due_date:
+                            fields["duedate"] = due_date
+                        if assignee_id:
+                            fields["assignee"] = {"accountId": assignee_id}
+                        await client.update_issue(task.jira_issue_id, fields)
+                        updated += 1
+                    except Exception as e:
+                        logger.error(f"Task 업데이트 실패 task_id={task.id}: {e}")
+                        failed.append(f"Task: {task.title}")
             except Exception as e:
                 logger.error(f"Task 처리 실패 task_id={task.id}: {e}")
                 failed.append(f"Task: {task.title}")
+            done += 1
+            if progress_queue:
+                await progress_queue.put({
+                    "done": done,
+                    "total": total_tasks,
+                    "current": task.title,
+                })
     return {
         "created": created,
         "updated": updated,
@@ -159,41 +182,58 @@ async def sync_from_jira(
 
     # 3단계: 변경된 내용 비교 & DB 업데이트
     for task in tasks_with_jira:
-        issue = issue_map.get(task.jira_issue_id)
-        if not issue:
-            continue
-        
-        # Status 비교
-        jira_status_name = issue.get("fields", {}).get("status", {}).get("name", "")
-        jira_title = issue.get("fields", {}).get("summary", "")
-        workb_status = status_maaping.get(jira_status_name, "todo")
-        current_status = task.status.value if hasattr(task.status, "value") else task.status
+        try:
+            issue = issue_map.get(task.jira_issue_id)
+            if not issue:
+                unchanged += 1
+                continue
 
-        task_changed = False
+            fields           = issue.get("fields", {})
+            jira_status_name = fields.get("status", {}).get("name", "")
+            jira_title       = fields.get("summary", "")
+            jira_assignee    = fields.get("assignee")
+            jira_assignee_name = (jira_assignee or {}).get("displayName", "") if jira_assignee else ""
 
-        if workb_status != current_status:
-            changed.append({
-                "task_id": task.id,
-                "jira_key": task.jira_issue_id,
-                "field": "status",
-                "old": current_status,
-                "new": workb_status,
-            })
-            repository.update_wbs_task(db, task.id, status=workb_status)
-            task_changed = True
+            workb_status   = status_maaping.get(jira_status_name, "todo")
+            current_status = task.status.value if hasattr(task.status, "value") else task.status
+            task_changed   = False
 
-        if jira_title and jira_title != task.title:
-            changed.append({
-                "task_id": task.id,
-                "jira_key": task.jira_issue_id,
-                "field": "title",
-                "old": task.title,
-                "new": jira_title,
-            })
-            repository.update_wbs_task(db, task.id, title=jira_title)
-            task_changed = True
+            # 상태 비교
+            if workb_status != current_status:
+                changed.append({
+                    "task_id": task.id, "jira_key": task.jira_issue_id,
+                    "field": "status", "old": current_status, "new": workb_status,
+                })
+                repository.update_wbs_task(db, task.id, status=workb_status)
+                task_changed = True
 
-        if not task_changed:
+            # 제목 비교
+            if jira_title and jira_title != task.title:
+                changed.append({
+                    "task_id": task.id, "jira_key": task.jira_issue_id,
+                    "field": "title", "old": task.title, "new": jira_title,
+                })
+                repository.update_wbs_task(db, task.id, title=jira_title)
+                task_changed = True
+
+            # 담당자 비교
+            current_assignee = task.assignee_name or ""
+            if jira_assignee_name != current_assignee:
+                new_name = jira_assignee_name or None
+                changed.append({
+                    "task_id": task.id, "jira_key": task.jira_issue_id,
+                    "field": "assignee",
+                    "old": current_assignee or "미지정",
+                    "new": jira_assignee_name or "미지정",
+                })
+                repository.update_wbs_task(db, task.id, assignee_name=new_name)
+                task_changed = True
+
+            if not task_changed:
+                unchanged += 1
+
+        except Exception as e:
+            logger.error(f"Task 동기화 실패 task_id={task.id}: {e}")
             unchanged += 1
 
     return {
@@ -202,3 +242,46 @@ async def sync_from_jira(
         "synced_at": now_kst().isoformat(),
     }
 
+async def preview_jira_export(
+        db: Session,
+        workspace_id: int,
+        meeting_id: int,
+        epic_ids: Optional[list] = None,
+        task_ids: Optional[list] = None,
+) -> dict:
+    epics = repository.get_wbs_epics(db, meeting_id)
+    if epic_ids is not None:
+        epics = [e for e in epics if e.id in epic_ids]
+
+    result_epics = []
+    epic_create = epic_update = task_create = task_update = 0
+
+    for epic in epics:
+        epic_action = "create" if not epic.jira_epic_id else "update"
+        if epic_action == "create": epic_create += 1
+        else: epic_update += 1
+
+        tasks = repository.get_wbs_tasks_by_epic(db, epic.id)
+        if task_ids is not None:
+            tasks = [t for t in tasks if t.id in task_ids]
+
+        task_items = []
+        for task in tasks:
+            task_action = "create" if not task.jira_issue_id else "update"
+            if task_action == "create": task_create += 1
+            else: task_update += 1
+            task_items.append({"id": task.id, "title": task.title, "action": task_action})
+
+        result_epics.append({
+            "id": epic.id, "title": epic.title,
+            "action": epic_action, "tasks": task_items,
+        })
+
+    return {
+        "epics":       result_epics,
+        "epic_create": epic_create,
+        "epic_update": epic_update,
+        "task_create": task_create,
+        "task_update": task_update,
+        "total":       epic_create + epic_update + task_create + task_update,
+    }

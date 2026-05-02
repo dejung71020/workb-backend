@@ -13,6 +13,7 @@ class IntegrationResponse(BaseModel):
     selected_channel_id: Optional[str] = None
     selected_calendar_id: Optional[str] = None
     selected_calendar_name: Optional[str] = None
+    selected_project_key: Optional[str] = None
     
     updated_at: datetime
 
@@ -91,3 +92,15 @@ class JiraProjectListResponse(BaseModel):
 
 class JiraStatusListResponse(BaseModel):
     statuses: List[str]
+
+class JiraSiteItem(BaseModel):
+    id:     str
+    name:   str
+    url:    str
+
+class JiraSiteListResponse(BaseModel):
+    sites:  List[JiraSiteItem]
+
+class JiraSiteSelectRequest(BaseModel):
+    cloud_id: str
+    site_url: str

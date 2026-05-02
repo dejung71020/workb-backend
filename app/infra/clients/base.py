@@ -34,6 +34,8 @@ class BaseClient:
             response.raise_for_status()
 
             # 5. 오류 없으면 성공~
+            if not response.content:
+                return {}
             return response.json()
         
         except httpx.HTTPStatusError as e:

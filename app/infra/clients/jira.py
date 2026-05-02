@@ -19,7 +19,7 @@ class JiraClient(BaseClient):
             },
         )
         
-    async def get_projects(self) -> list[dict]:
+    async def get_projects(self, query: str = "") -> list[dict]:
         '''
         지라의 프로젝트를 가져와서 프론트에서 드롭다운으로 보여줄 함수
         50개씩 페이징하여 프로젝트를 모두 가져오는 API를 사용할것이다.
@@ -31,8 +31,11 @@ class JiraClient(BaseClient):
 
         while not is_last:
             # startAt 으로 다음페이지를 요청.
+            params = f"startAt={start_at}&maxResults={max_results}&typeKey=software&orderBy=name"
+            if query:
+                params += f"&query={query}"
             data = await self._request(
-                "GET", f"/project/search?startAt={start_at}&maxResults={max_results}"
+                "GET", f"/project/search?{params}"
             )
 
             # 현재 페이지의 프로젝트 목록을 전체 프로젝트에 추가
@@ -137,33 +140,26 @@ class JiraClient(BaseClient):
         await self._request("PUT", f"/issue/{issue_key}", json={"fields": fields})
 
     async def search_by_jql(self, jql: str, fields: str = "status,summary,assignee,priority") -> list[dict]:
-        '''
-        한 방에 싹 다 가져오는 JQL 사용하는 함수
-        '''
         all_issues = []
-        start_at = 0
+        next_page_token = None
         max_results = 100
 
         while True:
-            # 페이지 넘김
-            data = await self._request(
-                "GET",
-                "/search",
-                params={
-                    "jql": jql,
-                    "fields": fields,
-                    "maxResults": max_results,
-                    "startAt": start_at
-                },
-            )
+            body: dict = {
+                "jql": jql,
+                "fields": fields.split(","),
+                "maxResults": max_results,
+            }
+            if next_page_token:
+                body["nextPageToken"] = next_page_token
 
+            data = await self._request("POST", "/search/jql", json=body)
             issues = data.get("issues", [])
             all_issues.extend(issues)
 
-            if len(issues) < max_results:
+            next_page_token = data.get("nextPageToken")
+            if not next_page_token or len(issues) < max_results:
                 break
 
-            start_at += max_results
         return all_issues
 
- 

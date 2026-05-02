@@ -8,13 +8,30 @@ from app.domains.action.schemas import (
     WbsPageResponse, WbsEpicResponse, WbsTaskResponse,
     WbsEpicCreateRequest, WbsEpicPatchRequest,
     WbsTaskCreateRequest, WbsTaskPatchRequest,
-    ExportResponse,
+    ExportResponse, WbsMoveTaskRequest,
+    WbsReorderRequest
 )
 from app.domains.action.services.wbs_builder import build_wbs_template
 from app.domains.user.dependencies import require_workspace_admin, require_workspace_member
 
 # http://localhost:8000/api/v1/actions/meetings/{meeting_id}/wbs
 router = APIRouter()
+
+def _task_to_response(t, epic_id: int) -> WbsTaskResponse:
+    return WbsTaskResponse(
+        id=t.id,
+        epic_id=epic_id,
+        title=t.title,
+        assignee_id=t.assignee_id,
+        assignee_name=t.assignee_name,
+        priority=t.priority.value if hasattr(t.priority, 'value') else t.priority,
+        urgency=t.urgency,
+        due_date=t.due_date,
+        progress=t.progress,
+        status=t.status.value if hasattr(t.status, 'value') else t.status,
+        jira_issue_id=t.jira_issue_id,
+        order_index=t.order_index,
+    )
 
 @router.get("/wbs", response_model=WbsPageResponse)
 async def get_wbs(
@@ -106,20 +123,12 @@ def create_task(
     task = repository.save_wbs_task(
         db, body.epic_id, body.title,
         body.assignee_id, body.assignee_name,
-        body.priority or "medium", body.due_date,
+        body.priority or "medium", 
+        body.urgency,
+        body.due_date,
+        body.order_index,
     )
-    return WbsTaskResponse(
-        id=task.id,
-        epic_id=task.epic_id,
-        title=task.title,
-        assignee_id=task.assignee_id,
-        assignee_name=task.assignee_name,
-        priority=task.priority.value if hasattr(task.priority, 'value') else task.priority,
-        due_date=task.due_date,
-        progress=task.progress,
-        status=task.status.value if hasattr(task.status, 'value') else task.status,
-        jira_issue_id=task.jira_issue_id,
-    )
+    return _task_to_response(task, task.epic_id)
 
 @router.patch("/wbs/epics/{epic_id}", response_model=WbsEpicResponse)
 def patch_epic(
@@ -138,18 +147,8 @@ def patch_epic(
         id=epic_id,
         title=epic.title,
         order_index=epic.order_index,
-        tasks=[WbsTaskResponse(
-            id=t.id,
-            epic_id=epic_id,
-            title=t.title,
-            assignee_id=t.assignee_id,
-            assignee_name=t.assignee_name,
-            priority=t.priority.value if hasattr(t.priority, "value") else t.priority,
-            due_date=t.due_date,
-            progress=t.progress,
-            status=t.status.value if hasattr(t.status, 'value') else t.status,
-            jira_issue_id=t.jira_issue_id,
-        ) for t in tasks]
+        tasks=[
+            _task_to_response(t, epic_id) for t in tasks]
     ) 
 
 @router.patch("/wbs/tasks/{task_id}", response_model=WbsTaskResponse)
@@ -161,6 +160,8 @@ def patch_task(
     db: Session = Depends(get_db),
     _admin = Depends(require_workspace_admin),
 ):
+    if body.epic_id is not None:
+        repository.move_wbs_task(db, task_id, body.epic_id, body.order_index or 0)
     task = repository.update_wbs_task(
         db=db,
         task_id=task_id,
@@ -168,22 +169,15 @@ def patch_task(
         assignee_id=body.assignee_id,
         assignee_name=body.assignee_name,
         priority=body.priority,
+        urgency=body.urgency,
         due_date=body.due_date,
         progress=body.progress,
-        status=body.status
+        status=body.status,
+        order_index=body.order_index,
     )
     if not task:
         raise HTTPException(status_code=404, detail="TASK를 찾을 수 없습니다.")
-    return WbsTaskResponse(
-        id=task.id, epic_id=task.epic_id, title=task.title,
-        assignee_id=task.assignee_id,
-        assignee_name=task.assignee_name,
-        priority=task.priority.value if hasattr(task.priority, 'value') else task.priority,
-        due_date=task.due_date, 
-        progress=task.progress,
-        status=task.status.value if hasattr(task.status, 'value') else task.status,
-        jira_issue_id=task.jira_issue_id,
-    )
+    return _task_to_response(task, task.epic_id)
 
 @router.delete("/wbs/epics/{epic_id}", response_model=ExportResponse)
 def delete_epic(
@@ -209,4 +203,45 @@ def delete_task(
     ok = repository.delete_wbs_task(db, task_id)
     if not ok:
         raise HTTPException(status_code=404, detail="TASK를 찾을 수 없습니다.")
+    return ExportResponse(status="ok")
+
+@router.patch("/wbs/tasks/{task_id}/move", response_model= WbsTaskResponse)
+def move_task(
+    meeting_id: int,
+    task_id: int,
+    body: WbsMoveTaskRequest,
+    workspace_id: int = Query(..., description="워크스페이스 ID"),
+    db: Session = Depends(get_db),
+    _admin = Depends(require_workspace_admin),
+):
+    task = repository.move_wbs_task(db, task_id, body.target_epic_id, body.order_index)
+    if not task:
+        raise HTTPException(status_code=404, detail="태스크를 찾을 수 없습니다.")
+    return _task_to_response(task, task.epic_id)
+
+@router.patch("/wbs/reorder", response_model=ExportResponse)
+def reorder_wbs(
+    meeting_id: int,
+    body: WbsReorderRequest,
+    workspace_id: int = Query(..., description="워크스페이스 ID"),
+    db: Session = Depends(get_db),
+    _admin = Depends(require_workspace_admin),
+):
+    if body.epics:
+        repository.reorder_wbs_epics(
+            db,
+            [{
+                "id": e.id,
+                "order_index": e.order_index
+            } for e in body.epics]
+        )
+    
+    if body.tasks:
+        repository.reorder_wbs_tasks(
+            db,
+            [{
+                "id": t.id,
+                "order_index": t.order_index
+            } for t in body.tasks]
+        )
     return ExportResponse(status="ok")

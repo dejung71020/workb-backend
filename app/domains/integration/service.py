@@ -17,6 +17,8 @@ from app.core.config import settings
 from app.infra.clients.slack import SlackClient
 from app.infra.clients.google import GoogleCalendarClient
 from app.infra.clients.jira import JiraClient
+from app.domains.meeting.models import Meeting
+from app.domains.action.models import WbsEpic, WbsTask
 
 logger= logging.getLogger(__name__)
 
@@ -63,6 +65,22 @@ def disconnect_integration(
     is_connected=False, webhook_url 삭제
     """
     return repository.disconnect_integration(db, workspace_id, service)
+
+def reset_jira_links(db: Session, workspace_id: int) -> None:
+    """JIRA 연동 ID 초기화 - 다른 JIRA 프로젝트 전환 시 사용"""
+    epic_ids_subq = (
+        db.query(WbsEpic.id)
+        .join(Meeting, WbsEpic.meeting_id == Meeting.id)
+        .filter(Meeting.workspace_id == workspace_id)
+        .subquery()
+    )
+    db.query(WbsTask).filter(WbsTask.epic_id.in_(epic_ids_subq)).update(
+        {"jira_issue_id": None}, synchronize_session=False
+    )
+    db.query(WbsEpic).filter(WbsEpic.id.in_(epic_ids_subq)).update(
+        {"jira_epic_id": None}, synchronize_session=False
+    )
+    db.commit()
 
 async def test_integration(db: Session, workspace_id: int, service: ServiceType) -> bool:
     """
@@ -199,7 +217,7 @@ def get_jira_auth_url(workspace_id: int) -> str:
         f"&prompt=consent"
     )
 
-async def handle_jira_callback(db: Session, code: str, state: str) -> int:
+async def handle_jira_callback(db: Session, code: str, state: str) -> dict:
     if not settings.JIRA_CLIENT_ID or not settings.JIRA_CLIENT_SECRET:
         raise ValueError("JIRA OAuth 설정이 누락되어있습니다.")
     workspace_id = _decode_state(state)
@@ -235,25 +253,57 @@ async def handle_jira_callback(db: Session, code: str, state: str) -> int:
     if not resources:
         raise ValueError("접근 가능한 JIRA 사이트가 없습니다.")
 
-    # 첫 번째 사이트 선택
-    site = resources[0]
-    cloud_id = site['id']
-    site_url = site['url'].replace('https://', "")
+    if len(resources) == 1:
+        # 1개인 경우 자동 선택
+        site = resources[0]
+        cloud_id = site['id']
+        site_url = site['url'].replace('https://', "")
 
-    repository.update_tokens(
-        db,
-        workspace_id=workspace_id,
-        service=ServiceType.jira,
-        access_token=tokens['access_token'],
-        refresh_token=tokens.get('refresh_token'),
-        token_expires_at=expires_at,
-        extra_config={
-            "cloud_id": cloud_id,
-            "site_url": site_url,
+        repository.update_tokens(
+            db=db,
+            workspace_id=workspace_id,
+            service=ServiceType.jira,
+            access_token=tokens['access_token'],
+            refresh_token=tokens.get('refresh_token'),
+            token_expires_at=expires_at,
+            extra_config={
+                "cloud_id": cloud_id,
+                "site_url": site_url
+            }
+        )
+        return {
+            "status": "connected",
+            "workspace_id": workspace_id
         }
-    )
-    logger.info(f"JIRA 연동 완료 workspace_id={workspace_id}, site={site_url}")
-    return workspace_id
+
+    else:
+        # 프로젝트가 여러개 인경우 
+        sites = [{
+            "id": r['id'],
+            "name": r['name'],
+            "url": r['url'].replace('https://', "")
+        } for r in resources]
+
+        repository.update_tokens(
+            db=db,
+            workspace_id=workspace_id,
+            service=ServiceType.jira,
+            access_token=tokens['access_token'],
+            refresh_token=tokens.get('refresh_token'),
+            token_expires_at=expires_at,
+            extra_config={
+                "pending_sites": sites
+            },
+        )
+        # is_connected는 False -> 프로젝트 선택을 안했기 때문
+        integration = repository.get_integration(db, workspace_id, ServiceType.jira)
+        integration.is_connected = False
+        db.commit()
+        return {
+            "status": "select_site",
+            "workspace_id": workspace_id
+        }
+
 
 # --- Google Token 확인 및 갱신 ---
 
@@ -447,12 +497,11 @@ async def get_valid_jira_token(db: Session, workspace_id: int) -> str:
     if not integration or not integration.access_token:
         raise ValueError("JIRA 연동이 필요합니다.")
     
-    expires_at = (integration.extra_config or {}).get("token_expires_at")
+    expires_at = integration.token_expires_at
     if expires_at:
-        exp = datetime.fromisoformat(expires_at)
-        if exp.tzinfo is None:
-            exp = exp.replace(tzinfo=KST)
-        if exp < now_kst() + timedelta(minutes=5):
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=KST)
+        if expires_at < now_kst() + timedelta(minutes=5):
             client = await ClientSessionManager.get_client()
             res = await client.post(
                 "https://auth.atlassian.com/oauth/token",
@@ -486,11 +535,11 @@ def get_jira_cloud_id(db: Session, workspace_id: int) -> str:
         raise ValueError("JIRA cloud_id가 설정되지 않았습니다. 다시 시도하세요.")
     return cloud_id
 
-async def get_jira_projects(db: Session, workspace_id: int) -> list[dict]:
+async def get_jira_projects(db: Session, workspace_id: int, query: str = "") -> list[dict]:
     token = await get_valid_jira_token(db, workspace_id)
     cloud_id = get_jira_cloud_id(db, workspace_id)
     client = JiraClient(token, cloud_id)
-    projects = await client.get_projects()
+    projects = await client.get_projects(query)
     return [{
         "key": p["key"],
         "name": p["name"]
@@ -498,11 +547,30 @@ async def get_jira_projects(db: Session, workspace_id: int) -> list[dict]:
     ]
 
 def save_jira_project(db: Session, workspace_id: int, project_key: str) -> None:
+
     integration = repository.get_integration(db, workspace_id, ServiceType.jira)
     if not integration:
         raise ValueError("JIRA 연동이 필요합니다.")
+
     extra = dict(integration.extra_config or {})
-    extra['project_key'] = project_key
+    old_project_key = extra.get("project_key")
+
+    # 프로젝트가 바뀌면 기존 연동 ID 초기화
+    if old_project_key and old_project_key != project_key:
+        epic_ids_subq = (
+            db.query(WbsEpic.id)
+            .join(Meeting, WbsEpic.meeting_id == Meeting.id)
+            .filter(Meeting.workspace_id == workspace_id)
+            .subquery()
+        ) 
+        db.query(WbsTask).filter(WbsTask.epic_id.in_(epic_ids_subq)).update(
+            {"jira_issue_id": None}, synchronize_session=False
+        )
+        db.query(WbsEpic).filter(WbsEpic.id.in_(epic_ids_subq)).update(
+            {"jira_epic_id": None}, synchronize_session=False
+        )
+
+    extra["project_key"] = project_key
     integration.extra_config = extra
     db.commit()
 
@@ -525,6 +593,22 @@ def save_jira_status_mapping(db: Session, workspace_id: int, mapping: dict) -> N
     integration.extra_config = extra
     db.commit()
 
+def get_jira_pending_sites(db: Session, workspace_id: int) -> list:
+    integration = repository.get_integration(db, workspace_id, ServiceType.jira)
+    if not integration or not integration.access_token:
+        raise ValueError("JIRA 가 연동되지 않았습니다. 설정 > 연동 관리 에서 다시 시도해주세요.")
+    return (integration.extra_config or {}).get("pending_sites", [])
 
+def save_jira_site(db: Session, workspace_id: int, cloud_id: str, site_url: str) -> None:
+    integration = repository.get_integration(db, workspace_id, ServiceType.jira)
+    if not integration or not integration.access_token:
+        raise ValueError("JIRA 연동이 되지 않았습니다. 설정 > 연동 관리 에서 다시 시도해주세요.")
+    extra = dict(integration.extra_config or {})
+    extra.pop("pending_sites", None)
+    extra['cloud_id'] = cloud_id
+    extra['site_url'] = site_url
+    integration.extra_config = extra
+    integration.is_connected = True
+    db.commit()
 
 
