@@ -306,10 +306,13 @@ async def update_workspace_member_department(
 async def get_workspace_departments(
     workspace_id: int,
     db: Session = Depends(get_db),
-    _admin = Depends(require_workspace_admin),
+    _member: int = Depends(require_workspace_member),
 ) -> DepartmentListResponse:
     """
     특정 워크스페이스의 부서 목록을 조회하는 API 엔드포인트입니다.
+
+    회의 참석자 선택 등 협업 UI를 위해 워크스페이스 소속 멤버(역할 무관)가 조회할 수 있습니다.
+    생성·수정·삭제는 관리자 전용 엔드포인트를 사용합니다.
     """
     return get_workspace_departments_service(db, workspace_id)
 

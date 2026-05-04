@@ -18,6 +18,7 @@ class NotificationType(str, enum.Enum):
     review_requested = "review_requested"
     integration_expired = "integration_expired"
     role_changed = "role_changed"
+    workspace_member_joined = "workspace_member_joined"
 
 
 class Notification(Base):

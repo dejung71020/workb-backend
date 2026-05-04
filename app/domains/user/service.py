@@ -36,6 +36,7 @@ from app.core.security import (
     verify_password,
 )
 from app.domains.integration.repository import create_default_integrations
+from app.domains.notification import service as notification_service
 from app.domains.user.repository import (
     create_user,
     deactivate_user_account,
@@ -83,6 +84,12 @@ from app.domains.user.schemas import (
 )
 from app.domains.user.models import SocialProvider, User
 from app.infra.clients.session_manager import ClientSessionManager
+
+_MEMBER_ROLE_LABEL_KO = {
+    MemberRole.admin: "관리자",
+    MemberRole.member: "멤버",
+    MemberRole.viewer: "뷰어",
+}
 
 
 def _generate_invite_code() -> str:
@@ -364,6 +371,18 @@ def signup_member_service(db: Session, payload: MemberSignupRequest) -> UserResp
     )
     if invite:
         mark_invite_code_used(db, invite, user.id)
+
+    try:
+        notification_service.emit_workspace_member_joined(
+            db,
+            workspace_id=int(workspace.id),
+            workspace_name=str(workspace.name),
+            new_user_id=int(user.id),
+            new_user_name=str(user.name),
+            role_display=_MEMBER_ROLE_LABEL_KO.get(invite_role, "멤버"),
+        )
+    except Exception:
+        pass
 
     return UserResponse(
         id=user.id,
