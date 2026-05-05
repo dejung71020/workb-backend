@@ -72,6 +72,20 @@ def _ensure_user_profile_columns() -> None:
             conn.execute(text(statement))
 
 
+async def _prefetch_fonts() -> None:
+    """앱 시작 시 PDF 생성에 필요한 한글 폰트를 storage/fonts/ 에 미리 다운로드합니다."""
+    try:
+        from app.domains.action.minutes_pipeline.pdf_renderer import prefetch_fonts
+        loop = asyncio.get_event_loop()
+        ok = await loop.run_in_executor(None, prefetch_fonts)
+        if ok:
+            print("[폰트] NanumGothic 다운로드/확인 완료 → storage/fonts/")
+        else:
+            print("[폰트] NanumGothic 다운로드 실패 — 시스템 폰트 또는 Helvetica 사용")
+    except Exception as exc:
+        print(f"[폰트] 폰트 준비 중 오류: {exc}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     should_reset_db = settings.DEBUG and settings.RESET_DB_ON_STARTUP
@@ -87,6 +101,9 @@ async def lifespan(app: FastAPI):
 
     # [시작 시] HTTP 클라이언트 세션 초기화
     await ClientSessionManager.get_client()
+
+    # [시작 시] PDF 한글 폰트 준비
+    await _prefetch_fonts()
 
     if should_reset_db:
         seed_test_data()

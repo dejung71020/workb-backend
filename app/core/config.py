@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     NOTIFICATION_JOBS_ENABLED: bool = True
     NOTIFICATION_JOB_INTERVAL_SEC: int = 60
 
+    # 10. 개발·QA 전용 기능
+    WAV_SIM_ENABLED: bool = False  # WAV 업로드로 회의 시뮬레이션 (운영에서는 False)
+
     @field_validator("DEBUG", mode="before")
     @classmethod
     def parse_debug(cls, value):

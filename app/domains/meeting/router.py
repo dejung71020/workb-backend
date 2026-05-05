@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.domains.workspace.deps import require_workspace_admin, require_workspace_member
 from app.core.deps import get_current_user_id
+from app.core.config import settings
 from app.db.session import get_db
 
 from app.domains.meeting.schemas import (
@@ -212,6 +213,46 @@ def end_workspace_meeting(
     """회의를 완료로 전환합니다."""
     MeetingLifecycleService.end_meeting(db, workspace_id, meeting_id)
     return {"status": "ok"}
+
+
+_WAV_CONTENT_TYPES = {"audio/wav", "audio/wave", "audio/x-wav"}
+_WAV_MAX_BYTES = 300 * 1024 * 1024  # 300 MB
+
+
+@router.post("/workspaces/{workspace_id}/{meeting_id}/simulate-wav")
+async def simulate_wav_upload(
+    workspace_id: int,
+    meeting_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _admin: int = Depends(require_workspace_admin),
+) -> dict:
+    """
+    [개발·QA 전용] WAV 파일을 업로드해 실제 회의와 동일한 경로로 처리합니다.
+
+    WAV_SIM_ENABLED=true + 워크스페이스 관리자만 사용 가능.
+    처리 완료 후 meeting.status = done, MongoDB utterances 저장.
+    """
+    if not settings.WAV_SIM_ENABLED:
+        raise HTTPException(status_code=403, detail="WAV_SIM_ENABLED가 비활성화 상태입니다. (.env에서 WAV_SIM_ENABLED=true 로 설정)")
+
+    if not settings.OPENAI_API_KEY:
+        raise HTTPException(status_code=503, detail="OPENAI_API_KEY가 설정되지 않아 Whisper를 사용할 수 없습니다.")
+
+    filename = file.filename or ""
+    if file.content_type not in _WAV_CONTENT_TYPES and not filename.lower().endswith(".wav"):
+        raise HTTPException(status_code=400, detail="WAV(.wav) 파일만 업로드 가능합니다.")
+
+    wav_bytes = await file.read()
+    if len(wav_bytes) > _WAV_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="파일 크기가 300MB를 초과합니다.")
+    if len(wav_bytes) == 0:
+        raise HTTPException(status_code=400, detail="빈 파일입니다.")
+
+    from app.domains.meeting.wav_simulation import run_wav_simulation
+    count = await run_wav_simulation(db, workspace_id, meeting_id, wav_bytes, settings.OPENAI_API_KEY)
+
+    return {"status": "ok", "meeting_id": meeting_id, "utterance_count": count}
 
 
 @router.post(

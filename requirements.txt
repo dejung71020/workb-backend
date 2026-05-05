@@ -46,7 +46,10 @@ beautifulsoup4==4.12.3      # HTML 태그 제거 후 본문 추출
 markdown==3.10.2
 openpyxl==3.1.5
 Pillow>=10.0.0
-reportlab>=4.0.0            # 회의 요약 PDF 생성
+PyMuPDF>=1.24.0
+reportlab>=4.2.0            # 회의 요약 PDF 생성
+playwright>=1.40.0
+jinja2>=3.1.0
 
 # Scripts & Evaluation
 matplotlib>=3.8.0

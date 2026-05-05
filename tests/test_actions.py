@@ -175,6 +175,56 @@ class TestNextMeetingSuggest:
 # 다음 회의 등록
 # ---------------------------------------------------------------------------
 
+class TestMinutesEnsure:
+    def test_ensure_creates_default_when_none_exists(self, client, admin_user):
+        """회의록이 없을 때 기본 양식을 생성하고 200을 반환합니다."""
+        _, workspace = admin_user
+        meeting_id = _create_meeting(client, workspace.id)
+
+        res = client.get(
+            f"{BASE_ACTIONS}/meetings/{meeting_id}/minutes/ensure"
+            f"?workspace_id={workspace.id}",
+        )
+        assert res.status_code == 200
+        body = res.json()
+        assert body["meeting_id"] == meeting_id
+        assert body["content"] is not None
+        assert "## 개요" in body["content"]
+        assert "## 논의 사항" in body["content"]
+        assert "## 결정 사항" in body["content"]
+        assert "## 액션 아이템" in body["content"]
+        assert "## 미결/특이 사항" in body["content"]
+
+    def test_ensure_returns_existing_when_present(self, client, admin_user):
+        """이미 회의록이 있으면 기존 저장본을 그대로 반환합니다."""
+        _, workspace = admin_user
+        meeting_id = _create_meeting(client, workspace.id)
+
+        # 첫 ensure → 기본 양식 생성
+        first = client.get(
+            f"{BASE_ACTIONS}/meetings/{meeting_id}/minutes/ensure"
+            f"?workspace_id={workspace.id}",
+        )
+        assert first.status_code == 200
+        first_updated_at = first.json()["updated_at"]
+
+        # 두 번째 ensure → 동일 레코드 반환 (updated_at 변화 없음)
+        second = client.get(
+            f"{BASE_ACTIONS}/meetings/{meeting_id}/minutes/ensure"
+            f"?workspace_id={workspace.id}",
+        )
+        assert second.status_code == 200
+        assert second.json()["updated_at"] == first_updated_at
+
+    def test_ensure_missing_workspace_id_returns_422(self, client, admin_user):
+        _, workspace = admin_user
+        meeting_id = _create_meeting(client, workspace.id)
+        res = client.get(
+            f"{BASE_ACTIONS}/meetings/{meeting_id}/minutes/ensure",
+        )
+        assert res.status_code == 422
+
+
 class TestNextMeetingRegister:
     def test_register_success(self, client, admin_user):
         _, workspace = admin_user
