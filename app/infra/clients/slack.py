@@ -204,6 +204,8 @@ class SlackClient(BaseClient):
             minutes_text: str,
             action_items: Optional[List[str]] = None,
             link_url: Optional[str] = None,
+            wbs_url: Optional[str] = None,
+            jira_url: Optional[str] = None,
             thread_ts: Optional[str] = None,
     ) -> str:
         """
@@ -249,21 +251,30 @@ class SlackClient(BaseClient):
                 }
             ]
         
+        # 딥링크 버튼
+        buttons = []
         if link_url:
-            blocks.append({
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "text": {
-                            "type": "plain_text",
-                            "text": "회의록 보기"
-                        },
-                        "url": link_url,
-                        "style": "primary",
-                    }
-                ],
+            buttons.append({
+                "type": "button",
+                "text": {"type": "plain_text", "text": "📋 회의록 보기"},
+                "url": link_url,
+                "style": "primary",
             })
+        if wbs_url:
+            buttons.append({
+                "type": "button",
+                "text": {"type": "plain_text", "text": "📊 WBS 보기"},
+                "url": wbs_url,
+            })
+        if jira_url:
+            buttons.append({
+                "type": "button",
+                "text": {"type": "plain_text", "text": "🔵 JIRA 이슈 보기"},
+                "url": jira_url,
+            })
+
+        if buttons:
+            blocks.append({"type": "actions", "elements": buttons})
         
         result = await self.send_message(
             channel_id=channel_id,

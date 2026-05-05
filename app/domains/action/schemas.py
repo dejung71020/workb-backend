@@ -196,3 +196,26 @@ class JiraPreviewResponse(BaseModel):
     task_create:  int
     task_update:  int
     total:        int
+
+class JiraNotifyRequest(BaseModel):
+    services: List[str]
+    created: int = 0
+    updated: int = 0
+    
+# ===============================================================
+# 다중 export
+# ===============================================================
+class BatchExportRequest(BaseModel):
+    services: List[str]
+    slack_channel_id: Optional[str] = None
+    include_action_items: bool = True
+    include_reports: bool = False
+
+class BatchExportServiceResult(BaseModel):
+    status: str
+    message: str
+    error_code: Optional[str] = None
+
+class BatchExportResponse(BaseModel):
+    overall_status: str
+    results: dict[str, BatchExportServiceResult]

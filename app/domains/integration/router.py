@@ -114,10 +114,8 @@ async def test_webhook(
     db: Session = Depends(get_db),
     _admin=Depends(require_workspace_admin),
 ):
-    success = await service.test_integration(db, workspace_id, service_name)
-    if not success:
-        raise HTTPException(status_code=400, detail="연동 상태 확인 불가")
-    return TestIntegrationResponse(success=True, message="연결 성공")
+    result = await service.test_integration(db, workspace_id, service_name)
+    return TestIntegrationResponse(success=result['status']=="ok", status=result['status'], message=result['message'])
 
 
 @router.get("/google/auth", response_model=OAuthUrlResponse)

@@ -1,6 +1,8 @@
 # app\domains\integration\service.py
 import json
 import base64
+import hashlib
+import secrets
 import logging
 from datetime import datetime, timedelta, timezone
 from app.utils.time_utils import now_kst, KST
@@ -22,15 +24,33 @@ from app.domains.action.models import WbsEpic, WbsTask
 
 logger= logging.getLogger(__name__)
 
+# PKCE 생성 함수 OAuth 국제 보안 표준
+def _generate_pkce_pair() -> tuple[str, str]:
+    # code_verifier: 최소 43자 랜덤 문자열 
+    code_verifier = secrets.token_urlsafe(43)
+
+    # code_challenge: SHA256 를 Base64URL로 인코딩. 패딩 제거
+    digest = hashlib.sha256(code_verifier.encode()).digest()
+    code_challenge = base64.urlsafe_b64encode(digest).rstrip(b'=').decode()
+    return code_verifier, code_challenge
+
+
 # --- state  인코딩, 디코딩 (OAuth state parameters) ---
-def _encode_state(workspace_id: int) -> str:
+def _encode_state(workspace_id: int, code_verifier: str = "") -> str:
+    payload: dict = {"workspace_id": workspace_id}
+    if code_verifier:
+        payload['cv'] = code_verifier
     return base64.urlsafe_b64encode(
-        json.dumps({"workspace_id": workspace_id}).encode()
+        json.dumps(payload).encode()
     ).decode()
 
 def _decode_state(state: str) -> int:
     data = json.loads(base64.urlsafe_b64decode(state.encode()).decode())
     return data['workspace_id']
+
+def _decode_state_with_cv(state: str) -> tuple[int, str]:
+    data = json.loads(base64.urlsafe_b64decode(state.encode()).decode())
+    return data['workspace_id'], data.get('cv', "")
 
 # --- LangGraph Node ---
 
@@ -82,16 +102,85 @@ def reset_jira_links(db: Session, workspace_id: int) -> None:
     )
     db.commit()
 
-async def test_integration(db: Session, workspace_id: int, service: ServiceType) -> bool:
+async def test_integration(db: Session, workspace_id: int, service: ServiceType) -> dict:
     """
-    저장된 토큰으로 실제 API 연결 확인
+    각 API 토큰과 권한 대시보드를 위한 헬스체크 핑 테스트 함수
     """
     integration = repository.get_integration(db, workspace_id, service)
-    if not integration or not integration.is_connected:
-        return False
-    # 서비스 ping 로직 향후 추가
-    return True
+    if not integration or not integration.is_connected or not integration.access_token:
+        return {
+            "status": "disconnected",
+            "message": "연동되지 않았습니다."
+        }
 
+    # 1 단계 : token_expires_at 으로 만료 체크
+    expires_at = integration.token_expires_at
+    if expires_at:
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=KST)
+        if expires_at < now_kst():
+            return {
+                "status": "expired",
+                "message": "토큰이 만료되었습니다. 재연동이 필요합니다."
+            }
+
+    # 2 단계 : API ping test
+    try:
+        http = await ClientSessionManager.get_client()
+
+        if service == ServiceType.slack:
+            res = await http.get(
+                "https://slack.com/api/auth.test",
+                headers={
+                    "Authorization": f"Bearer {integration.access_token}",
+                }
+            )
+            if not res.json().get("ok"):
+                return {
+                    "status": "revoked",
+                    "message": "Slack 권한이 해제되었습니다. 재연동이 필요합니다."
+                }
+            
+        elif service == ServiceType.google_calendar:
+            try:
+                token = await get_valid_google_token(db, workspace_id)
+                res = await http.get(
+                    "https://www.googleapis.com/oauth2/v3/tokeninfo",
+                    params={"access_token": token},
+                )
+                if res.status_code != 200:
+                    return {
+                        "status": "revoked",
+                        "message": "Google Calendar 권한이 해제되었습니다. 재연동이 필요합니다."
+                    }
+            except Exception:
+                return {
+                    "status": "revoked",
+                    "message": "Google Calendar 연결이 끊겼습니다. 재연동이 필요합니다."
+                }
+        
+        elif service == ServiceType.jira:
+            try:
+                token = await get_valid_jira_token(db, workspace_id)
+                cloud_id = get_jira_cloud_id(db, workspace_id)
+                jira = JiraClient(token, cloud_id)
+                await jira._request("GET", "/myself")
+            except Exception:
+                return {
+                    "status": "revoked",
+                    "message": "JIRA 권한이 해제되었습니다. 재연동이 필요합니다."
+                }
+
+        return {
+            "status": "ok",
+            "message": "연결 정상"
+        }
+
+    except Exception:
+        return {
+            "status": "error",
+            "message": "연결 확인 중 오류"
+        }
 
 
 
@@ -110,7 +199,8 @@ def get_google_auth_url(workspace_id: int):
         raise ValueError("GOOGLE_CLIENT_ID가 설정되어 있지 않습니다. (.env 또는 환경변수 확인)")
     if not settings.GOOGLE_REDIRECT_URI:
         raise ValueError("GOOGLE_REDIRECT_URI가 설정되어 있지 않습니다. (.env 또는 환경변수 확인)")
-    state = _encode_state(workspace_id)
+    code_verifier, code_challenge = _generate_pkce_pair()
+    state = _encode_state(workspace_id, code_verifier)
     params = (
         f"https://accounts.google.com/o/oauth2/v2/auth"
         f"?client_id={settings.GOOGLE_CLIENT_ID}"
@@ -120,13 +210,15 @@ def get_google_auth_url(workspace_id: int):
         f"&access_type=offline"
         f"&prompt=consent"
         f"&state={state}"
+        f"&code_challenge={code_challenge}"
+        f"&code_challenge_method=S256"
     )
     return params
 
 async def handle_google_callback(db: Session, code: str, state: str) -> int:
     if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
         raise ValueError("Google OAuth 설정이 누락되었습니다. (GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET 확인)")
-    workspace_id = _decode_state(state)
+    workspace_id, code_verifier = _decode_state_with_cv(state)
     client = await ClientSessionManager.get_client()
 
     res = await client.post(
@@ -137,6 +229,7 @@ async def handle_google_callback(db: Session, code: str, state: str) -> int:
             "client_secret": settings.GOOGLE_CLIENT_SECRET,
             "redirect_uri": settings.GOOGLE_REDIRECT_URI,
             "grant_type": "authorization_code",
+            "code_verifier": code_verifier,
         },
     )
     res.raise_for_status()
@@ -205,7 +298,8 @@ def get_jira_auth_url(workspace_id: int) -> str:
         raise ValueError("JIRA_REDIRECT_URI가 설정되어 있지 않습니다.")
     if not settings.JIRA_CLIENT_SECRET:
         raise ValueError("JIRA_CLIENT_SECRET가 설정되어 있지 않습니다.")
-    state = _encode_state(workspace_id)
+    code_verifier, code_challenge = _generate_pkce_pair()
+    state = _encode_state(workspace_id, code_verifier)
     return (
         f"https://auth.atlassian.com/authorize"
         f"?audience=api.atlassian.com"
@@ -215,12 +309,14 @@ def get_jira_auth_url(workspace_id: int) -> str:
         f"&state={state}"
         f"&response_type=code"
         f"&prompt=consent"
+        f"&code_challenge={code_challenge}"
+        f"&code_challenge_method=S256"
     )
 
 async def handle_jira_callback(db: Session, code: str, state: str) -> dict:
     if not settings.JIRA_CLIENT_ID or not settings.JIRA_CLIENT_SECRET:
         raise ValueError("JIRA OAuth 설정이 누락되어있습니다.")
-    workspace_id = _decode_state(state)
+    workspace_id, code_verifier = _decode_state_with_cv(state)
     client = await ClientSessionManager.get_client()
 
     # 1. code -> token 교환
@@ -232,6 +328,7 @@ async def handle_jira_callback(db: Session, code: str, state: str) -> dict:
             "client_secret": settings.JIRA_CLIENT_SECRET,
             "code": code,
             "redirect_uri": settings.JIRA_REDIRECT_URI,
+            "code_verifier": code_verifier,
         },
     )
     res.raise_for_status()
