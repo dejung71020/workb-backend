@@ -28,6 +28,8 @@ from app.domains.workspace.schemas import (
     WorkspaceMemberDepartmentUpdateRequest,
     WorkspaceMemberDepartmentUpdateResponse,
     WorkspaceMemberListResponse,
+    WorkspaceMemberProfileUpdateRequest,
+    WorkspaceMemberProfileUpdateResponse,
     WorkspaceMemberRoleUpdateRequest,
     WorkspaceMemberRoleUpdateResponse,
     WorkspaceResponse,
@@ -48,6 +50,7 @@ from app.domains.workspace.service import (
     send_workspace_invite_emails_service,
     update_workspace_department_service,
     update_workspace_member_department_service,
+    update_workspace_member_profile_service,
     update_workspace_member_role_service,
     update_workspace_service,
     validate_invite_code_service,
@@ -290,6 +293,29 @@ async def update_workspace_member_department(
     department_id를 null로 보내면 기존 부서를 해제합니다.
     """
     return update_workspace_member_department_service(
+        db=db,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        payload=payload,
+    )
+
+
+@router.patch(
+    "/{workspace_id}/members/{user_id}/profile",
+    response_model=WorkspaceMemberProfileUpdateResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def update_workspace_member_profile(
+    workspace_id: int,
+    user_id: int,
+    payload: WorkspaceMemberProfileUpdateRequest,
+    db: Session = Depends(get_db),
+    _admin = Depends(require_workspace_admin),
+) -> WorkspaceMemberProfileUpdateResponse:
+    """
+    특정 워크스페이스 소속 멤버의 생년월일과 성별을 변경합니다.
+    """
+    return update_workspace_member_profile_service(
         db=db,
         workspace_id=workspace_id,
         user_id=user_id,

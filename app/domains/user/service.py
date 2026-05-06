@@ -547,7 +547,6 @@ async def social_login_callback_service(db: Session, provider: str, code: str, s
     if not user:
         existing_user = get_user_by_email(db, profile["email"])
         if existing_user:
-            _ensure_requested_social_role(existing_user, state_data["role"])
             user = update_user_social_identity(db, existing_user, provider, profile["social_id"])
 
     if not user:
@@ -582,8 +581,6 @@ async def social_login_callback_service(db: Session, provider: str, code: str, s
 
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="탈퇴했거나 비활성화된 계정입니다.")
-
-    _ensure_requested_social_role(user, state_data["role"])
 
     return _token_response_for_user(user)
 

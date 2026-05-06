@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
-from app.domains.user.schemas import UserRole
+from app.domains.user.schemas import Gender, UserRole
 
 
 class WorkspaceListItem(BaseModel):
@@ -178,6 +178,9 @@ class WorkspaceMemberResponse(BaseModel):
     role: UserRole
     department_id: int | None
     department: str | None
+    birth_date: date | None = None
+    age: int | None = None
+    gender: Gender | None = None
 
 
 class WorkspaceMemberListResponse(BaseModel):
@@ -261,3 +264,19 @@ class WorkspaceMemberDepartmentUpdateResponse(BaseModel):
     user_id: int
     department_id: int | None
     department: str | None
+
+
+class WorkspaceMemberProfileUpdateRequest(BaseModel):
+    """
+    워크스페이스 관리자가 멤버의 기본 인적 정보를 수정할 때 사용하는 스키마입니다.
+    """
+
+    birth_date: date | None = None
+    gender: Gender | None = None
+
+
+class WorkspaceMemberProfileUpdateResponse(BaseModel):
+    user_id: int
+    birth_date: date | None
+    age: int | None
+    gender: Gender | None

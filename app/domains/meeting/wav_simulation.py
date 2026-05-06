@@ -11,7 +11,7 @@ timestamp, content, start, end, confidence)를 유지하므로 하위 파이프�
   1. Whisper 전사 → MongoDB utterances 저장
   2. Redis meeting:{id}:utterances 에 동일 발화 push  ← quick_report_node가 읽는 곳
   3. end_meeting() → MySQL status = done
-  4. quick_report_node() → GPT-4o-mini로 구조화 요약 → MongoDB meeting_summaries 저장
+  4. LangGraph 후처리 파이프라인 → 요약/WBS/회의록 생성
 """
 import asyncio
 import io
@@ -123,9 +123,9 @@ async def run_wav_simulation(
         lambda: MeetingLifecycleService.end_meeting(db, workspace_id, meeting_id),
     )
 
-    # ── 5. quick_report_node — 실제 회의 종료와 동일한 경로 ───────────
+    # ── 5. LangGraph 후처리 — 실제 회의 종료와 동일한 경로 ───────────
     # fire-and-forget: 실패해도 시뮬레이션 자체는 성공으로 처리
-    asyncio.ensure_future(_run_quick_report(workspace_id, meeting_id))
+    asyncio.ensure_future(_run_completion_pipeline(workspace_id, meeting_id))
 
     logger.info(
         "WAV 시뮬레이션 완료 (meeting_id=%d, utterances=%d, duration=%ds)",
@@ -134,19 +134,12 @@ async def run_wav_simulation(
     return len(utterances)
 
 
-async def _run_quick_report(workspace_id: int, meeting_id: int) -> None:
-    """quick_report_node를 fire-and-forget으로 실행."""
+async def _run_completion_pipeline(workspace_id: int, meeting_id: int) -> None:
+    """회의 후처리 LangGraph 파이프라인을 fire-and-forget으로 실행."""
     try:
-        from app.domains.knowledge.agent_utils import quick_report_node
-        state = {
-            "meeting_id": meeting_id,
-            "workspace_id": workspace_id,
-            "past_meeting_ids": None,
-            "user_question": "",
-            "function_type": "",
-            "chat_response": "",
-        }
-        await quick_report_node(state)
-        logger.info("quick_report 완료 (meeting_id=%d)", meeting_id)
+        from app.core.graph.meeting_pipeline import run_meeting_completion_pipeline
+
+        await run_meeting_completion_pipeline(workspace_id, meeting_id)
+        logger.info("회의 후처리 파이프라인 완료 (meeting_id=%d)", meeting_id)
     except Exception as exc:
-        logger.warning("quick_report 실패 (meeting_id=%d): %s", meeting_id, exc)
+        logger.warning("회의 후처리 파이프라인 실패 (meeting_id=%d): %s", meeting_id, exc)

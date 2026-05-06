@@ -6,7 +6,6 @@ from fastapi import (
     Depends,
     HTTPException,
     Query,
-    background,
     status,
     UploadFile,
     File,
@@ -17,6 +16,10 @@ from app.domains.workspace.deps import require_workspace_admin, require_workspac
 from app.core.deps import get_current_user_id
 from app.core.config import settings
 from app.db.session import get_db
+from app.core.graph.meeting_pipeline import (
+    run_meeting_completion_pipeline,
+    run_meeting_start_pipeline,
+)
 
 from app.domains.meeting.schemas import (
     CreateMeetingRequest,
@@ -41,7 +44,6 @@ from app.domains.meeting.service import (
     MinutePhotoService,
     SpeakerProfileService,
 )
-from app.domains.knowledge.service import process_meeting_end
 
 router = APIRouter()
 
@@ -205,15 +207,20 @@ async def patch_workspace_meeting(
 
 
 @router.post("/workspaces/{workspace_id}/{meeting_id}/start")
-def start_workspace_meeting(
+async def start_workspace_meeting(
     workspace_id: int,
     meeting_id: int,
-    db: Session = Depends(get_db),
     _member: int = Depends(require_workspace_member),
 ) -> dict:
-    """회의를 진행 중으로 전환합니다."""
-    MeetingLifecycleService.start_meeting(db, workspace_id, meeting_id)
-    return {"status": "ok"}
+    """회의를 진행 중으로 전환하고 LangGraph 시작 파이프라인을 실행합니다."""
+    state = await run_meeting_start_pipeline(workspace_id, meeting_id)
+    return {
+        "status": "ok",
+        "pipeline": {
+            "realtime_utterance_count": state.get("realtime_utterance_count", 0),
+            "errors": state.get("errors", []),
+        },
+    }
 
 
 @router.post("/workspaces/{workspace_id}/{meeting_id}/end")
@@ -224,10 +231,14 @@ def end_workspace_meeting(
     db: Session = Depends(get_db),
     _member: int = Depends(require_workspace_member),
 ) -> dict:
-    """회의를 완료로 전환합니다."""
+    """회의를 완료로 전환하고 후처리 LangGraph 파이프라인을 백그라운드로 실행합니다."""
     MeetingLifecycleService.end_meeting(db, workspace_id, meeting_id)
-    background_tasks.add_task(process_meeting_end, meeting_id, workspace_id)
-    return {"status": "ok"}
+    background_tasks.add_task(
+        run_meeting_completion_pipeline,
+        workspace_id,
+        meeting_id,
+    )
+    return {"status": "ok", "pipeline": {"status": "accepted"}}
 
 
 _WAV_CONTENT_TYPES = {"audio/wav", "audio/wave", "audio/x-wav"}

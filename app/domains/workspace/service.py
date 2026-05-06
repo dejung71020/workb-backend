@@ -66,6 +66,8 @@ from app.domains.workspace.schemas import (
     WorkspaceMemberDepartmentUpdateRequest,
     WorkspaceMemberDepartmentUpdateResponse,
     WorkspaceMemberListResponse,
+    WorkspaceMemberProfileUpdateRequest,
+    WorkspaceMemberProfileUpdateResponse,
     WorkspaceMemberRoleUpdateResponse,
     WorkspaceMemberResponse,
     WorkspaceResponse,
@@ -89,6 +91,13 @@ def _generate_unique_invite_code(db: Session) -> str:
         code = _generate_invite_code()
         if not get_workspace_by_invite_code(db, code) and not get_invite_code_by_code(db, code):
             return code
+
+
+def _calculate_age(birth_date: date | None) -> int | None:
+    if birth_date is None:
+        return None
+    today = date.today()
+    return today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
 
 
 def get_workspace_service(db: Session, workspace_id: int) -> WorkspaceResponse:
@@ -406,6 +415,9 @@ def get_workspace_members_service(
                 role=membership.role.value if hasattr(membership.role, "value") else str(membership.role),
                 department_id=membership.department_id,
                 department=department_name_map.get(membership.department_id),
+                birth_date=user.birth_date,
+                age=_calculate_age(user.birth_date),
+                gender=user.gender,
             )
             for membership, user in member_rows
         ]
@@ -573,6 +585,46 @@ def update_workspace_member_department_service(
         user_id=user.id,
         department_id=updated_membership.department_id,
         department=department_name,
+    )
+
+
+def update_workspace_member_profile_service(
+    db: Session,
+    workspace_id: int,
+    user_id: int,
+    payload: WorkspaceMemberProfileUpdateRequest,
+) -> WorkspaceMemberProfileUpdateResponse:
+    workspace = get_workspace_by_id(db, workspace_id)
+    if not workspace:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="워크스페이스를 찾을 수 없습니다.",
+        )
+
+    user = get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
+    membership = get_workspace_membership(db, workspace_id, user_id)
+    if not membership:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="해당 워크스페이스 소속 사용자가 아닙니다.",
+        )
+
+    user.birth_date = payload.birth_date
+    user.gender = payload.gender.value if payload.gender else None
+    db.commit()
+    db.refresh(user)
+
+    return WorkspaceMemberProfileUpdateResponse(
+        user_id=user.id,
+        birth_date=user.birth_date,
+        age=_calculate_age(user.birth_date),
+        gender=user.gender,
     )
 
 
