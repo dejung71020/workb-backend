@@ -15,6 +15,16 @@ def _meeting_id_query(meeting_id: str) -> list[dict]:
     return conditions
 
 
+async def save_utterances(meeting_id: str, doc: dict) -> None:
+    """utterances 문서를 upsert합니다 (WAV 시뮬레이션·외부 STT 결과 저장용)."""
+    col = mongo_db["utterances"]
+    await col.update_one(
+        {"$or": _meeting_id_query(meeting_id)},
+        {"$set": doc},
+        upsert=True,
+    )
+
+
 async def get_utterances_by_meeting_id(meeting_id: str) -> dict | None:
     """meeting_id로 utterances 문서 1건 조회 (MongoDB)."""
     return await mongo_db["utterances"].find_one(

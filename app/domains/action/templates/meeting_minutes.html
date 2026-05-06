@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<style>
+{% if reg_font_url %}
+@font-face {
+  font-family: 'NG';
+  src: url('{{ reg_font_url }}') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}
+{% endif %}
+{% if bold_font_url %}
+@font-face {
+  font-family: 'NG';
+  src: url('{{ bold_font_url }}') format('truetype');
+  font-weight: bold;
+  font-style: normal;
+}
+{% endif %}
+
+@page {
+  size: A4;
+  margin: 15mm 14mm 12mm 14mm;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'NG', 'NanumGothic', 'Apple SD Gothic Neo', sans-serif;
+  font-size: 8.5pt;
+  color: #000;
+  line-height: 1.45;
+}
+
+/* ── 제목 ───────────────────────────────────────────── */
+.doc-title {
+  font-size: 22pt;
+  font-weight: bold;
+  margin-bottom: 10pt;
+  letter-spacing: 0.03em;
+}
+
+/* ── 공통 테이블 ─────────────────────────────────────── */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  margin-bottom: 5pt;
+}
+
+td {
+  padding: 3pt 5pt;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+.lbl {
+  font-weight: bold;
+  font-size: 9pt;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.col-hdr {
+  font-weight: bold;
+  font-size: 8pt;
+  vertical-align: middle;
+  padding: 2pt 5pt;
+}
+
+/* ── 메타 테이블 (회의일시/부서/작성자/참석자) ─────────── */
+.t-meta td {
+  border: 0.4pt solid #C0C0C0;
+  vertical-align: middle;
+  font-size: 8pt;
+}
+
+.t-meta .lbl {
+  font-size: 8.5pt;
+}
+
+/* ── 섹션 테이블 공통 ───────────────────────────────── */
+.t-sec td,
+.t-dec td {
+  border: 0.4pt solid #C0C0C0;
+}
+
+/* 각 섹션 첫 행 상단: 두꺼운 검정 선 */
+.t-sec tr:first-child td,
+.t-dec tr:first-child td {
+  border-top: 0.75pt solid #000;
+}
+
+/* 내용 셀 공통 */
+.cell {
+  vertical-align: top;
+  font-size: 8.5pt;
+  white-space: pre-wrap;
+}
+
+/* 최소높이 확보용 하단 패딩 */
+.cell-agenda    { padding-bottom: 35pt; }
+.cell-content   { padding-bottom: 55pt; }
+.cell-notes     { padding-bottom: 65pt; }
+.cell-dec       { padding: 3pt 5pt; font-size: 8.5pt; vertical-align: middle; }
+.cell-dec-inner { display: block; min-height: 1.45em; }
+</style>
+</head>
+<body>
+
+<div class="doc-title">회의록</div>
+
+<!-- ── 메타 정보 ──────────────────────────────────── -->
+<table class="t-meta">
+  <colgroup>
+    <col style="width:19mm"><!-- 회의일시 lbl -->
+    <col style="width:51mm"><!-- 날짜 -->
+    <col style="width:11mm"><!-- 부서 lbl -->
+    <col style="width:26mm"><!-- 부서값 -->
+    <col style="width:14mm"><!-- 작성자 lbl -->
+    <col>                   <!-- 작성자값 -->
+  </colgroup>
+  <tbody>
+    <tr>
+      <td class="lbl">회의일시</td>
+      <td>{{ datetime }}</td>
+      <td class="lbl">부서</td>
+      <td>{{ dept }}</td>
+      <td class="lbl">작성자</td>
+      <td>{{ author }}</td>
+    </tr>
+    <tr>
+      <td class="lbl">참석자</td>
+      <td colspan="5">{{ attendees }}</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ── 회의안건 ───────────────────────────────────── -->
+<table class="t-sec">
+  <colgroup>
+    <col style="width:19mm">
+    <col>
+  </colgroup>
+  <tbody>
+    <tr>
+      <td class="lbl">회의안건</td>
+      <td class="cell cell-agenda">{{ agenda_items }}</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ── 회의내용 (내용 / 비고) ─────────────────────── -->
+<table class="t-sec">
+  <colgroup>
+    <col style="width:19mm">
+    <col style="width:76%">
+    <col>
+  </colgroup>
+  <tbody>
+    <tr>
+      <td class="lbl" rowspan="2">회의내용</td>
+      <td class="col-hdr">내용</td>
+      <td class="col-hdr">비고</td>
+    </tr>
+    <tr>
+      <td class="cell cell-content">{{ discussion_content }}</td>
+      <td class="cell cell-content"></td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ── 결정사항 (내용 / 진행일정) ─────────────────── -->
+<table class="t-dec">
+  <colgroup>
+    <col style="width:19mm">
+    <col>
+    <col>
+  </colgroup>
+  <tbody>
+    <tr>
+      <td class="lbl" rowspan="{{ decision_rows|length + 1 }}">결정사항</td>
+      <td class="col-hdr">내용</td>
+      <td class="col-hdr">진행일정</td>
+    </tr>
+    {% for row in decision_rows %}
+    <tr>
+      <td class="cell-dec">
+        <span class="cell-dec-inner">{% if row %}{{ row }}{% else %}&nbsp;{% endif %}</span>
+      </td>
+      <td class="cell-dec"><span class="cell-dec-inner">&nbsp;</span></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<!-- ── 액션 아이템 ─────────────────────────────────── -->
+<table class="t-sec">
+  <colgroup>
+    <col style="width:19mm">
+    <col>
+  </colgroup>
+  <tbody>
+    <tr>
+      <td class="lbl">액션 아이템</td>
+      <td class="cell cell-notes">{{ action_items }}</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ── 특이사항 ───────────────────────────────────── -->
+<table class="t-sec">
+  <colgroup>
+    <col style="width:19mm">
+    <col>
+  </colgroup>
+  <tbody>
+    <tr>
+      <td class="lbl">특이사항</td>
+      <td class="cell cell-notes">{{ special_notes }}</td>
+    </tr>
+  </tbody>
+</table>
+
+</body>
+</html>
