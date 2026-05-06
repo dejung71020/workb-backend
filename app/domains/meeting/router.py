@@ -1,6 +1,16 @@
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, background, status, UploadFile, File
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Query,
+    background,
+    status,
+    UploadFile,
+    File,
+)
 from sqlalchemy.orm import Session
 
 from app.domains.workspace.deps import require_workspace_admin, require_workspace_member
@@ -31,7 +41,7 @@ from app.domains.meeting.service import (
     MinutePhotoService,
     SpeakerProfileService,
 )
-from backend.app.domains.knowledge.service import process_meeting_end
+from app.domains.knowledge.service import process_meeting_end
 
 router = APIRouter()
 
@@ -119,7 +129,9 @@ def register_workspace_speaker_profile(
     화자 프로필을 등록합니다.
     관리자는 모든 멤버, 멤버는 본인만 등록할 수 있습니다.
     """
-    return SpeakerProfileService.register_profile(db, workspace_id, current_user_id, payload)
+    return SpeakerProfileService.register_profile(
+        db, workspace_id, current_user_id, payload
+    )
 
 
 @router.get(
@@ -237,14 +249,24 @@ async def simulate_wav_upload(
     처리 완료 후 meeting.status = done, MongoDB utterances 저장.
     """
     if not settings.WAV_SIM_ENABLED:
-        raise HTTPException(status_code=403, detail="WAV_SIM_ENABLED가 비활성화 상태입니다. (.env에서 WAV_SIM_ENABLED=true 로 설정)")
+        raise HTTPException(
+            status_code=403,
+            detail="WAV_SIM_ENABLED가 비활성화 상태입니다. (.env에서 WAV_SIM_ENABLED=true 로 설정)",
+        )
 
     if not settings.OPENAI_API_KEY:
-        raise HTTPException(status_code=503, detail="OPENAI_API_KEY가 설정되지 않아 Whisper를 사용할 수 없습니다.")
+        raise HTTPException(
+            status_code=503,
+            detail="OPENAI_API_KEY가 설정되지 않아 Whisper를 사용할 수 없습니다.",
+        )
 
     filename = file.filename or ""
-    if file.content_type not in _WAV_CONTENT_TYPES and not filename.lower().endswith(".wav"):
-        raise HTTPException(status_code=400, detail="WAV(.wav) 파일만 업로드 가능합니다.")
+    if file.content_type not in _WAV_CONTENT_TYPES and not filename.lower().endswith(
+        ".wav"
+    ):
+        raise HTTPException(
+            status_code=400, detail="WAV(.wav) 파일만 업로드 가능합니다."
+        )
 
     wav_bytes = await file.read()
     if len(wav_bytes) > _WAV_MAX_BYTES:
@@ -253,7 +275,10 @@ async def simulate_wav_upload(
         raise HTTPException(status_code=400, detail="빈 파일입니다.")
 
     from app.domains.meeting.wav_simulation import run_wav_simulation
-    count = await run_wav_simulation(db, workspace_id, meeting_id, wav_bytes, settings.OPENAI_API_KEY)
+
+    count = await run_wav_simulation(
+        db, workspace_id, meeting_id, wav_bytes, settings.OPENAI_API_KEY
+    )
 
     return {"status": "ok", "meeting_id": meeting_id, "utterance_count": count}
 
@@ -289,7 +314,9 @@ async def upload_minute_photo(
 
     image_bytes = await file.read()
     if not image_bytes:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="빈 파일입니다.")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="빈 파일입니다."
+        )
 
     try:
         photo = MinutePhotoService.save_captured_photo(

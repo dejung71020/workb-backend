@@ -20,7 +20,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from app.core.config import settings
 from app.domains.knowledge.agent_utils import chroma_client, get_collection
 from app.utils.time_utils import now_kst
-from backend.app.domains.action.models import Priority
+from app.domains.action.models import Priority
 
 _async_openai = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
@@ -536,7 +536,8 @@ async def analyze_document_for_display(
 async def process_meeting_end(meeting_id: int, workspace_id: int) -> None:
     """
     회의 종료 후리 (BackgroundTask):
-    utterances(MongoDB) -> LLM -> decisions + wbs_tasks(MySQL)
+    utterances(MongoDB) → LLM → decisions + wbs_tasks + summary → MySQL 저장.
+    회의 종료 버튼 한 번으로 모든 데이터가 DB에 적재된다.
     """
     from motor.motor_asyncio import AsyncIOMotorClient
     from langchain_openai import ChatOpenAI
@@ -592,7 +593,8 @@ async def process_meeting_end(meeting_id: int, workspace_id: int) -> None:
             "wbs_tasks": [
                 {{
                     "order": 0,
-                    "content": "할 일 내용",
+                    "title": "할 일 제목 (한 줄, 30자 이내)",
+                    "content": "할 일 상세 내용 (담당자·기한·배경 포함, 없으면 null)",
                     "assignee_name": "담당자 이름 or null",
                     "due_date": "YYYY-MM-DD or null",
                     "priority": "low|medium|high|critical",
@@ -627,10 +629,13 @@ async def process_meeting_end(meeting_id: int, workspace_id: int) -> None:
         wbs_tasks = extracted.get("wbs_tasks", [])
         if wbs_tasks:
             epic = WbsEpic(
-                meeting_id=meeting_id, title="회의 액션 아이템", order_index=0
+                meeting_id=meeting_id,
+                title="회의 액션 아이템",
+                order_index=0,
             )
             db.add(epic)
             db.flush()
+
             for item in wbs_tasks:
                 due = None
                 if item.get("due_date"):
@@ -638,12 +643,20 @@ async def process_meeting_end(meeting_id: int, workspace_id: int) -> None:
                         due = date.fromisoformat(item["due_date"])
                     except Exception:
                         pass
+
+                # priority는 Priority enum으로 변환, 범위 밖 값이면 medium 기본값
+                try:
+                    priority = Priority(item.get("priority", "medium"))
+                except ValueError:
+                    priority = Priority.medium
+
                 db.add(
                     WbsTask(
                         epic_id=epic.id,
-                        title=item["title"],
+                        title=item.get("title") or item.get("content", "")[:200],
+                        content=item.get("content"),
                         assignee_name=item.get("assignee_name"),
-                        priority=item.get("priority", "medium"),
+                        priority=priority,
                         urgency=item.get("urgency", "normal"),
                         due_date=due,
                         order_index=item.get("order", 0),
