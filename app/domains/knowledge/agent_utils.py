@@ -53,10 +53,31 @@ async def search_past_meetings(
         if meeting_ids:
             match_filter["meeting_id"] = {"$in": [int(m) for m in meeting_ids]}
 
+        words = query.split()[:5]
+        regex_pattern = "|".join(re.escape(w) for w in words)
+        text_match = {
+            "$or": [
+                {"utterances.text": {"$regex": regex_pattern, "$options": "i"}},
+                {"utterances.content": {"$regex": regex_pattern, "$options": "i"}},
+            ]
+        }
+
         pipeline = [
             {"$match": match_filter},
             {"$unwind": "$utterances"},
-            {"$sort": {"utterances.seq": 1}},
+            {
+                "$match": {
+                    "$or": [
+                        {"utterances.text": {"$regex": regex_pattern, "$options": "i"}},
+                        {
+                            "utterances.content": {
+                                "$regex": regex_pattern,
+                                "$options": "i",
+                            }
+                        },
+                    ]
+                }
+            },
             {"$limit": 8},
         ]
         cursor = mongo_db["utterances"].aggregate(pipeline)
