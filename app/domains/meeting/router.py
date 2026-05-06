@@ -225,6 +225,7 @@ def end_workspace_meeting(
 ) -> dict:
     """회의를 완료로 전환하고 후처리 LangGraph 파이프라인을 백그라운드로 실행합니다."""
     MeetingLifecycleService.end_meeting(db, workspace_id, meeting_id)
+    background_tasks.add_task(process_meeting_end, meeting_id, workspace_id)
     return {"status": "ok"}
 
 

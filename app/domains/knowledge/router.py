@@ -182,6 +182,22 @@ async def list_chatbot_sessions(
     sessions = await repository.get_chat_sessions(workspace_id)
     return {"sessions": sessions}
 
+@router.patch("/workspace/{workspace_id}/chatbot/sessions/{session_id}")
+async def rename_chatbot_session(
+    workspace_id: int,
+    session_id: str,
+    body: dict,
+    _member: int = Depends(require_workspace_member),
+):
+    title = (body.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="title은 비워둘 수 없습니다.")
+    updated = await repository.rename_chat_session(workspace_id, session_id, title)
+    if not updated:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
+    return {"status": "updated"}
+
+
 @router.delete("/workspace/{workspace_id}/chatbot/sessions/{session_id}")
 async def delete_chatbot_session(
     workspace_id: int,

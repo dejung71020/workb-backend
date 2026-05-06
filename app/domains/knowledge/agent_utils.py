@@ -576,11 +576,18 @@ async def past_summary_node(state: SharedState) -> dict:
     filter_user_id = None if is_admin else user_id
 
     if not past_meeting_ids:
-        meetings, _ = await _get_meetings_by_question(
+        meetings, has_date = await _get_meetings_by_question(
             state.get("user_question", ""), workspace_id
         )
         if not meetings:
             meetings = await get_past_meetings(workspace_id, user_id=filter_user_id)
+
+        # 회의가 2개 이상이고 날짜/키워드로 범위가 특정되지 않은 경우 → 선택 요청
+        if len(meetings) >= 2 and not has_date:
+            return {
+                "chat_response": "어떤 회의를 요약할까요? 아래에서 선택해주세요.",
+                "function_type": "past_summary",
+            }
     else:
         # UI에서 선택된 회의만
         meetings = await get_past_meetings_by_ids(past_meeting_ids)
@@ -916,19 +923,19 @@ def _format_quick_report_markdown(s: dict) -> str:
 async def classify_intent(state: SharedState) -> dict:
     """summary 여부만 판단 - 나머지는 전부 knowledge_node로"""
     prompt = f"""
-    사용자 입력이 "현재 진행 중인 회의 전체 내용을 요약해달라"는 요청인지 판단하세요. 단어 하나만 출력하세요.
-                                                                                                                
-    - past_summary: 회의를 요약해달라는 요청(현재 or 이전 회의 모두 포함). 날짜 범위 지정 포함.
-        예) "요약해줘", "이전 회의 요약해줘", "지난 회의 정리해줘", "전 회의 내용 요약", "4월 1일부터 현재까지 회의 요약해줘", "지난달 회의 정리해줘", "N월 회의 요약"
-    - quick_report: 간이보고서/보고서 생성 요청 (형식 미지정 또는 간단 정리). 
+    사용자 입력을 아래 4가지 중 하나로 분류하세요. 단어 하나만 출력하세요.
+
+    - past_summary: **회의** 내용을 요약해달라는 요청. 반드시 "회의"가 주어여야 함.
+        예) "이전 회의 요약해줘", "지난 회의 정리해줘", "전 회의 내용 요약", "N월 회의 요약", "4월 1일부터 현재까지 회의 요약"
+        비고: 문서·파일·보고서 이름이 주어인 요약 요청은 past_summary가 아님.
+    - quick_report: 간이보고서/보고서 생성 요청 (형식 미지정 또는 간단 정리).
         예) "간이보고서 만들어줘", "보고서 만들어줘", "회의 보고서 생성해줘"
     - report_guide: 특정 파일 포맷 보고서 요청 (Excel·PDF·HTML·다운로드 등).
         예) "Excel로 저장", "HTML 보고서", "보고서 다운로드", "PDF로 내보내기", "회의록 파일로 저장"
-    - agent: 특정 문서/자료 검색, 외부 정보 조회, 일정 관련, 특정 주제에 대한 질문 등 그 외 모든 입력.
-        예) "AI 브리프 내용 요약해줘", "지난 회의에서 결정된 거 알려줘", "~~문서 찾아줘"
-     
+    - agent: 문서·파일 내용 조회, 외부 정보 검색, 일정 관련, DB 조회, 그 외 모든 입력.
+        예) "AI 브리프 내용 요약해줘", "AI브리프 3월 전체 내용 요약해줘", "~~문서 요약해줘", "지난 회의에서 결정된 거 알려줘", "오늘 일정 알려줘"
 
-    입력: {state['user_question']} 
+    입력: {state['user_question']}
     """
     result = await llm.ainvoke(prompt)
     function_type = result.content.strip().lower()

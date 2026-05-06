@@ -47,7 +47,7 @@ async def save_chat_log(
 async def get_chat_sessions(workspace_id: int) -> list[dict]:
     cursor = mongo_db["chatbot_logs"].find(
         {"workspace_id": workspace_id},
-        {"_id": 0, "session_id": 1, "created_at": 1}
+        {"_id": 0, "session_id": 1, "created_at": 1, "title": 1, "messages": {"$slice": 1}}
     ).sort("created_at", -1)
     docs = await cursor.to_list(length=None)
 
@@ -55,6 +55,7 @@ async def get_chat_sessions(workspace_id: int) -> list[dict]:
         {
             "session_id": doc["session_id"],
             "created_at": doc.get("created_at"),
+            "title": doc.get("title") or None,
             "preview": (
                 doc["messages"][0]["content"][:50]
                 if doc.get("messages") else ""
@@ -62,6 +63,13 @@ async def get_chat_sessions(workspace_id: int) -> list[dict]:
         }
         for doc in docs
     ]
+
+async def rename_chat_session(workspace_id: int, session_id: str, title: str) -> bool:
+    result = await mongo_db["chatbot_logs"].update_one(
+        {"workspace_id": workspace_id, "session_id": session_id},
+        {"$set": {"title": title}},
+    )
+    return result.matched_count > 0
 
 async def delete_chat_session(workspace_id: int, session_id: str) -> bool:
     result = await mongo_db["chatbot_logs"].delete_one(
