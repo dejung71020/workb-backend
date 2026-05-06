@@ -301,6 +301,61 @@ def seed_mysql(meeting_id: int, workspace_id: int, flush: bool):
                 m
             )
 
+        # wbs_epics + wbs_tasks — query_wbs_tasks 도구 테스트용
+        WBS = [
+            {
+                "meeting_id": 34,
+                "epic_title": "스프린트 계획 액션 아이템",
+                "tasks": [
+                    {"title": "컴포넌트 설계 문서 작성", "content": "프론트엔드 컴포넌트 설계 문서 초안 작성", "assignee_name": "이민준", "due_date": "2026-04-17", "priority": "high", "urgency": "normal", "status": "todo"},
+                    {"title": "API 명세서 업데이트", "content": "REST API 명세서 최신화", "assignee_name": "박지수", "due_date": None, "priority": "medium", "urgency": "normal", "status": "done"},
+                ],
+            },
+            {
+                "meeting_id": 35,
+                "epic_title": "백엔드 아키텍처 액션 아이템",
+                "tasks": [
+                    {"title": "도메인 분리 초안 작성", "content": "FastAPI 도메인별 구조 분리 설계 초안 작성 후 팀 공유", "assignee_name": "김철수", "due_date": "2026-04-21", "priority": "high", "urgency": "normal", "status": "todo"},
+                    {"title": "JWT 만료 처리 수정", "content": "인증 모듈 JWT 토큰 만료 처리 로직 추가 — 보안 이슈", "assignee_name": "이민준", "due_date": "2026-04-24", "priority": "critical", "urgency": "urgent", "status": "in_progress"},
+                    {"title": "Redis TTL 정책 검토", "content": "Redis TTL 정책 조사 및 권고안 작성 후 다음 회의 보고", "assignee_name": "이민준", "due_date": "2026-04-24", "priority": "medium", "urgency": "normal", "status": "todo"},
+                ],
+            },
+        ]
+        for wbs in WBS:
+            result = conn.execute(
+                text("""
+                    INSERT IGNORE INTO wbs_epics (meeting_id, title, order_index)
+                    VALUES (:meeting_id, :title, 0)
+                """),
+                {"meeting_id": wbs["meeting_id"], "title": wbs["epic_title"]}
+            )
+            epic_id = result.lastrowid
+            if not epic_id:
+                row = conn.execute(
+                    text("SELECT id FROM wbs_epics WHERE meeting_id=:mid AND title=:title"),
+                    {"mid": wbs["meeting_id"], "title": wbs["epic_title"]}
+                ).fetchone()
+                epic_id = row.id if row else None
+            if epic_id:
+                for i, t in enumerate(wbs["tasks"]):
+                    conn.execute(
+                        text("""
+                            INSERT IGNORE INTO wbs_tasks
+                                (epic_id, title, content, assignee_name, due_date,
+                                 priority, urgency, status, order_index)
+                            VALUES
+                                (:epic_id, :title, :content, :assignee_name, :due_date,
+                                 :priority, :urgency, :status, :order_index)
+                        """),
+                        {
+                            "epic_id": epic_id, "title": t["title"], "content": t["content"],
+                            "assignee_name": t["assignee_name"], "due_date": t["due_date"],
+                            "priority": t["priority"], "urgency": t["urgency"],
+                            "status": t["status"], "order_index": i,
+                        }
+                    )
+            print(f"  [MySQL] WBS 삽입: meeting_id={wbs['meeting_id']} ({len(wbs['tasks'])}개 태스크)")
+
         conn.commit()
     print(f"  [MySQL] 이전 회의 {[m['meeting_id'] for m in PAST_MEETINGS]} (참여자 {user_ids}) + 현재 회의 {meeting_id} + 예정 회의 37 삽입")
 
