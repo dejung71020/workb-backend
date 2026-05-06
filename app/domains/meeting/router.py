@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status, UploadFile, File
@@ -79,6 +80,16 @@ def get_workspace_meetings_history(
     db: Session = Depends(get_db),
     _member: int = Depends(require_workspace_member),
     keyword: Optional[str] = Query(None, description="검색어(제목/회의록 포함)"),
+    participant_user_id: Optional[int] = Query(
+        None,
+        ge=1,
+        description="해당 사용자가 참석자로 등록된 회의만 조회",
+    ),
+    history_date: Optional[date] = Query(
+        None,
+        alias="date",
+        description="해당 일자(예정/시작/종료 시각 중 하나가 그 날짜에 속하는 회의만)",
+    ),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ):
@@ -88,8 +99,12 @@ def get_workspace_meetings_history(
     - meetings.title OR meeting_minutes.content/summary (outer join)
     - scheduled_at 최신순
     - page/size 페이징
+    - participant_user_id: 선택 시 해당 참석자가 포함된 회의만
+    - date: YYYY-MM-DD, 해당 일자에 일정이 걸린 회의만
     """
-    return MeetingHistoryService.get_history(db, workspace_id, keyword, page, size)
+    return MeetingHistoryService.get_history(
+        db, workspace_id, keyword, page, size, participant_user_id, history_date
+    )
 
 
 @router.get(

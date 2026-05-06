@@ -1,6 +1,6 @@
 # app\domains\meeting\service.py
 from collections import defaultdict
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 from fastapi import HTTPException, status
 from sqlalchemy import desc
@@ -582,7 +582,9 @@ class MeetingSearchService:
                 ).filter(MeetingParticipant.user_id == params.participant_id)
             ).distinct()
 
-        meetings = q.order_by(desc(Meeting.scheduled_at).nulls_last()).all()
+        meetings = q.order_by(
+            Meeting.scheduled_at.is_(None), desc(Meeting.scheduled_at)
+        ).all()
 
         if not meetings:
             return MeetingSearchResponse(
@@ -628,7 +630,10 @@ class MeetingSearchService:
                     meeting_id=mid,
                     title=m.title,
                     room_name=getattr(m, "room_name", None),
+                    status=getattr(getattr(m, "status", None), "value", str(getattr(m, "status", ""))),
                     scheduled_at=_to_kst_aware(m.scheduled_at),  # type: ignore[arg-type]
+                    started_at=_to_kst_aware(m.started_at),  # type: ignore[arg-type]
+                    ended_at=_to_kst_aware(m.ended_at),  # type: ignore[arg-type]
                     participants=participants_by_meeting.get(mid, []),
                     summary=summary_by_meeting.get(mid),
                 )
@@ -651,6 +656,8 @@ class MeetingHistoryService:
         keyword: str | None,
         page: int,
         size: int,
+        participant_user_id: int | None = None,
+        on_date: date | None = None,
     ) -> MeetingHistoryResponse:
         page = max(int(page), 1)
         size = max(min(int(size), 100), 1)
@@ -661,13 +668,34 @@ class MeetingHistoryService:
             keyword=keyword,
             page=page,
             size=size,
+            participant_user_id=participant_user_id,
+            on_date=on_date,
         )
+
+        m_ids = [int(m.id) for m, _ in rows]
+        participants_by_meeting: dict[int, list[MeetingDetailParticipantOut]] = defaultdict(list)
+        if m_ids:
+            participant_rows = (
+                db.query(MeetingParticipant, User.name)
+                .join(User, User.id == MeetingParticipant.user_id)
+                .filter(MeetingParticipant.meeting_id.in_(m_ids))
+                .order_by(MeetingParticipant.meeting_id, MeetingParticipant.id)
+                .all()
+            )
+            for mp, user_name in participant_rows:
+                participants_by_meeting[int(mp.meeting_id)].append(
+                    MeetingDetailParticipantOut(
+                        user_id=int(mp.user_id),
+                        name=str(user_name),
+                    )
+                )
 
         items: list[MeetingHistoryItemOut] = []
         for meeting, minute in rows:
+            mid = int(meeting.id)
             items.append(
                 MeetingHistoryItemOut(
-                    id=int(meeting.id),
+                    id=mid,
                     title=meeting.title,
                     status=(
                         meeting.status.value
@@ -678,6 +706,7 @@ class MeetingHistoryService:
                     started_at=_to_kst_aware(meeting.started_at),  # type: ignore[arg-type]
                     ended_at=_to_kst_aware(meeting.ended_at),  # type: ignore[arg-type]
                     summary=(minute.summary if minute else None),
+                    participants=participants_by_meeting.get(mid, []),
                 )
             )
 
