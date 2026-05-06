@@ -315,10 +315,12 @@ async def knowledge_node(state: SharedState) -> dict:
     ontology_ctx = await build_ontology_context(resolved_question, workspace_id, llm)
 
     # 권한 힌트
-    if not is_admin and user_id:
-        permission_hint = f"이 사용자(user_id={user_id})는 일반 멤버입니다. "
-    elif is_admin:
-        permission_hint = "이 사용자는 관리자입니다. 모든 데이터 접근 가능. user_id는 전달하지 마세요."
+    if is_admin:
+        permission_hint = "이 사용자는 관리자입니다. 모든 데이터 접근 가능."
+    elif user_id:
+        permission_hint = f"이 사용자(user_id={user_id})는 일반 멤버입니다."
+    else:
+        permission_hint = "권한 정보 없음."
 
     # 이전 회의 필터 힌트
     if past_meeting_ids:
@@ -351,7 +353,6 @@ async def knowledge_node(state: SharedState) -> dict:
     - 회의 내용만으로 답할 수 있으면 도구 없이 답변하세요.
     - 정보가 불완전하더라도 회의에서 언급된 내용을 바탕으로 최대한 답변하세요.
     - 확실하지 않은 정보는 "~라고 언급됐습니다" 형식으로 답변하세요.
-    - 회의 일정·스케줄 관련 질문("오늘 회의 몇 개야", "다음 회의 언제야" 등)은 query_meetings_schedule을 사용하세요. workspace_id는 반드시 "{workspace_id}"로 전달하세요.
     - 외부 자료가 필요하면 web_search를 사용하세요.
     - 이전 회의 내용이 필요하면 search_past_meetings를 사용하세요.
     

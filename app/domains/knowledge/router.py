@@ -154,7 +154,7 @@ async def get_past_meetings_endpont(
     from app.domains.workspace.repository import get_workspace_membership
     from app.domains.workspace.models import MemberRole
 
-    membership = get_workspace_membership(db, workspace_id. current_user_id)
+    membership = get_workspace_membership(db, workspace_id, current_user_id)
     is_admin = membership is not None and membership.role == MemberRole.admin
     filter_user_id = None if is_admin else current_user_id
 

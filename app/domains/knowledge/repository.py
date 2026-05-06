@@ -196,13 +196,6 @@ async def get_all_past_meetings_by_workspace(workspace_id: int, user_id: Optiona
     finally:
         db.close()
 
-async def get_chat_history(workspace_id: int, session_id: str) -> list[dict]:
-    cursor = mongo_db["chatbot_logs"].find(
-        {"workspace_id": workspace_id, "session_id": session_id},
-        {"_id": 0}
-    ).sort("timestamp", 1)
-    return await cursor.to_list(length=None)
-
 # -------------------------------------------------------------
 # MySQL
 # -------------------------------------------------------------

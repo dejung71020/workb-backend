@@ -180,7 +180,7 @@ class OntologyTraverser:
                 # depth=2 이상: 추론 결과 -> root._inferred
                 # "사용자가 참여한 회의의 결정 사항" 형태의 복합 설명 생성
                 inferred_key = (
-                    f"{relation.description} (via [via_description])"
+                    f"{relation.description} (via {via_description})"
                     if via_description
                     else relation.description
                 )

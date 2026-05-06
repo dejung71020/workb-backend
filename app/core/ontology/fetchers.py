@@ -1,6 +1,7 @@
 from app.infra.database.session import SessionLocal
 from app.core.ontology.schema import EntityType, RelationType, Relation
 from datetime import date
+from app.utils.time_utils import now_kst
 
 # ──────────────────────────────────────────────────────────────────
 # 공통 헬퍼
@@ -364,7 +365,7 @@ def fetch_ws_schedule(
     from app.domains.meeting.models import Meeting, MeetingStatus
     from datetime import datetime
 
-    date_from = _parse_date((ctx or {}).get("date_from")) or datetime.date()
+    date_from = _parse_date((ctx or {}).get("date_from")) or now_kst().date()
     date_to = _parse_date((ctx or {}).get("date_to"))
 
     db = SessionLocal()
