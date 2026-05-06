@@ -2,6 +2,8 @@
 from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime
 from sqlalchemy import text
+from typing import Optional
+import json
 
 from app.core.config import settings
 from app.infra.database.session import SessionLocal
@@ -12,98 +14,187 @@ mongo_db = AsyncIOMotorClient(settings.MONGODB_URL)["meeting_assistant"]
 # -------------------------------------------------------------
 # MongoDB
 # -------------------------------------------------------------
-async def save_chat_log(workspace_id: int, session_id: str, role: str, content: str, function_type: str) -> None:
-    await mongo_db["chatbot_logs"].insert_one({
-        "workspace_id": workspace_id,
-        "session_id": session_id,
-        "role": role,
-        "content": content,
-        "function_type": function_type,
-        "timestamp": now_kst()
-    })
+async def save_chat_log(
+    workspace_id: int,
+    user_id: int,
+    session_id: str, 
+    role: str, 
+    content: str, 
+    function_type: str
+) -> None:
+    await mongo_db["chatbot_logs"].update_one(
+        {"session_id": session_id},
+        {
+            "$setOnInsert": {
+                "workspace_id": workspace_id,
+                "user_id": user_id,
+                "session_id": session_id,
+                "created_at": now_kst(),
+            },
+            "$push": {
+                "messages": {
+                    "role": role,
+                    "content": content,
+                    "function_type": function_type,
+                    "timestamp": now_kst(),
+                }
+            },
+        },
+        upsert=True,
+    )
 
-async def get_past_meetings_by_ids(meeting_ids: list[int]) -> list[dict]:
-    """선택된 meeting_id 목록으로 이전 회의 요약 조회."""
-    cursor = mongo_db["meeting_contexts"].find(
-        {"meeting_id": {"$in": meeting_ids}},
-        {"_id": 0}
-    ).sort("created_at", 1) # 날짜 오름차순 (오래된 것 먼저)
-    return await cursor.to_list(length=None)
-
-async def get_all_past_meetings_by_workspace(workspace_id: int) -> list[dict]:
-    """workspace_id 기준 전체 이전 회의 조회 (선택 안 했을 때 fallback)."""
-    cursor = mongo_db["meeting_contexts"].find(
-        {"$or": [
-            {"workspace_id": workspace_id},
-            {"workspace_id": {"$exists": False}},
-        ]},
-        {"_id": 0}
-    ).sort("created_at", 1)
-    return await cursor.to_list(length=None)
-
-async def get_past_meetings(workspace_id: int) -> list[dict]:
-    """
-    워크스페이스 이전 회의 목록 반환.
-    workspace_id 없는 문서도 포함 - 기존 seed 데이터 하위 호환용.
-    """
-    cursor = mongo_db["meeting_contexts"].find(
-        {"$or": [
-            {"workspace_id": workspace_id},
-            {"workspace_id": {"$exists": False}}, # 구버전 데이터 호환
-        ]},
-        {"_id": 0, "meeting_id": 1, "title": 1, "created_at": 1}
+# get_chat_sessions 신설
+async def get_chat_sessions(workspace_id: int) -> list[dict]:
+    cursor = mongo_db["chatbot_logs"].find(
+        {"workspace_id": workspace_id},
+        {"_id": 0, "session_id": 1, "created_at": 1}
     ).sort("created_at", -1)
-    return await cursor.to_list(length=None)
-
-async def get_past_meeting_ids(workspace_id: int) -> list[dict]:
-    cursor = mongo_db["meeting_contexts"].find(
-        {"$or": [
-            {"workspace_id": workspace_id},
-            {"workspace_id": {"$exists": False}}, # 구버전 데이터 호환
-        ]},
-        {"_id": 0, "meeting_id": 1}
-    ).sort("created_at", -1)
-
     docs = await cursor.to_list(length=None)
 
-    return [doc["meeting_id"] for doc in docs]
+    return [
+        {
+            "session_id": doc["session_id"],
+            "created_at": doc.get("created_at"),
+            "preview": (
+                doc["messages"][0]["content"][:50]
+                if doc.get("messages") else ""
+            ),
+        }
+        for doc in docs
+    ]
+
+async def delete_chat_session(workspace_id: int, session_id: str) -> bool:
+    result = await mongo_db["chatbot_logs"].delete_one(
+        {"workspace_id": workspace_id, "session_id": session_id}
+    )
+    return result.deleted_count > 0
 
 async def get_chat_history(workspace_id: int, session_id: str) -> list[dict]:
-    cursor = mongo_db["chatbot_logs"].find(
+    doc = await mongo_db["chatbot_logs"].find_one(
         {"workspace_id": workspace_id, "session_id": session_id},
-        {"_id": 0}
-    ).sort("timestamp", 1)
-    return await cursor.to_list(length=None)
-
-
-async def save_meeting_summary(workspace_id: int, meeting_id: int, summary: dict) -> None:
-    """
-    회의 요약을 meeting_summaries 컬렉션에 저장.
-
-    upsert 사용 이유:
-        회의 중간에 요약을 여러 번 호출할 수 있음.
-        같은 meeting_id로 insert하면 중복 문서 생성 -> 최신 요약으로 덮어씀.
-
-    updated_at을 을 별도로 두는 이유:
-        최초 생성 시각(created_at)과 마지막 갱신 시각(updated_at)을 구분해
-        "이 요약이 언제 처음 만들어졌고 마지막으로 언제 업데이트됐는지" 추적 가능.
-    """
-    now = now_kst()
-    await mongo_db["meeting_summaries"].update_one(
-        {"meeting_id": meeting_id},
-        {
-            "$set": {
-                "workspace_id": workspace_id,
-                "summary": summary,
-                "attendees": summary.get("attendees", []),
-                "updated_at": now,
-            },
-            "$setOnInsert": {
-                "created_at": now,
-            }
-        },
-        upsert=True
+        {"_id": 0, "messages": 1}
     )
+    return doc.get("messages", []) if doc else []
+
+
+# -------------------------------------------------------------
+# MySQL 
+# ------------------------------------------------------------- 
+async def get_past_meetings_by_ids(meeting_ids: list[int]) -> list[dict]:
+    """선택된 meeting_id 목록으로 회의 요약 조회."""  
+    if not meeting_ids:
+        return []
+    from app.domains.intelligence.models import MeetingMinute
+    from app.domains.meeting.models import Meeting
+    
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(MeetingMinute, Meeting.title, Meeting.scheduled_at)
+            .join(Meeting, MeetingMinute.meeting_id == Meeting.id)
+            .filter(MeetingMinute.meeting_id.in_(meeting_ids))
+            .order_by(Meeting.scheduled_at.asc())
+            .all()
+        )
+        result = []
+        for minute, title, scheduled_at in rows:
+            try:
+                summary_dict = json.loads(minute.summary) if minute.summary else {}
+            except Exception:
+                summary_dict = {}
+            key_points_text = "\n".join(
+                f"- {p}" for p in summary_dict.get("key_points", [])
+            )
+            result.append({
+                "meeting_id": minute.meeting_id,
+                "title": title,
+                "summary": key_points_text,
+                "created_at": scheduled_at,
+            })
+        return result
+    finally:
+        db.close()
+
+async def get_past_meeting_ids(workspace_id: int, user_id: Optional[int] = None) -> list[dict]:
+    """전체 완료 회의 ID. workspace_id 기준 완료된 회의 ID 목록 반환. user_id 있으면 참여 회의만."""
+    from app.domains.meeting.models import Meeting, MeetingStatus, MeetingParticipant
+
+    db = SessionLocal()                                               
+    try:
+        q = (
+            db.query(Meeting.id)
+            .filter(
+                Meeting.workspace_id == workspace_id,
+                Meeting.status == MeetingStatus.done,
+            )
+        )
+        if user_id is not None:
+            q = q.join(MeetingParticipant, Meeting.id == MeetingParticipant.meeting_id)\
+                .filter(MeetingParticipant.user_id == user_id)
+        return [r.id for r in q.order_by(Meeting.scheduled_at.desc()).all()]
+        
+    finally:
+        db.close()
+
+
+async def get_past_meetings(workspace_id: int, user_id: Optional[int] = None) -> list[dict]:
+    """ChatFAB 선택기용. user_id 있으면 참여 회의만."""
+    from app.domains.meeting.models import Meeting, MeetingParticipant, MeetingStatus
+
+    db = SessionLocal()
+    try: 
+        q = (
+            db.query(Meeting.id, Meeting.title, Meeting.scheduled_at)
+            .filter(
+                Meeting.workspace_id == workspace_id,
+                Meeting.status == MeetingStatus.done,
+            )
+        )
+        if user_id is not None:
+            q = q.join(MeetingParticipant, Meeting.id == MeetingParticipant.meeting_id)\
+                .filter(MeetingParticipant.user_id == user_id)
+        rows = q.order_by(Meeting.scheduled_at.desc()).all()
+        return [{"meeting_id": r.id, "title": r.title, "created_at": r.scheduled_at} for r in rows]
+    
+    finally:
+        db.close()
+
+
+async def get_all_past_meetings_by_workspace(workspace_id: int, user_id: Optional[int] = None) -> list[dict]:
+    """_get_meetings_by_question 날짜 필터 fallback용. user_id 있으면 참여 회의만."""
+    from app.domains.meeting.models import Meeting, MeetingStatus, MeetingParticipant
+    from app.domains.intelligence.models import MeetingMinute
+
+    db = SessionLocal()
+
+    try:
+        q = (
+            db.query(MeetingMinute, Meeting.title, Meeting.scheduled_at)
+            .join(Meeting, MeetingMinute.meeting_id == Meeting.id)
+            .filter(
+                Meeting.workspace_id == workspace_id,
+                Meeting.status == MeetingStatus.done,
+            )
+        )
+        if user_id is not None:
+            q = q.join(MeetingParticipant, Meeting.id == MeetingParticipant.meeting_id)\
+                .filter(MeetingParticipant.user_id == user_id)
+        rows = q.order_by(Meeting.scheduled_at.asc()).all()
+        result = []
+        for minute, title, scheduled_at in rows:
+            try:
+                summary_dict = json.loads(minute.summary) if minute.summary else {}
+            except Exception:
+                summary_dict = {}
+            result.append({
+                "meeting_id": minute.meeting_id,
+                "title": title,
+                "summary": "\n".join(f"- {p}" for p in summary_dict.get("key_points", [])),
+                "created_at": scheduled_at,
+            })
+        return result
+    finally:
+        db.close()
 
 # -------------------------------------------------------------
 # MySQL

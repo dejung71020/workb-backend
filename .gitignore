@@ -121,6 +121,7 @@ dj/
 .vscode/settings.json
 a.txt
 scripts/slack_test.py
+.venv
 
 # ------- 저장소 ----------------
 # 업로드/생성 산출물은 저장소에 포함하지 않음

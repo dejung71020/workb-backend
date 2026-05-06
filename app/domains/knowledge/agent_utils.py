@@ -7,16 +7,13 @@ from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.graph import StateGraph, MessagesState, END
 from motor.motor_asyncio import AsyncIOMotorClient
-from urllib.parse import urlparse 
+from urllib.parse import urlparse
 import chromadb
-import redis
 
 from app.core.config import settings
 from app.core.graph.state import SharedState
-from app.utils.redis_utils import get_meeting_context, is_meeting_live
 from app.utils.time_utils import now_kst
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
-from app.domains.knowledge.repository import save_meeting_summary
 
 # --- 클라이언트 초기화 ---
 # 모듈 로드 시 한 번만 연결. 요청마다 새로 연결하지 않음.
@@ -25,7 +22,6 @@ chroma_client = chromadb.HttpClient(
     host=settings.CHROMA_HOST,
     port=settings.CHROMA_PORT,
 )
-r = redis.asyncio.from_url(settings.REDIS_URL)
 
 # ── OpenAI 임베딩 함수 ────────────────────────────────────────────────────────
 # 저장(service.py)과 검색(search_internal_db) 양쪽에서 동일한 EF를 써야
@@ -36,17 +32,17 @@ _openai_ef = OpenAIEmbeddingFunction(
     model_name="text-embedding-3-small",
 )
 
-llm = ChatOpenAI(
-    model="gpt-4o-mini",
-    api_key=settings.OPENAI_API_KEY
-)
+llm = ChatOpenAI(model="gpt-4o-mini", api_key=settings.OPENAI_API_KEY)
 
 # --- 도구 정의 ---
 # react_agent에 bind되어 LLM이 필요에 따라 호출함.
 # @tool 데코레이터가 함수 시그니처와 docstring을 LLM용 tool_schema로 변환함.
 
+
 @tool
-async def search_past_meetings(query: str, meeting_ids: Optional[list[str]] = None) -> list:
+async def search_past_meetings(
+    query: str, meeting_ids: Optional[list[int]] = None
+) -> list:
     """
     이전 회의 내용에서 관련 정보를 검색한다.
     meeting_ids: 검색 대상 회의 ID 목록. None 또는 빈 배열이면 전체 회의 검색.
@@ -57,14 +53,9 @@ async def search_past_meetings(query: str, meeting_ids: Optional[list[str]] = No
         if meeting_ids:
             match_filter["meeting_id"] = {"$in": [int(m) for m in meeting_ids]}
 
-        # uterances 컬렌션: 회의당 문서 1개 + nested 배열
-        # aggregate로 unwind 후 text 필드 regex 검색
-        words = [w for w in query.split() if w][:5]
-        regex_pattern = "|".join(re.escape(w) for w in words)
-
         pipeline = [
-            {"$match": match_filter},                                              
-            {"$unwind": "$utterances"},                                              
+            {"$match": match_filter},
+            {"$unwind": "$utterances"},
             {"$sort": {"utterances.seq": 1}},
             {"$limit": 8},
         ]
@@ -75,19 +66,22 @@ async def search_past_meetings(query: str, meeting_ids: Optional[list[str]] = No
         if not docs:
             words = query.split()[:3]
             regex_pattern = "|".join(re.escape(w) for w in words)
-            cursor = mongo_db["utterances"].find(
-                {**match_filter, "content": {"$regex": regex_pattern}},
-                {"_id": 0}
-            ).limit(8)
+            cursor = (
+                mongo_db["utterances"]
+                .find(
+                    {**match_filter, "content": {"$regex": regex_pattern}}, {"_id": 0}
+                )
+                .limit(8)
+            )
             docs = await cursor.to_list(length=8)
 
         return [
             {
                 "source": "past_meetings",
-                "title": f"[이전회의 meeting_id={doc.get('meeting_id')}] {doc['utterances'].get('speaker_label', '?')}",                                          
-                # snippet = 실제 발화 원문 → LLM이 이걸 citations으로 인용               
-                "snippet": doc["utterances"].get("text", ""),                            
-                "url": None,                                                             
+                "title": f"[이전회의 meeting_id={doc.get('meeting_id')}] {doc['utterances'].get('speaker_label', '?')}",
+                # snippet = 실제 발화 원문 → LLM이 이걸 citations으로 인용
+                "snippet": doc["utterances"].get("text", ""),
+                "url": None,
                 "relevance_score": 0.5,
             }
             for doc in docs
@@ -95,11 +89,15 @@ async def search_past_meetings(query: str, meeting_ids: Optional[list[str]] = No
     except Exception:
         return []
 
+
 @tool
-def search_internal_db(query: str, workspace_id: str) -> list:
+def search_internal_db(
+    query: str, workspace_id: int, document_name: Optional[str] = None
+) -> list:
     """
     회사 내부 문서(업로드 파일, 회의록, 보고서)에서 관련 정보를 시멘틱 검색한다.
     workspace_id: 현재 워크스페이스 ID
+    document_name: 특정 문서명 지정 시 해당 문서 내에서만 검색
     """
     try:
         # get_collection()이 저장 때와 동일한 EF를 사용 → 벡터 공간 일치
@@ -107,90 +105,43 @@ def search_internal_db(query: str, workspace_id: str) -> list:
         count = collection.count()
         if count == 0:
             return []
+
+        where = None
+        if document_name:
+            where = {"title": {"$contains": document_name}}
+
         results = collection.query(
             query_texts=[query],
-            n_results=min(5, count) # count < 5 이면 ChromaDB InvalidArgumentError 방지
+            n_results=min(
+                5, count
+            ),  # count < 5 이면 ChromaDB InvalidArgumentError 방지
+            where=where,
         )
+
         return [
             {
                 "source": "internal_db",
-                "source_type": meta.get("source_type", "uploaded"), # uploaded | meeting_minutes | report
+                "source_type": meta.get(
+                    "source_type", "uploaded"
+                ),  # uploaded | meeting_minutes | report
                 "title": meta.get("title") or "내부 문서",
                 "snippet": doc,
                 "url": meta.get("url", None),
                 # ChromaDB distance는 가까울수록 0에 가까움 -> 1에서 빼서 socre로 변환
-                "relevance_score": 1 - distance # ChromaDB distance -> score 변환
+                "relevance_score": 1 - distance,  # ChromaDB distance -> score 변환
             }
             for doc, meta, distance in zip(
                 results["documents"][0],
                 results["metadatas"][0],
-                results["distances"][0]
+                results["distances"][0],
             )
         ]
     except Exception:
         return []
 
-@tool
-def query_meetings_schedule(question: str, workspace_id: str) -> list:
-    """
-    워크스페이스의 회의 일정을 DB에서 조회한다.
-    "오늘 회의 몇 개야", "이번 주 회의 알려줘", "다음 회의 언제야" 같은 일정 질문에 사용.
-    workspace_id: 현재 워크스페이스 ID
-    """
-    from datetime import datetime, timedelta
-    from app.infra.database.session import SessionLocal
-    from app.domains.meeting.models import Meeting
-
-    today = now_kst().date()
-
-    # LLM 없이 키워드로 날짜 범위 결정 - 도구 내부에서 LLM 재호출 방지
-    if '오늘' in question:
-        start, end = today, today
-    elif '이번 주' in question or '금주' in question:
-        start = today - timedelta(days=today.weekday()) # 이번 주 월요일
-        end = start + timedelta(days=6)
-    elif '다음 주' in question:
-        start = today + timedelta(days=7 - today.weekday())
-        end = start + timedelta(days=6)
-    elif '이번 달' in question:
-        start = today.replace(day=1)
-        end = (start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
-    else:
-        # 기본: 오늘 이후 30일
-        start, end = today, today + timedelta(days=30)
-
-    start_dt = datetime.combine(start, datetime.min.time())
-    end_at = datetime.combine(end, datetime.max.time())
-
-    db = SessionLocal()
-    try:
-        meetings = (
-            db.query(Meeting)
-            .filter(
-                Meeting.workspace_id == int(workspace_id),
-                Meeting.scheduled_at >= start_dt,
-                Meeting.scheduled_at <= end_at,
-            )
-            .order_by(Meeting.scheduled_at)
-            .all()
-        )
-        return [
-            {
-                "meeting_id": m.id,
-                "title": m.title,
-                "scheduled_at": m.scheduled_at.strftime("%Y-%m-%d %H:%M") if m.scheduled_at else None,
-                "status": m.status.value if m.status else None,
-                "room_name": m.room_name,
-            }
-            for m in meetings
-        ]
-    except Exception:
-        return []
-    finally:
-        db.close()
 
 @tool
-def get_document_full_content(document_name: str, workspace_id: str) -> str:
+def get_document_full_content(document_name: str, workspace_id: int) -> str:
     """
     특정 문서의 전체 내용을 순서대로 반환한다.
     "X 요약해줘", "X 전체 내용 알려줘"처럼 특정 문서 전체가 필요할 때 사용
@@ -204,7 +155,8 @@ def get_document_full_content(document_name: str, workspace_id: str) -> str:
 
         # title 또는 filename에 document_name 포함되는 청크 필터링
         matching = [
-            (doc, meta) for doc, meta in zip(all_docs, all_metadatas)
+            (doc, meta)
+            for doc, meta in zip(all_docs, all_metadatas)
             if document_name.lower() in (meta.get("title") or "").lower()
             or document_name.lower() in (meta.get("filename") or "").lower()
         ]
@@ -218,60 +170,6 @@ def get_document_full_content(document_name: str, workspace_id: str) -> str:
     except Exception:
         return ""
 
-@tool
-def register_calendar(
-    title: str,
-    start: str,
-    end: str = "",
-    description: str = "",
-    location: str = ""
-) -> dict:
-    """
-    Google Calendar에 일정을 등록한다.
-    start/end 형식: 2026-04-15T14:00:00:+09:00
-    """    
-    # Todo: 추후 Google Calendar 모듈 연결
-    return {
-        "status": "registered",
-        "title": title,
-        "start": start,
-        "end": end,
-    }
-
-@tool
-def update_calendar_event(
-    event_id: str,
-    title: str = "",
-    start: str = "",
-    end: str = "",
-    description: str = "",
-    location: str = ""
-) -> dict:
-    """
-    Google Calendar 일정을 수정합니다.
-    event_id는 필수, 나머지는 변경할 항목만 입력
-    """
-    # Todo: 추후 Google Calendar 모듈 연결
-    return {"status": "updated", "event_id": event_id}
-
-@tool
-def delete_calendar_event(event_id: str) -> dict:
-    """Google Calendar 일정을 삭제합니다."""
-    # Todo: 추후 Google Calendar 모듈 연결
-    return {"status": "deleted", "event_id": event_id}
-
-@tool
-def get_calendar_events(
-    date: str = "",
-    event_id: str = ""
-) -> list:
-    """
-    Google Calendar 일정을 조회합니다.
-    date 형식: 2026-04-15, event_id는 필수
-    date만 입력하면 해당 날짜의 모든 일정을 반환한다.
-    """
-    # Todo: 추후 Google Calendar 모듈 연결
-    return []
 
 # Tavily 웹검색 도구
 web_search = TavilySearchResults(
@@ -280,28 +178,27 @@ web_search = TavilySearchResults(
 )
 
 tools = [
-    web_search, 
-    search_past_meetings, 
+    web_search,
+    search_past_meetings,
     search_internal_db,
     get_document_full_content,
-    query_meetings_schedule,
-    register_calendar,
-    update_calendar_event,
-    delete_calendar_event,
-    get_calendar_events
 ]
 
+
 def _fmt_citation(c: str) -> str:
-    lines = [l for l in c.split('\n') if l.strip()]
-    return '\n'.join(f'> {l}' for l in lines) if lines else f'> {c}'
+    lines = [l for l in c.split("\n") if l.strip()]
+    return "\n".join(f"> {l}" for l in lines) if lines else f"> {c}"
+
 
 # --- ReAct Agent 그래프 (ToolNode 방식) ---
 # llm_with_tools: LLM이 tool_schema 목록을 인식하고 필요 시 tool_call을 생성할 수 있게 바인딩.
 llm_with_tools = llm.bind_tools(tools)
 
+
 def agent_node(state: MessagesState):
     response = llm_with_tools.invoke(state["messages"])
     return {"messages": [response]}
+
 
 agent_graph = StateGraph(MessagesState)
 agent_graph.add_node("agent", agent_node)
@@ -312,69 +209,120 @@ agent_graph.add_edge("tools", "agent")
 
 react_agent = agent_graph.compile()
 
+
+def _select_history(history: list[dict], max_chars: int = 6000) -> list[dict]:
+    """최근 메시지부터 역순으로 토큰 예산 내에서 선택"""
+    selected = []
+    total = 0
+    for msg in reversed(history):
+        length = len(msg.get("content", ""))
+        if total + length > max_chars:
+            break
+        selected.insert(0, msg)
+        total += length
+    return selected
+
+
+async def _resolve_references(question: str, history: list[dict], llm) -> str:
+    """이전 대화를 참고해 지시어・대명사를 구체적 표현으로 치환."""
+    if not history:
+        return question
+    if not any(
+        w in question
+        for w in [
+            "그",
+            "거기",
+            "아까",
+            "이전",
+            "저번",
+            "해당",
+            "그것",
+            "그분",
+            "그 회의",
+            "그 업무",
+        ]
+    ):
+        return question
+
+    history_text = "\n".join(
+        f"[{m['role']}] {m['content'][:150]}" for m in history[-4:]
+    )
+    prompt = f"""
+    이전 대화를 참고해 현재 질문의 지시어・대명사를 구체적 표현으로 바꾸세요.
+    바꿀 필요 없으면 그대로 출력하세요. 질문만 출력하세요.
+
+    이전 대화:
+    {history_text}
+
+    현재 질문: {question}
+    """
+    try:
+        result = await llm.ainvoke(prompt)
+        resolved = result.content.strip()
+        return resolved if resolved else question
+    except Exception:
+        return question
+
+
 # --- LangGraph 노드 함수들 ---
 # SharedState를 받아 처리 후 업데이트할 필드만 dict로 반환.
 # LangGraph가 반환값을 state에 머지(merge)한다.
+
 
 async def knowledge_node(state: SharedState) -> dict:
     """
     사용자 질문을 react_agent로 처리하는 메인 Q&A 노드.
 
     흐름:
-        1. 회의 중 여부 확인 (is_live) - STT 딜레이 고지 여부 결정
-        2. 현재 회의 발화 로드 (meeting_id 있을 때만)
-        3. react_agent 호출
-        4. 도구 사용 여부에 따라 분기:
+        react_agent 호출
+        도구 사용 여부에 따라 분기:
             - 도구 사용 (웹검색/캘린더/내부문서) -> citation 검증 생략
             - 회의 내용 기반 -> citation이 원문에 실제 존재하는지 검증
-        5. STT 딜레이 고지 prepend (회의 중일 때만)
     """
-    meeting_id = state.get("meeting_id")
-    # Redis utterances 존재 여부로 회의 중/후 판단
-    is_live = await is_meeting_live(meeting_id) if meeting_id else False
-    meeting_context = await get_meeting_context(meeting_id) if meeting_id else ""
     workspace_id = state.get("workspace_id", "")
-    user_profile = state.get("user_profile", {})
-    user_question = state.get("user_question", "")
+    meeting_id = state.get("meeting_id")
     past_meeting_ids = state.get("past_meeting_ids")
-    no_meeting_context = not meeting_context.strip()
+    user_id = state.get("user_id")
+    is_admin = state.get("is_admin", False)
+    session_id = state.get("session_id")
+    original_question = state["user_question"]
 
-    profile_question_patterns = {
-        "age": r"나이|몇\s*살|연세",
-        "birth_date": r"생년월일|생일|출생",
-        "phone_number": r"전화번호|휴대폰|핸드폰|연락처",
-        "gender_label": r"성별|남자|여자|남성|여성",
-        "name": r"이름|성함",
-        "email": r"이메일|메일",
-    }
-    profile_labels = {
-        "age": "나이",
-        "birth_date": "생년월일",
-        "phone_number": "전화번호",
-        "gender_label": "성별",
-        "name": "이름",
-        "email": "이메일",
-    }
-    profile_subject_pattern = r"내|제|나의|저의|사용자|회원가입|가입|프로필"
-    profile_name = str(user_profile.get("name") or "")
-    mentions_current_user = bool(re.search(profile_subject_pattern, user_question)) or (
-        bool(profile_name) and profile_name in user_question
+    # MongoDB에서 후처리 완료된 발화 로드
+    transcript_text = ""
+    if meeting_id:
+        ctx_doc = await mongo_db["utterances"].find_one(({"meeting_id": meeting_id}))
+        if ctx_doc and ctx_doc.get("utterances"):
+            transcript_text = "\n".join(
+                f"[{u.get('speaker_label', '?')}] {u.get('content', '')}"
+                for u in ctx_doc["utterances"]
+            )
+    no_meeting_context = not transcript_text.strip()
+
+    # 이전 대화 로드 + 토큰 예산 선택
+    from app.domains.knowledge.repository import get_chat_history
+
+    history = await get_chat_history(workspace_id, session_id)
+    recent_history = _select_history(history)
+
+    # 지시어 해소 (온톨로지 추출 정확도 향상)
+    resolved_question = await _resolve_references(
+        original_question, recent_history, llm
     )
-    for key, pattern in profile_question_patterns.items():
-        if mentions_current_user and re.search(pattern, user_question):
-            value = user_profile.get(key)
-            if key == "age" and value is not None:
-                answer = f"{value}입니다!"
-            elif value:
-                answer = f"{profile_labels[key]}은(는) {value}입니다."
-            else:
-                answer = f"{profile_labels[key]}은(는) 가입 정보에 저장되어 있지 않습니다."
-            return {
-                "chat_response": answer,
-                "function_type": "profile",
-                "web_sources": [],
-            }
 
+    # 온톨로지 컨텍스트 프리패치
+    from app.core.ontology import build_ontology_context
+
+    ontology_ctx = await build_ontology_context(resolved_question, workspace_id, llm)
+
+    # 권한 힌트
+    if is_admin:
+        permission_hint = "이 사용자는 관리자입니다. 모든 데이터 접근 가능."
+    elif user_id:
+        permission_hint = f"이 사용자(user_id={user_id})는 일반 멤버입니다."
+    else:
+        permission_hint = "권한 정보 없음."
+
+    # 이전 회의 필터 힌트
     if past_meeting_ids:
         ids_str = ", ".join(f'"{i}"' for i in past_meeting_ids)
         meeting_filter_hint = (
@@ -382,24 +330,22 @@ async def knowledge_node(state: SharedState) -> dict:
             f"search_past_meetings 호출 시 meeting_ids 인자로 반드시 전달하세요."
         )
     else:
-        meeting_filter_hint = (
-            "\nsearch_past_meetings 호출 시 meeting_ids는 null로 전달하세요. (전체 검색)"
-        )
+        meeting_filter_hint = "\nsearch_past_meetings 호출 시 meeting_ids는 null로 전달하세요. (전체 검색)"
 
     system_prompt = f"""
     당신은 회의 AI 어시스턴트입니다.
 
-    현재 로그인 사용자 프로필:
-    {json.dumps(user_profile, ensure_ascii=False)}
+    [접근 권한]
+    {permission_hint}
 
-    현재 회의 발화 내용:
-    {meeting_context}
+    [사전 조회된 관련 정보 - 온톨로지 그래프]
+    {ontology_ctx if ontology_ctx else "(없음)"}
+    위 정보로 충분히 답할 수 있으면 도구 호출 없이 바로 답변하세요.
     
     규칙:
-    - 사용자가 본인 또는 현재 로그인 사용자의 이름, 이메일, 생년월일, 나이, 전화번호, 성별을 물으면 현재 로그인 사용자 프로필만 근거로 답변하세요. 이 경우 web_search, search_internal_db, search_past_meetings를 사용하지 마세요.
-    - 사용자 프로필에 없는 항목은 "가입 정보에 저장되어 있지 않습니다."라고 답변하세요.
-    - 회의 발화가 없을 때 일반 지식/개념/정보를 묻는 질문은 반드시 web_search를 먼저 사용하세요. 내부 지식만으로 답변하지 마세요.
-    - 특정 문서를 요약하거나 전체 내용이 필요할 때는 get_document_full_content를 사용하세요. workspace_id는 반드시 "{workspace_id}"로 전달하세요.                                                                                
+    - 특정 문서를 요약하거나 전체 내용이 필요할 때 → get_document_full_content 사용. workspace_id는 반드시 "{workspace_id}". 
+    - 사용자 질문에 파일명·문서명이 포함되어 있으면 get_document_full_content를 가장 먼저 호출하세요.  
+    - 여러 문서에 걸친 키워드·개념 검색 → search_internal_db 사용. workspace_id는 반드시 "{workspace_id}". 
     - 사용자 질문에 파일명·문서명·자료명이 포함되어 있으면 반드시 get_document_full_content를 가장 먼저 호출하세요. search_internal_db보다 항상 우선합니다.                                                                    
     - get_document_full_content 도구를 사용했으면 citations는 반드시 []. 문서 내용 자체가 답변이므로 별도 인용 불필요.
     - search_internal_db는 여러 문서에 걸친 키워드·개념 검색에만 사용하세요
@@ -407,8 +353,6 @@ async def knowledge_node(state: SharedState) -> dict:
     - 회의 내용만으로 답할 수 있으면 도구 없이 답변하세요.
     - 정보가 불완전하더라도 회의에서 언급된 내용을 바탕으로 최대한 답변하세요.
     - 확실하지 않은 정보는 "~라고 언급됐습니다" 형식으로 답변하세요.
-    - 특정 문서·파일·자료·브리프·보고서 내용이 필요하면 search_internal_db를 먼저 사용하세요. workspace_id는 반드시 "{workspace_id}"로 전달하세요.
-    - 회의 일정·스케줄 관련 질문("오늘 회의 몇 개야", "다음 회의 언제야" 등)은 query_meetings_schedule을 사용하세요. workspace_id는 반드시 "{workspace_id}"로 전달하세요.
     - 외부 자료가 필요하면 web_search를 사용하세요.
     - 이전 회의 내용이 필요하면 search_past_meetings를 사용하세요.
     
@@ -418,6 +362,7 @@ async def knowledge_node(state: SharedState) -> dict:
         "confidence": "high" | "medium" | "low"
         "hedge_note": "근거 있음 | 근거 불충분 | 근거 없음",
         "citations": ["근거가 된 발화를 [화자명] 내용 형식 그대로 복사. 요약・재서술 금지. 최대 3개."]
+        "action_button": {{"label": "버튼 텍스트", "path": "/경로"}} | null
     }}
 
     confidence 기준:
@@ -425,26 +370,37 @@ async def knowledge_node(state: SharedState) -> dict:
     - medium: 발화에 간접적으로 언급됨
     - Low: 발화에 근거 없거나 추측
     
-    citations 규칙:                                                                          
-    - web_search 도구를 사용했으면 반드시 []. 절대 웹 검색 내용을 citations에 넣지 마세요.   
-    - search_past_meetings 도구를 사용했으면 반환된 snippet 원문을 그대로 복사. 
-    - search_internal_db 도구를 사용했으면 반환된 snippet 원문을 그대로 복사.            
+    citations 규칙:
+    - web_search 도구를 사용했으면 반드시 []. 절대 웹 검색 내용을 citations에 넣지 마세요.
+    - search_past_meetings 도구를 사용했으면 반환된 snippet 원문을 그대로 복사.
+    - search_internal_db 도구를 사용했으면 반환된 snippet 원문을 그대로 복사.
     - 회의 발화 기반이면 [화자명] 발화내용 형식으로 원문 발췌.
 
-    answer 작성 규칙:                                                                                                  
-    - # 헤딩 사용 금지. ## 이하만 사용.                                                                             
-    - 목록은 마크다운 bullet(-) 또는 번호 사용                                                                         
+    answer 작성 규칙:
+    - # 헤딩 사용 금지. ## 이하만 사용.            
+    - 목록은 마크다운 bullet(-) 또는 번호 사용
     - 표 형태 데이터는 마크다운 테이블로 표현 
+
+    action_button 규칙:
+    - WBS 수정 요청 시: {{"label": "WBS 페이지로 이동", "path": "/meetings/{meeting_id}/wbs"}}
+    - 그 외: null
 
     {meeting_filter_hint}
     """
 
-    result = await react_agent.ainvoke({
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": state["user_question"]}
-        ]
-    })
+    # react_agent 호출 - 히스토리 주입
+    history_messages = [
+        {"role": msg["role"], "content": msg["content"]} for msg in recent_history
+    ]
+    result = await react_agent.ainvoke(
+        {
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                *history_messages,
+                {"role": "user", "content": state["user_question"]},
+            ]
+        }
+    )
 
     # Tavily ToolMessage에서 웹 소스 추출
     seen_urls = set()
@@ -453,11 +409,15 @@ async def knowledge_node(state: SharedState) -> dict:
     for msg in result["messages"]:
         if getattr(msg, "name", None) == "tavily_search_results_json":
             try:
-                raw = json.loads(msg.content) if isinstance(msg.content, str) else msg.content
+                raw = (
+                    json.loads(msg.content)
+                    if isinstance(msg.content, str)
+                    else msg.content
+                )
                 if isinstance(raw, list):
                     for s in raw:
                         url = s.get("url", "")
-                        if url and url not in seen_urls:
+                        if not url or url in seen_urls:
                             continue
                         domain = urlparse(url).netloc
                         if domain in seen_domains:
@@ -475,14 +435,11 @@ async def knowledge_node(state: SharedState) -> dict:
                 pass
 
     # 도구 사용 여부 확인 - tool_calls 있으면 웹검색/캘린더 등 외부 도구 사용한 것
-    tool_used = any(
-        getattr(msg, "tool_calls", None)
-        for msg in result["messages"]
-    )
+    tool_used = any(getattr(msg, "tool_calls", None) for msg in result["messages"])
 
     # search_internal_db 사용 여부 별도 체크
     internal_db_used = any(
-        tc.get("name") == ("search_internal_db", "get_document_full_content")
+        tc.get("name") in ("search_internal_db", "get_document_full_content")
         for msg in result["messages"]
         for tc in (getattr(msg, "tool_calls", None) or [])
     )
@@ -495,27 +452,38 @@ async def knowledge_node(state: SharedState) -> dict:
     except json.JSONDecodeError:
         parsed = {}
 
-    answer = parsed.get("answer", raw) # JSON 파싱 실패 시 원문 그대로 사용
+    answer = parsed.get("answer", raw)  # JSON 파싱 실패 시 원문 그대로 사용
     confidence = parsed.get("confidence", "low")
     citations = parsed.get("citations", [])
+    action_button = parsed.get("action_button")
 
-    if tool_used:
+    if web_sources:
+        pass  # 프론트엔드에서 web_sources 별도 표시
+
+    elif tool_used:
         if web_sources:
             pass
         # search_past_meetings: 이전 회의 발화가 citations로 오면 표시
         elif citations:
             label = "📎 근거 문서:" if internal_db_used else "📎 근거 발화:"
-            citation_block = f"\n\n**{label}**\n" + "\n\n".join(_fmt_citation(c) for c in citations)                          
+            citation_block = f"\n\n**{label}**\n" + "\n\n".join(
+                _fmt_citation(c) for c in citations
+            )
             answer += citation_block
+
     else:
-        # 회의 내용 기반 답변 -> citation이 실제 발화 원문에 존재하는지 검증
-        context_words = set(re.findall(r"[가-힣a-zA-Z0-9]+", meeting_context))
+        # 발화 기반 답변 -> citation이 실제 발화 원문에 존재하는지 검증
+        context_words = set(re.findall(r"[가-힣a-zA-Z0-9]", transcript_text))
         verified_citations = []
         citation_failed = False
 
         for c in citations:
             citation_words = set(re.findall(r"[가-힣a-zA-Z0-9]+", c))
-            overlap = len(citation_words & context_words) / len(citation_words) if citation_words else 0
+            overlap = (
+                len(citation_words & context_words) / len(citation_words)
+                if citation_words
+                else 0
+            )
             if overlap >= 0.6:
                 verified_citations.append(c)
             else:
@@ -524,139 +492,40 @@ async def knowledge_node(state: SharedState) -> dict:
 
         if citation_failed or (not citations and confidence == "low"):
             # 불일치 또는 근거 없음 -> 답변 자체를 대체
-            if not tool_used and no_meeting_context:                                                                                           
-                # 회의 없는 상태에서 도구 미사용 → 내부 문서 검색 유도                                                       
-                answer = "관련 내용을 찾지 못했습니다. 해당 파일이 업로드되어 있는지 확인해주세요."                          
-            else:                                                                                                          
+            if not tool_used and no_meeting_context:
+                # 회의 없는 상태에서 도구 미사용 → 내부 문서 검색 유도
+                answer = "관련 내용을 찾지 못했습니다. 해당 파일이 업로드되어 있는지 확인해주세요."
+            else:
                 answer = "해당 내용은 회의에서 확인되지 않았습니다."
         else:
             # 검증 통과한 citations만 표시
             if verified_citations:
-                citation_block = "\n\n**📎 근거 발화:**\n" + "\n".join(f"> {c}" for c in verified_citations)
+                citation_block = "\n\n**📎 근거 발화:**\n" + "\n".join(
+                    f"> {c}" for c in verified_citations
+                )
                 answer += citation_block
-            
+
             # medium이면 간접 근거 고지
             if confidence == "medium":
                 answer += "\n\n※ 간접적으로 언급된 내용을 바탕으로 한 답변입니다."
-
-    # STT 딜레이 고지 - Redis utterances 있는 경우(회의 중)에만 prepend
-    if is_live:
-        answer = (
-            "※ 아래는 약 30초 전까지 반영된 발화 기준이며, 가장 최근 발화는 포함되지 않을 수 있습니다.\n\n"                
-            + answer 
-        )
 
     return {
         "chat_response": answer,
         "function_type": "agent",
         "web_sources": web_sources,
+        "action_button": action_button,
     }
 
-async def summary_node(state: SharedState) -> dict:
-    """
-    회의 발화 전체를 구조화된 JSON 요약으로 변환하는 노드.
 
-    흐름:
-        1. meeting_id 없으면 workspace 최신 완료 회의 자동 선택
-        2. Redis 발화 로드 → 비어있으면 MongoDB fallback
-        3. 핵심 포인트 추출 프롬프트로 LLM 호출
-    """
-    meeting_id = state.get("meeting_id")
-    workspace_id = state.get("workspace_id")
-
-    if not meeting_id:
-        recent = await mongo_db["meeting_contexts"].find_one(
-            {"workspace_id": workspace_id},
-            {"_id": 0, "meeting_id": 1},
-            sort=[("created_at", -1)]
-        )
-        if not recent:
-            return {
-                "chat_response": "완료된 회의 데이터가 없습니다.",
-                "function_type": "summary",
-            }
-        meeting_id = recent["meeting_id"]
-
-    is_live = await is_meeting_live(meeting_id)
-
-    # 1단계: 컨텍스트 로드
-    # partial_summary가 있으면 이미 요약된 앞부분은 재처리하지 않고 재사용.
-    # 없으면 Redis에서 전체 발화를 가져온다.
-    cached = await r.get(f"meeting:{meeting_id}:partial_summary")
-    if cached:
-        # 이전 partial_summary + 새 발화만 이어붙여 중분 처리
-        prev_summary = cached.decode()
-        new_utterances = await get_meeting_context(meeting_id)
-        context = f"[이전 요약]\n{prev_summary}\n\n[추가 발화]\n{new_utterances}"
-    else:
-        context = await get_meeting_context(meeting_id)
-
-    if not context and not is_live:
-        # Redis TTL 만료된 과거 회의 -> 저장된 요약 or 발화 텍스트 조회
-        saved = await mongo_db["meeting_summaries"].find_one(
-            {"meeting_id": meeting_id}, {"_id": 0}
-        )
-        if saved and saved.get("summary"):
-            summary_dict = saved["summary"]
-            formatted = _format_summary_markdown(summary_dict)
-            return {"summary": summary_dict, "chat_response": formatted, "function_type": "summary"}
-        ctx_doc = await mongo_db["meeting_contexts"].find_one(
-            {"meeting_id": meeting_id}, {"_id": 0}
-        )
-        if ctx_doc:
-            context = ctx_doc.get("summary") or ""
-        if not context:
-            return {"chat_response": "선택하신 회의의 발화 데이터가 없습니다.", "function_type": "summary"}
-
-    prompt = f"""
-    다음은 현재까지의 회의 발화 내용입니다.
-    STT 처리 딜레이로 인해 최근 약 30초 이내 발화는 포함되지 않을 수 있습니다.
-
-    [회의 발화]
-    {context}
-
-    반드시 아래 JSON 형식으로만 답변하세요.
-
-    {{
-        "title": "회의 제목 또는 핵심 주제 (헌 줄)",
-        "key_points": [
-            "논의된 핵심 내용 1 (구체적으로)",
-            "논의된 핵심 내용 2",
-            ...
-        ]
-    }}
-    """
-
-    # 4단계: LLM 호출
-    result = await llm.ainvoke(prompt)
-
-    # JSON 블록만 추출 (LLM이 설명 텍스트를 앞뒤에 붙이는 경우 대비)
-    json_match = re.search(r"\{.*\}", result.content, re.DOTALL)
-    try:
-        summary_dict = json.loads(json_match.group()) if json_match else {}
-    except json.JSONDecodeError:
-        summary_dict = {}
-
-    # partial_summary 캐시 갱신
-    try:
-        partial_text = summary_dict.get("title") or json.dumps(
-            summary_dict.get("key_points", [])[:2], ensure_ascii=False
-        )
-        await r.set(f"meeting:{meeting_id}:partial_summary", partial_text)
-    except Exception:
-        pass
-
-    formatted = _format_summary_markdown(summary_dict)
-    if is_live:
-        formatted =  "※ 약 30초 전까지 반영된 발화 기준입니다.\n\n" + formatted
-
-    return {"summary": summary_dict, "chat_response": formatted, "function_type": "summary"}
-
-async def _get_meetings_by_question(question: str, workspace_id: int) -> tuple[list[dict], bool]:
+async def _get_meetings_by_question(
+    question: str, workspace_id: int
+) -> tuple[list[dict], bool]:
     """user_question에서 날짜 범위 추출해서 MongoDB 필터링.
     반환: (meetings, has_date_range) — has_date_range=True면 날짜 조건으로 필터링된 결과.
     """
     from app.domains.knowledge.repository import get_all_past_meetings_by_workspace
+    from datetime import datetime
+
     all_meetings = await get_all_past_meetings_by_workspace(workspace_id)
 
     date_prompt = f"""
@@ -671,39 +540,47 @@ async def _get_meetings_by_question(question: str, workspace_id: int) -> tuple[l
     result = await llm.ainvoke(date_prompt)
     try:
         dates = json.loads(re.search(r"\{.*\}", result.content, re.DOTALL).group())
-        start = now_kst().fromisoformat(dates["start"]) if dates.get("start") else None
-        end = now_kst().fromisoformat(dates["end"]) if dates.get("end") else None
+        start = datetime.fromisoformat(dates["start"]) if dates.get("start") else None
+        end = datetime.fromisoformat(dates["end"]) if dates.get("end") else None
     except Exception:
         start, end = None, None
 
     if start or end:
         filtered = [
-            m for m in all_meetings
-            if (not start or m.get("created_at", now_kst().min) >= start)
-            and (not end or m.get("created_at", now_kst().max) <= end)
+            m
+            for m in all_meetings
+            if (not start or m.get("created_at", datetime.min) >= start)
+            and (not end or m.get("created_at", datetime.max) <= end)
         ]
         return filtered, True
 
     return all_meetings, False
 
+
 async def past_summary_node(state: SharedState) -> dict:
     """
-    선택된 이전 회의들을 하나의 구조화된 요약으로 합치는 노드.
-
-    흐름:
-        1. past_meeting_id로 MongoDB에서 회의 데이터 조회
-        2. 여러 회의 텍스트를 LLM으로 통합 구조화
-        3. _format_sammary_markdown으로 마크다운 변환
+    단일/복수 회의 요약.
+    meeting_minutes.summary(MySQL) 읽어서 반환.
+    단일 회의 → LLM 없이 바로 반환.
+    복수 회의 → LLM으로 통합 요약.
     """
-    from app.domains.knowledge.repository import get_past_meetings_by_ids
-    from app.domains.knowledge.repository import get_past_meeting_ids
+    from app.domains.knowledge.repository import (
+        get_past_meetings_by_ids,
+        get_past_meetings,
+    )
 
     past_meeting_ids = state.get("past_meeting_ids")
     workspace_id = state.get("workspace_id")
+    user_id = state.get("user_id")
+    is_admin = state.get("is_admin", False)
+    filter_user_id = None if is_admin else user_id
 
     if not past_meeting_ids:
-       past_meeting_ids = await get_past_meeting_ids(workspace_id)
-       meetings = await get_past_meetings_by_ids(past_meeting_ids)
+        meetings, _ = await _get_meetings_by_question(
+            state.get("user_question", ""), workspace_id
+        )
+        if not meetings:
+            meetings = await get_past_meetings(workspace_id, user_id=filter_user_id)
     else:
         # UI에서 선택된 회의만
         meetings = await get_past_meetings_by_ids(past_meeting_ids)
@@ -714,60 +591,41 @@ async def past_summary_node(state: SharedState) -> dict:
             "function_type": "past_summary",
         }
 
-    # 회의 메타 정보를 미리 구성해서 프롬프트에 직접 주입
-    meetings_meta = [
-        {
-            "meeting_id": m["meeting_id"],
-            "title": m.get("title", ""),
-            "date": (
-                m.get("created_at").strftime("%Y-%m-%d")
-                if hasattr(m.get("created_at"), "strftime")
-                else str(m.get("created_at", ""))[:10]
+    # 단일 회의 -> LLM 없이 바로 반환
+    if len(meetings) == 1:
+        m = meetings[0]
+        return {
+            "chat_response": _format_summary_markdown(
+                {"title": m["title"], "key_points": m["summary"].split("\n")}
             ),
+            "function_type": "past_summary",
         }
-        for m in meetings
-    ]
-    meetings_meta_str = json.dumps(meetings_meta, ensure_ascii=False)
-    dates_str = ", ".join(m["date"] for m in meetings_meta)
 
     # 회의별 텍스트 블록 구성
-    meetings_text = "\n\n".join([
-        f"[회의 {m['meeting_id']}] {m.get('title', '')}\n{m.get('summary', '')}"
-        for m in meetings
-    ])
+    meetings_text = "\n\n".join(
+        [
+            f"{m.get('title', '')} ({m['created_at'].strftime('%Y-%m-%d') if hasattr(m.get('created_at'), 'strftime') else str(m.get('created_at', ''))[:10]})"
+            f"\n{m.get('summary', '')}"
+            for m in meetings
+        ]
+    )
 
     prompt = f"""
-    다음은 {len(meetings)}개 이전 회의의 요약이다.
-    중요한 내용을 가독성 좋게 요약하세요.
+    다음은 {len(meetings)}개 회의의 요약입니다.
+    중요한 내용을 회의별 맥락을 포함해 가독성 좋게 요약하세요.
 
     {meetings_text}
 
-    반드시 아래 JSON 형식으로만 답변하세요.
-
-    {{                                                                                                               
-        "meetings": {meetings_meta_str},                                                                           
-        "key_points": [
-            "논의된 핵심 내용 1 (어느 회의의 내용인지 맥락 포함)",
-            "논의된 핵심 내용 2",
-            ...  
-        ]                                   
-      }} 
+    마크다운 형식으로 작성하되 # 헤딩은 사용하지 마세요. ## 이하만 사용하세요.
     """
 
     result = await llm.ainvoke(prompt)
-    content = result.content
-    
-    json_match = re.search(r"\{.*\}", content, re.DOTALL)
-    try:
-        summary_dict = json.loads(json_match.group()) if json_match else {}
-    except json.JSONDecodeError:
-        summary_dict = {}
 
-    formatted = _format_summary_markdown(summary_dict)
     return {
-        "chat_response": formatted,
+        "chat_response": result.content,
         "function_type": "past_summary",
     }
+
 
 async def quick_report_node(state: SharedState) -> dict:
     """
@@ -778,87 +636,162 @@ async def quick_report_node(state: SharedState) -> dict:
         - meeting_id 있으면 단일 회의 보고서
         - 둘 다 없으면 선택 요청 → ChatFAB selector 트리거
     """
-    from app.domains.knowledge.repository import get_past_meetings_by_ids, get_past_meeting_ids
-    
+    from app.domains.knowledge.repository import (
+        get_past_meetings_by_ids,
+        get_past_meeting_ids,
+    )
+    from app.domains.intelligence.models import Decision
+    from app.domains.action.models import WbsEpic, WbsTask
+    from app.domains.meeting.models import Meeting, MeetingStatus, MeetingParticipant
+    from app.domains.user.models import User
+    from app.infra.database.session import SessionLocal
+    from sqlalchemy import asc
+
     meeting_id = state.get("meeting_id")
     past_meeting_ids = state.get("past_meeting_ids")
     workspace_id = state.get("workspace_id")
+    user_id = state.get("user_id")
+    is_admin = state.get("is_admin", False)
+    filter_user_id = None if is_admin else user_id
 
-    if not meeting_id and not past_meeting_ids:
-        past_meeting_ids = await get_past_meeting_ids(workspace_id)
-        
-    # 컨텍스트 구성
     if past_meeting_ids:
         meetings = await get_past_meetings_by_ids(past_meeting_ids)
-        if not meetings:
-            return {"chat_response": "선택한 회의 데이터가 없습니다.", "function_type": "quick_report"}
-
-        meetings_text = "\n\n".join(
-            f"[회의] {m.get("title", "")}\n{m.get('summary', '')}" for m in meetings
-        )
-        meetings_count = f"{len(meetings)}개 이전 회의"
+    elif meeting_id:
+        meetings = await get_past_meetings_by_ids([meeting_id])
     else:
-        saved = await mongo_db["meeting_summaries"].find_one(
-            {"meeting_id": meeting_id}, {"_id": 0}
+        all_ids = await get_past_meeting_ids(workspace_id, user_id=filter_user_id)
+        meetings = await get_past_meetings_by_ids(all_ids)
+
+    if not meetings:
+        return {
+            "chat_response": "보고서를 생성할 회의가 없습니다.",
+            "function_type": "quick_report",
+        }
+
+    target_ids = [m["meeting_id"] for m in meetings]
+
+    db = SessionLocal()
+    try:
+        # decisions 조회
+        decisions = (
+            db.query(Decision)
+            .filter(Decision.meeting_id.in_(target_ids))
+            .order_by(Decision.meeting_id, Decision.detected_at)
+            .all()
         )
-        if saved and saved.get("summary"):
-            return {
-                "chat_response": _format_quick_report_markdown(saved["summary"]),
-                "function_type": "quick_report",
-            }
 
-        # 단일 회의: Redis -> MongoDB fallback
-        context = await get_meeting_context(meeting_id)
-        if not context:
-            saved = await mongo_db["meeting_summaries"].find_one(
-                {"meeting_id": meeting_id}, {"_id": 0}
+        # wbs_tasks 조회
+        epics = db.query(WbsEpic).filter(WbsEpic.meeting_id.in_(target_ids)).all()
+        epic_ids = [e.id for e in epics]
+        tasks = (
+            (
+                db.query(WbsTask)
+                .filter(WbsTask.epic_id.in_(epic_ids))
+                .order_by(WbsTask.order_index)
+                .all()
             )
-            if saved and saved.get("summary"):
-                context = json.dumps(saved['summary'], ensure_ascii=False)
-            else:
-                ctx_doc = await mongo_db["meeting_contexts"].find_one(
-                    {"meeting_id": meeting_id}, {"_id": 0}
-                )
-                context = (ctx_doc.get("summary") or "") if ctx_doc else ""
+            if epic_ids
+            else []
+        )
 
-        if not context:
-            return {"chat_response": "선택하신 회의의 발화 데이터가 없습니다.", "function_type": "quick_report"}
-        meetings_text = context
-        meetings_count = '단일 회의'
+        # 회의별 참석자 조회
+        attendees_by_meeting: dict[int, list[str]] = {}
+        if target_ids:
+            rows = (
+                db.query(MeetingParticipant.meeting_id, User.name)
+                .join(User, MeetingParticipant.user_id == User.id)
+                .filter(MeetingParticipant.meeting_id.in_(target_ids))
+                .all()
+            )
+            for mid, name in rows:
+                attendees_by_meeting.setdefault(mid, []).append(name)
+
+        # next_meeting 조회
+        next_m = (
+            db.query(Meeting.title, Meeting.scheduled_at)
+            .filter(
+                Meeting.workspace_id == workspace_id,
+                Meeting.status == MeetingStatus.scheduled,
+            )
+            .order_by(asc(Meeting.scheduled_at))
+            .first()
+        )
+        next_meeting_str = (
+            f"{next_m.title} ({next_m.scheduled_at.strftime('%Y-%m-%d %H:%M')})"
+            if next_m and next_m.scheduled_at
+            else "일정 논의 필요"
+        )
+    finally:
+        db.close()
+
+    meetings_meta = [
+        {
+            "title": m.get("title", ""),
+            "date": (
+                m["created_at"].strftime("%Y-%m-%d")
+                if hasattr(m.get("created_at"), "strftime")
+                else str(m.get("created_at", ""))[:10]
+            ),
+            "summary": m.get("summary", ""),
+            "attendees": attendees_by_meeting.get(m["meeting_id"], []),
+        }
+        for m in meetings
+    ]
+    decisions_text = (
+        "\n".join(
+            f"- [회의{d.meeting_id}] {d.content} ({'확정' if d.is_confirmed else '미확정'})"
+            for d in decisions
+        )
+        or "(없음)"
+    )
+    tasks_text = (
+        "\n".join(
+            f"- [{t.assignee_name or '미정'}] {t.title}"
+            f" / 상태: {t.status.value} / 진행률: {t.progress}%"
+            f" / 우선순위: {t.priority.value} / 긴급도: {t.urgency or 'normal'}"
+            f" / 기한: {t.due_date.isoformat() if t.due_date else '미정'}"
+            for t in tasks
+        )
+        or "(없음)"
+    )
+    meetings_count = f"{len(meetings)}개 회의" if len(meetings) > 1 else "단일 회의"
 
     # 단일/복수 통합 프롬프트
     prompt = f"""
     다음은 {meetings_count} 발화/요약 내용입니다. 간이보고서를 작성하세요.
 
-    {meetings_text}
+    [결정 사항]
+    {decisions_text}
 
-    액션 아이템 우선순위(priority) 판단 기준:                                                                        
-    - high: 결정 사항과 직접 연결 / 다른 액션의 선행 조건 / "반드시·꼭·최우선" 발화 / 다수 인원 영향
-    - normal: 그 외                                                                                                  
-                                                                                                                    
-    긴급도(urgency) 판단 기준:                                                                                       
-    - urgent: 기한 3일 이내 / 다음 회의 전 완료 필요 / "빨리·즉시·오늘까지·ASAP" 발화                                
-    - normal: 기한 4~7일 이내                                                                                        
-    - low: 기한 7일 초과 또는 미언급                                                                                 
-                                                                                                                    
-    이전 회의 follow-up (컨텍스트에 이전 회의 내용이 있을 경우):                                                     
-    - 이전 회의 액션 아이템이 완료 언급됐으면 → pending_items에서 제외
-    - 미해결이면 → pending_items에 carried_over: true로 포함
+    [WBS 태스크]
+    {tasks_text}
+
+    [회의 정보]
+    {json.dumps(meetings_meta, ensure_ascii=False)}
+
+    [다음 예정 회의]
+    {next_meeting_str}
+
+    이전 회의 follow-up (컨텍스트에 이전 회의 내용이 있을 경우): 
+    - WBS 태스크 상태가 done이면 → pending_items에서 제외
+    - 상태가 todo/in_progress이면 → pending_items에 carried_over: true로 포함                                                           
+    - 결정 사항이 미확정이면 → pending_items에 포함 
 
     단일 회의면 meetings 배열에 1개, 복수면 회의별로 각각 포함
 
     반드시 아래 JSON 형식으로만 답변하세요.
 
     {{                                                                                                               
-        "meetings": [{{"title": "회의 제목", "date": "일시", "attendees": ["참석자1", ...]}}],                          
-        "overview_summary": "전체 내용 요약",                                                              
-        "agenda_items": ["주요 안건1", "주요 안건2" ...],                                                              
-        "discussion_items": [{{"topic": "주제명", "content": "구체적으로 논의된 내용"}}, ...],                            
-        "decisions": ["최종 결론/결정 사항", ...],                                                                        
-        "action_items": [{{"assignee": "담당자 or null", "content": "할 일", "deadline": "기한 or null", "urgency": "urgent|normal|low", "priority": "high|normal"}}, ...],                                                                   
-        "pending_items": [{{"content": "미결 사항", "carried_over": false}}, ...],                                        
-        "next_meeting": "다음 회의 일정 or null",
-        "next_meeting_agenda": ["다음 회의에서 다룰 내용", ...]                                                           
+        "meetings": [{{"title": "회의 제목", "date": "일시", "attendees": ["참석자1", ...]}}],
+        "overview_summary": "전체 내용 요약",                   
+        "agenda_items": ["주요 안건1", "주요 안건2" ...],
+        "discussion_items": [{{"topic": "주제명", "content": "구체적으로 논의된 내용"}}, ...],
+        "decisions": ["최종 결론/결정 사항", ...],
+        "action_items": [{{"assignee": "담당자 or null", "content": "할 일", "deadline": "기한 or null", "urgency": "urgent|normal|low", "priority": "high|normal"}}, ...],
+        "pending_items": [{{"content": "미결 사항", "carried_over": false}}, ...],
+        "next_meeting": "{next_meeting_str}",
+        "next_meeting_agenda": ["다음 회의 안건", ...],
+        "hallucination_flags": [...]                                    
       }} 
     """
     result = await llm.ainvoke(prompt)
@@ -868,50 +801,19 @@ async def quick_report_node(state: SharedState) -> dict:
     except json.JSONDecodeError:
         report_dict = {}
 
-    next_meeting_val = report_dict.get("next_meeting")
-    if not next_meeting_val or next_meeting_val in ("null", "None", "없음", ""):
-        from app.infra.database.session import SessionLocal
-        from app.domains.meeting.models import Meeting, MeetingStatus
-        from sqlalchemy import asc
-
-        db = SessionLocal()
-        try:
-            next_m = (
-                db.query(Meeting.title, Meeting.scheduled_at)
-                .filter(
-                    Meeting.workspace_id == workspace_id,
-                    Meeting.status == MeetingStatus.scheduled,
-                )
-                .order_by(asc(Meeting.scheduled_at))
-                .first()
-            )
-            if next_m and next_m.scheduled_at:
-                report_dict["next_meeting"] = (
-                    f"{next_m.title} ({next_m.scheduled_at.strftime('%Y-%m-%d %H:%M')})"
-                )
-            else:
-                report_dict["next_meeting"] = "일정 논의 필요"
-        except Exception:
-            report_dict["next_meeting"] = "일정 논의 필요"
-        finally:
-            db.close()
-
-    if meeting_id:                                                                                                 
-        try:                                                                                                         
-            await save_meeting_summary(workspace_id, meeting_id, report_dict)                                        
-        except Exception:                                                                                            
-            pass  # 저장 실패는 응답에 영향 없음   
-
     return {
         "chat_response": _format_quick_report_markdown(report_dict),
-        "function_type": "quick_report"
+        "function_type": "quick_report",
+        "hallucination_flags": report_dict.get("hallucination_flags", []),
     }
+
 
 async def report_guide_node(state: SharedState) -> dict:
     return {
         "chat_response": "정식 보고서는 회의록 페이지에서 생성할 수 있습니다.",
         "function_type": "report_guide",
     }
+
 
 def _format_summary_markdown(s: dict) -> str:
     """summary_dict → 프론트엔드 표시용 마크다운 문자열 변환."""
@@ -920,11 +822,11 @@ def _format_summary_markdown(s: dict) -> str:
 
     # 복수 회의면 목록 헤더, 단일이면 해당 회의 제목
     if len(meetings) > 1:
-        lines.append('## 📋 이전 회의 종합 요약')
+        lines.append("## 📋 이전 회의 종합 요약")
         for m in meetings:
             lines.append(f"- **{m.get('title', '')}** ({m.get('date', '')})")
     elif len(meetings) == 1:
-        lines.append(f"## 📋 {meetings[0].get('title', '이전 회의 요약')}")
+        lines.append(f"## 📋 {meetings[0].get('title', '회의 요약')}")
     else:
         lines.append(f"## 📋 {s.get('title') or '회의 요약'}")
 
@@ -933,102 +835,114 @@ def _format_summary_markdown(s: dict) -> str:
 
     return "\n".join(lines)
 
+
 def _format_quick_report_markdown(s: dict) -> str:
     """quick_report_node → 전체 구조 보고서 포맷."""
-    lines = []                              
+    lines = []
     meetings = s.get("meetings", []) or []
 
-    if len(meetings) > 1:                                                                                            
+    if len(meetings) > 1:
         lines.append("## 📋 이전 회의 종합 보고서")
-        for m in meetings:                                                                                           
-            attendees_str = f" ({', '.join(m['attendees'])})" if m.get("attendees") else ""                          
-            lines.append(f"- **{m.get('title', '')}** {m.get('date', '')}{attendees_str}")
-    else:                                                                                                            
-        m = meetings[0] if meetings else {}                                                                        
-        lines.append(f"## 📋 {m.get('title') or s.get('title') or '간이보고서'}")                                    
-        if m.get("date"):                   
-            lines.append(f"**일시:** {m['date']}")                                                                   
-        if m.get("attendees"):                                                                                     
-            lines.append(f"**참석자:** {', '.join(m['attendees'])}")                                                 
+        for m in meetings:
+            attendees_str = (
+                f" ({', '.join(m['attendees'])})" if m.get("attendees") else ""
+            )
+            lines.append(
+                f"- **{m.get('title', '')}** {m.get('date', '')}{attendees_str}"
+            )
+    else:
+        m = meetings[0] if meetings else {}
+        lines.append(f"## 📋 {m.get('title') or s.get('title') or '간이보고서'}")
+        if m.get("date"):
+            lines.append(f"**일시:** {m['date']}")
+        if m.get("attendees"):
+            lines.append(f"**참석자:** {', '.join(m['attendees'])}")
 
-    if s.get("overview_summary"):                                                                                    
-        lines.append(f"\n**회의 내용 요약**\n{s['overview_summary']}")                                             
-                                                                                                                    
-    agenda_items = s.get("agenda_items", []) or []                                                                   
-    if agenda_items:                    
-        lines.append("\n### 📌 주요 안건")                                                                           
-        for item in agenda_items:                                                                                    
+    if s.get("overview_summary"):
+        lines.append(f"\n**회의 내용 요약**\n{s['overview_summary']}")
+
+    if s.get("agenda_items"):
+        lines.append("\n### 📌 주요 안건")
+        for item in s["agenda_items"]:
             lines.append(f"- {item}")
-                                                                                                                    
-    for i, item in enumerate(s.get("discussion_items", []) or [], 1):                                              
-        if i == 1:                      
+
+    for i, item in enumerate(s.get("discussion_items", []) or [], 1):
+        if i == 1:
             lines.append("\n### 🗂 구체적으로 논의된 사항")
-        lines.append(f"\n**{i}. {item.get('topic', '')}**")                                                          
+        lines.append(f"\n**{i}. {item.get('topic', '')}**")
         lines.append(item.get("content", ""))
-                                                                                                                    
-    decisions = s.get("decisions", []) or []                                                                         
-    if decisions:                                                                                                    
-        lines.append("\n### ✅ 최종 결론")                                                                           
-        for d in decisions:                                                                                          
-            lines.append(f"- {d if isinstance(d, str) else d.get('decision', '')}")                                
-                                            
-    actions = s.get("action_items", []) or []                                                                        
-    if actions:
-        lines.append("\n### 📋 할 일\n")                                                                             
-        lines.append("| 담당자 | 내용 | 기한 | 긴급도 |")                                                          
-        lines.append("|---|---|---|---|")                                                                            
-        urgency_label = {"urgent": "🔴 긴급", "normal": "⚠️  보통", "low": "🟢 낮음"}                               
-        for a in actions:                   
-            lines.append(                                                                                            
+
+    if s.get("decisions"):
+        lines.append("\n### ✅ 최종 결론")
+        for d in s["decisions"]:
+            lines.append(f"- {d if isinstance(d, str) else d.get('decision', '')}")
+
+    if s.get("action_items"):
+        lines.append("\n### 📋 할 일\n")
+        lines.append("| 담당자 | 내용 | 기한 | 긴급도 |")
+        lines.append("|---|---|---|---|")
+        urgency_label = {"urgent": "🔴 긴급", "normal": "⚠️  보통", "low": "🟢 낮음"}
+        for a in s["action_items"]:
+            lines.append(
                 f"| {a.get('assignee') or '미정'} | {a.get('content', '')} "
-                f"| {a.get('deadline') or '-'} | {urgency_label.get(a.get('urgency', 'low'), '-')} |"                
-            )                                                                                                      
-                                                                                                                    
-    pending = s.get("pending_items", []) or []   
-    if pending:                                                                                                      
-        lines.append("\n### 🔁 미결 사항")                                                                           
-        for p in pending:                                                                                            
-            text = p if isinstance(p, str) else p.get("content", "")                                               
-            suffix = " _(이전 회의 연속)_" if isinstance(p, dict) and p.get("carried_over") else ""
+                f"| {a.get('deadline') or '-'} | {urgency_label.get(a.get('urgency', 'low'), '-')} |"
+            )
+
+    if s.get("pending_items"):
+        lines.append("\n### 🔁 미결 사항")
+        for p in s["pending_items"]:
+            text = p if isinstance(p, str) else p.get("content", "")
+            suffix = (
+                " _(이전 회의 연속)_"
+                if isinstance(p, dict) and p.get("carried_over")
+                else ""
+            )
             lines.append(f"- {text}{suffix}")
-                                        
-    next_agenda = s.get("next_meeting_agenda", []) or []                                                             
+
     next_date = s.get("next_meeting")
     if next_date in ("null", "None", "없음", ""):
-        next_date = "일정 논의 필요"   
+        next_date = "일정 논의 필요"
 
-    if next_agenda or next_date is not None:                                                                                     
-        lines.append("\n### 🔜 다음 회의에서 다룰 내용")                                                             
+    next_agenda = s.get("next_meeting_agenda", []) or []
+    if next_agenda or next_date is not None:
+        lines.append("\n### 🔜 다음 회의에서 다룰 내용")
         lines.append(f"**일정:** {next_date if next_date else '미정'}")
-        for item in next_agenda:            
-            lines.append(f"- {item}")                                                                                
-                                                                                                                    
-    return "\n".join(lines)    
+        for item in next_agenda:
+            lines.append(f"- {item}")
+
+    return "\n".join(lines)
+
 
 async def classify_intent(state: SharedState) -> dict:
     """summary 여부만 판단 - 나머지는 전부 knowledge_node로"""
     prompt = f"""
     사용자 입력이 "현재 진행 중인 회의 전체 내용을 요약해달라"는 요청인지 판단하세요. 단어 하나만 출력하세요.
-                                                                                                                         
-    - summary: 지금 진행 중인 현재 회의 요약 요청. 
-        예) "오늘 회의 요약해줘", "지금까지 논의 정리해줘", "중간 정리해줘"
-    - past_summary: 과거에 완료된 회의를 요약해달라는 요청. 날짜 범위 지정 포함.
-        예) "이전 회의 요약해줘", "지난 회의 정리해줘", "전 회의 내용 요약", "4월 1일부터 현재까지 회의 요약해줘", "지난달 회의 정리해줘", "N월 회의 요약"
-    - quick_report: 간이보고서/보고서 생성 요청 (형식 미지정 또는 간단 정리).                                        
-        예) "간이보고서 만들어줘", "보고서 만들어줘", "회의 보고서 생성해줘"                                         
-    - report_guide: 특정 파일 포맷 보고서 요청 (Excel·PDF·HTML·다운로드 등).                                         
+                                                                                                                
+    - past_summary: 회의를 요약해달라는 요청(현재 or 이전 회의 모두 포함). 날짜 범위 지정 포함.
+        예) "요약해줘", "이전 회의 요약해줘", "지난 회의 정리해줘", "전 회의 내용 요약", "4월 1일부터 현재까지 회의 요약해줘", "지난달 회의 정리해줘", "N월 회의 요약"
+    - quick_report: 간이보고서/보고서 생성 요청 (형식 미지정 또는 간단 정리). 
+        예) "간이보고서 만들어줘", "보고서 만들어줘", "회의 보고서 생성해줘"
+    - report_guide: 특정 파일 포맷 보고서 요청 (Excel·PDF·HTML·다운로드 등).
         예) "Excel로 저장", "HTML 보고서", "보고서 다운로드", "PDF로 내보내기", "회의록 파일로 저장"
     - agent: 특정 문서/자료 검색, 외부 정보 조회, 일정 관련, 특정 주제에 대한 질문 등 그 외 모든 입력.
-        예) "AI 브리프 내용 요약해줘", "지난 회의에서 결정된 거 알려줘", "~~문서 찾아줘"                         
-                                                                                                                        
+        예) "AI 브리프 내용 요약해줘", "지난 회의에서 결정된 거 알려줘", "~~문서 찾아줘"
+     
+
     입력: {state['user_question']} 
     """
     result = await llm.ainvoke(prompt)
-    function_type = result.content.strip().lower()                                                                     
+    function_type = result.content.strip().lower()
     # LLM이 예상 밖의 값을 반환하면 agent로 fallback
-    if function_type not in ("summary", "past_summary", "quick_report", "report_guide", "agent"):                                                                      
+    if function_type not in (
+        "summary",
+        "past_summary",
+        "quick_report",
+        "report_guide",
+        "agent",
+    ):
         function_type = "agent"
     return {"function_type": function_type}
+
 
 def get_collection(workspace_id: str):
     f"""
@@ -1039,5 +953,5 @@ def get_collection(workspace_id: str):
     return chroma_client.get_or_create_collection(
         name=f"ws_{workspace_id}_docs",
         embedding_function=_openai_ef,
-        metadata={"workspace_id": workspace_id}
+        metadata={"workspace_id": workspace_id},
     )

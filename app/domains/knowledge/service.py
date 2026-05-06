@@ -8,6 +8,7 @@ future knowledge-base API and keep the merged code importable.
 
 from __future__ import annotations
 
+from enum import nonmember
 import io, re, os, subprocess, tempfile, asyncio
 import json as _json
 from datetime import datetime
@@ -19,6 +20,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from app.core.config import settings
 from app.domains.knowledge.agent_utils import chroma_client, get_collection
 from app.utils.time_utils import now_kst
+from app.domains.action.models import Priority
 
 _async_openai = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
@@ -28,13 +30,16 @@ _splitter = RecursiveCharacterTextSplitter(
     separators=["\n\n", "\n", "。", ". ", " ", ""],
 )
 
+
 def _collection_name(workspace_id: int) -> str:
     """Return the workspace-scoped Chroma collection name."""
     return f"ws_{workspace_id}_docs"
 
+
 def _extract_pdf(file_bytes: bytes) -> str:
     """Extract plain text from a PDF file."""
     from pypdf import PdfReader
+
     reader = PdfReader(io.BytesIO(file_bytes))
     pages = []
     for page in reader.pages:
@@ -42,6 +47,7 @@ def _extract_pdf(file_bytes: bytes) -> str:
         if text and text.strip():
             pages.append(text.strip())
     return "\n\n".join(pages)
+
 
 def _extract_pptx(file_bytes: bytes) -> str:
     """
@@ -52,6 +58,7 @@ def _extract_pptx(file_bytes: bytes) -> str:
     차트/이미지 속 텍스트는 추출 불가 -> vision 도메인 OCR 필요.
     """
     from pptx import Presentation
+
     prs = Presentation(io.BytesIO(file_bytes))
     slides = []
     for i, slide in enumerate(prs.slides, 1):
@@ -63,8 +70,9 @@ def _extract_pptx(file_bytes: bytes) -> str:
                     if line:
                         texts.append(line)
         if texts:
-            slides.append(f"[슬라이드 (i)]\n" + "\n".join(texts))
+            slides.append(f"[슬라이드 {i}]\n" + "\n".join(texts))
     return "\n\n".join(slides)
+
 
 def _extract_html(file_bytes: bytes) -> str:
     """
@@ -74,11 +82,13 @@ def _extract_html(file_bytes: bytes) -> str:
     연속 줄바꿈 3개 이상 -> 2개로 압축해 빈 청크 방지.
     """
     from bs4 import BeautifulSoup
+
     soup = BeautifulSoup(file_bytes, "html.parser")
     for tag in soup(["script", "style", "nav", "header", "footer"]):
         tag.decompose()
     text = soup.get_text(separator="\n")
-    return re.sub(fr"\n{3,}", "\n\n", text).strip()
+    return re.sub(rf"\n{3,}", "\n\n", text).strip()
+
 
 def _extract_md(file_bytes: bytes) -> str:
     """
@@ -88,7 +98,8 @@ def _extract_md(file_bytes: bytes) -> str:
     마크다운 문법 기호(#, *, `, -)는 의미 있는 컨텍스트이므로 제거하지 않음.
     LLM이 마크다운을 이해하므로 오히려 구조 보존이 검색 품질에 유리.
     """
-    return file_bytes.decode('utf-8', errors='replace')
+    return file_bytes.decode("utf-8", errors="replace")
+
 
 def _extract_docx(file_bytes: bytes) -> str:
     """
@@ -101,6 +112,7 @@ def _extract_docx(file_bytes: bytes) -> str:
     주의: 구형 .doc 포맷은 python-docx 미지원 -> 422 반환
     """
     from docx import Document
+
     doc = Document(io.BytesIO(file_bytes))
     parts = []
 
@@ -113,11 +125,14 @@ def _extract_docx(file_bytes: bytes) -> str:
     # 표 추출 - 행 단위로 셀을 탭으로 이어붙임
     for table in doc.tables:
         for row in table.rows:
-            row_text = "\t".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+            row_text = "\t".join(
+                cell.text.strip() for cell in row.cells if cell.text.strip()
+            )
             if row_text:
                 parts.append(row_text)
 
     return "\n\n".join(parts)
+
 
 def _extrac_doc_legacy(file_bytes: bytes) -> str:
     """
@@ -134,16 +149,27 @@ def _extrac_doc_legacy(file_bytes: bytes) -> str:
             f.write(file_bytes)
 
         result = subprocess.run(
-            ["libreoffice", "--headless", "--convert-to", "docx", "--outdir", tmpdir, doc_path],
+            [
+                "libreoffice",
+                "--headless",
+                "--convert-to",
+                "docx",
+                "--outdir",
+                tmpdir,
+                doc_path,
+            ],
             capture_output=True,
             timeout=30,
         )
         if result.returncode != 0:
-            raise ValueError("구형 .doc 변환 실패. 서버에 LibreOffice가 설치되어 있는지 확인하세요.")
+            raise ValueError(
+                "구형 .doc 변환 실패. 서버에 LibreOffice가 설치되어 있는지 확인하세요."
+            )
 
         docx_path = os.path.join(tmpdir, "input-docx")
         with open(docx_path, "rb") as f:
             return _extract_docx(f.read())
+
 
 def _extract_xlsx(file_bytes: bytes) -> str:
     """
@@ -179,16 +205,26 @@ def _extract_xlsx(file_bytes: bytes) -> str:
                 with open(xlsx_path, "wb") as f:
                     f.write(file_bytes)
                 subprocess.run(
-                    ["libreoffice", "--headless", "--convert-to", "xlsx", "--outdir", tmpdir, xlsx_path],
-                    capture_output=True, timeout=30
+                    [
+                        "libreoffice",
+                        "--headless",
+                        "--convert-to",
+                        "xlsx",
+                        "--outdir",
+                        tmpdir,
+                        xlsx_path,
+                    ],
+                    capture_output=True,
+                    timeout=30,
                 )
                 out_path = os.path.join(tmpdir, "input.xlsx")
                 with open(out_path, "rb") as f:
                     text = _read(f.read())
         except Exception:
-            pass # LibreOffice 없으면 원래 결과 그대로 사용
+            pass  # LibreOffice 없으면 원래 결과 그대로 사용
 
     return text
+
 
 def _extract_xls_legacy(file_bytes: bytes) -> str:
     """
@@ -205,16 +241,27 @@ def _extract_xls_legacy(file_bytes: bytes) -> str:
             f.write(file_bytes)
 
         result = subprocess.run(
-            ["libreoffice", "--headless", "--convert-to", "xlsx", "--outdir", tmpdir, xls_path],
+            [
+                "libreoffice",
+                "--headless",
+                "--convert-to",
+                "xlsx",
+                "--outdir",
+                tmpdir,
+                xls_path,
+            ],
             capture_output=True,
             timeout=30,
         )
         if result.returncode != 0:
-            raise ValueError("구형 .xls 변환 실패. 서버에 LibreOffice가 설치되어 있는지 확인하세요.")
+            raise ValueError(
+                "구형 .xls 변환 실패. 서버에 LibreOffice가 설치되어 있는지 확인하세요."
+            )
 
         xlsx_path = os.path.join(tmpdir, "input.xlsx")
         with open(xlsx_path, "rb") as f:
             return _extract_xlsx(f.read())
+
 
 async def _embed_all(texts: list[str]) -> list[list[float]]:
     """
@@ -223,15 +270,18 @@ async def _embed_all(texts: list[str]) -> list[list[float]]:
     ChromaDB EF의 순차 처리 대비 10배 이상 빠름
     """
     BATCH = 2048
-    batches = [texts[i:i+BATCH] for i in range(0, len(texts), BATCH)]
-    responses = await asyncio.gather(*[
-        _async_openai.embeddings.create(
-            model="text-embedding-3-small",
-            input=batch,
-        )
-        for batch in batches
-    ])
+    batches = [texts[i : i + BATCH] for i in range(0, len(texts), BATCH)]
+    responses = await asyncio.gather(
+        *[
+            _async_openai.embeddings.create(
+                model="text-embedding-3-small",
+                input=batch,
+            )
+            for batch in batches
+        ]
+    )
     return [item.embedding for resp in responses for item in resp.data]
+
 
 async def ingest_document(
     workspace_id: int,
@@ -260,15 +310,15 @@ async def ingest_document(
     """
     # 1단계: 텍스트 추출
     extractors = {
-        "pdf":  _extract_pdf,                                                                                        
-        "pptx": _extract_pptx,                                                                                       
-        "html": _extract_html,                                                                                     
-        "md":   _extract_md,                                                                                         
-        "docx": _extract_docx,                                                                                     
-        "doc":  _extrac_doc_legacy,                                                                                
+        "pdf": _extract_pdf,
+        "pptx": _extract_pptx,
+        "html": _extract_html,
+        "md": _extract_md,
+        "docx": _extract_docx,
+        "doc": _extrac_doc_legacy,
         "xlsx": _extract_xlsx,
-        "xls":  _extract_xls_legacy,
-    } 
+        "xls": _extract_xls_legacy,
+    }
     extractor = extractors.get(file_type)
     if not extractor:
         raise ValueError(f"Unsupported file type: {file_type}")
@@ -310,9 +360,12 @@ async def ingest_document(
     #   add()는 동일 ID 존재 시 에러 → 재업로드 불가
     #   upsert()는 있으면 덮어쓰고 없으면 삽입 → 재업로드 안전
     collection = get_collection(workspace_id)
-    collection.upsert(documents=chunks, embeddings=embeddings, ids=ids, metadatas=metadatas)
+    collection.upsert(
+        documents=chunks, embeddings=embeddings, ids=ids, metadatas=metadatas
+    )
 
     return {"doc_id": doc_id, "chunks": len(chunks), "title": title}
+
 
 def _extract_wbs_json(content: str) -> str:
     """
@@ -322,7 +375,7 @@ def _extract_wbs_json(content: str) -> str:
     try:
         wbs = _json.loads(content)
     except Exception:
-        return content # JSON 파싱 실패 시 raw 반환
+        return content  # JSON 파싱 실패 시 raw 반환
     lines = []
     for epic in wbs.get("epics", []):
         lines.append(f"[에픽] {epic.get("title", '')}")
@@ -331,14 +384,17 @@ def _extract_wbs_json(content: str) -> str:
             title = task.get("title", "")
             priority = task.get("priority", "")
             deadline = task.get("due_date", "")
-            lines.append(f" - {title} / 담당: {assignee} / 우선순위: {priority} / 마감: {deadline}")
+            lines.append(
+                f" - {title} / 담당: {assignee} / 우선순위: {priority} / 마감: {deadline}"
+            )
     return "\n".join(lines)
+
 
 async def ingest_db_content(
     workspace_id: int,
-    doc_id: str,     # "minutes_{meeting_id}" | "report_{report_id}"
+    doc_id: str,  # "minutes_{meeting_id}" | "report_{report_id}"
     content: str,
-    format: str,    # "markdown" | "html" | "wbs"  (excel은 content 없으므로 호출 안 함)
+    format: str,  # "markdown" | "html" | "wbs"  (excel은 content 없으므로 호출 안 함)
     title: str = "",
     extra_metadata: dict = {},
 ) -> dict:
@@ -381,8 +437,11 @@ async def ingest_db_content(
     ]
 
     collection = get_collection(workspace_id)
-    collection.upsert(documents=chunks, embeddings=embeddings, ids=ids, metadats=metadatas)
+    collection.upsert(
+        documents=chunks, embeddings=embeddings, ids=ids, metadatas=metadatas
+    )
     return {"doc_id": doc_id, "chunks": len(chunks)}
+
 
 async def analyze_document_for_display(
     workspace_id: int,
@@ -397,14 +456,14 @@ async def analyze_document_for_display(
     초과 시: Map-Reduce (청크별 미니 요약 → 최종 요약)
     """
     extractors = {
-        "pdf":  _extract_pdf,                                                                                        
-        "pptx": _extract_pptx,                                                                                       
-        "html": _extract_html,                                                                                     
-        "md":   _extract_md,                                                                                         
-        "docx": _extract_docx,                                                                                     
-        "doc":  _extrac_doc_legacy,                                                                                
+        "pdf": _extract_pdf,
+        "pptx": _extract_pptx,
+        "html": _extract_html,
+        "md": _extract_md,
+        "docx": _extract_docx,
+        "doc": _extrac_doc_legacy,
         "xlsx": _extract_xlsx,
-        "xls":  _extract_xls_legacy,
+        "xls": _extract_xls_legacy,
     }.get(file_type)
     if not extractors:
         raise ValueError(f"Unsupported file type: {file_type}")
@@ -421,22 +480,30 @@ async def analyze_document_for_display(
     else:
         # Map-Reduce: 청크별 미니 요약 -> 합치기
         chunks = _splitter.split_text(raw_text)
-        mini_responses = await asyncio.gather(*[
-            _async_openai.chat.completions.create(
-                model="gpt-5.4-mini",
-                messages=[{"role": "user", "content": f"다음 내용에서 중요한 정보를 빠짐없이 보존하며 핵심만 간결하게 정리하세요:\n{chunk}"}]
-            )
-            for chunk in chunks
-        ])
+        mini_responses = await asyncio.gather(
+            *[
+                _async_openai.chat.completions.create(
+                    model="gpt-5.4-mini",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": f"다음 내용에서 중요한 정보를 빠짐없이 보존하며 핵심만 간결하게 정리하세요:\n{chunk}",
+                        }
+                    ],
+                )
+                for chunk in chunks
+            ]
+        )
         content_for_llm = "\n\n".join(
             r.choices[0].message.content for r in mini_responses
         )
 
     result = await _async_openai.chat.completions.create(
         model="gpt-5.4-mini",
-        messages=[{
-            "role": "user",
-            "content": f"""
+        messages=[
+            {
+                "role": "user",
+                "content": f"""
             다음은 문서 전체를 섹션별로 정리한 내용이다. 전체 문서를 바탕으로 분석해 JSON으로 답하세요.
 
             문서용: {title or filename}
@@ -447,9 +514,10 @@ async def analyze_document_for_display(
                 "summary": "문서 전체의 목적과 주요 내용을 5-7문장으로 요약",
                 "key_points": ["핵심 포인트 (최대 7개, 구체적으로)"]
             }}
-            """
-        }],
-        response_format={"type": "json_object"}
+            """,
+            }
+        ],
+        response_format={"type": "json_object"},
     )
 
     try:
@@ -463,3 +531,157 @@ async def analyze_document_for_display(
         "summary": parsed.get("summary", ""),
         "key_points": parsed.get("key_points", []),
     }
+
+
+async def process_meeting_end(meeting_id: int, workspace_id: int) -> None:
+    """
+    회의 종료 후리 (BackgroundTask):
+    utterances(MongoDB) → LLM → decisions + wbs_tasks + summary → MySQL 저장.
+    회의 종료 버튼 한 번으로 모든 데이터가 DB에 적재된다.
+    """
+    from motor.motor_asyncio import AsyncIOMotorClient
+    from langchain_openai import ChatOpenAI
+    from sqlalchemy.orm import Session
+    import json, re
+    from datetime import date
+
+    from app.core.config import settings
+    from app.infra.database.session import SessionLocal
+    from app.domains.intelligence.models import Decision, MeetingMinute, MinuteStatus
+    from app.domains.action.models import WbsEpic, WbsTask
+    from app.utils.time_utils import now_kst
+
+    mongo_db = AsyncIOMotorClient(settings.MONGODB_URL)["meeting_assistant"]
+    db = SessionLocal()
+    try:
+        # -- utterances 조회 --
+        ctx_doc = await mongo_db["utterances"].find_one(
+            {"meeting_id": meeting_id, "workspace_id": workspace_id}
+        )
+        if not ctx_doc or not ctx_doc.get("utterances"):
+            return
+
+        transcript_text = "\n".join(
+            f"[{u.get('speaker_label', '?')}] {u.get('content', '')}"
+            for u in ctx_doc["utterances"]
+        )
+
+        # -- LLM으로 decisions + action_items + 요약 한 번에 추출 --
+        llm = ChatOpenAI(model="gpt-4o-mini", api_key=settings.OPENAI_API_KEY)
+        prompt = f"""
+        다음 회의 발화에서 구조화된 정보를 추출하세요.
+
+        [발화 내용]
+        {transcript_text}
+
+        액션 아이템 우선순위(priority) 판단 기준:
+        - high: 결정 사항과 직접 연결 / 다른 액션의 선행 조건 / "반드시·꼭·최우선" 발화 / 다수 인원 영향
+        - normal: 그 외
+
+        긴급도(urgency) 판단 기준:
+        - urgent: 기한 3일 이내 / 다음 회의 전 완료 필요 / "빨리·즉시·오늘까지·ASAP·as soon as possible" 발화
+        - normal: 기한 4~7일 이내
+        - low: 기한 7일 초과 또는 미언급
+
+        반드시 아래 JSON 형식으로만 답변하세요.
+        {{
+            "title": "회의 핵심 주제 (한 줄)",
+            "key_points": ["핵심 논의 내용 1", ...],
+            "decisions": [
+                {{"content": "결정 사항 내용"}}
+            ],
+            "wbs_tasks": [
+                {{
+                    "order": 0,
+                    "title": "할 일 제목 (한 줄, 30자 이내)",
+                    "content": "할 일 상세 내용 (담당자·기한·배경 포함, 없으면 null)",
+                    "assignee_name": "담당자 이름 or null",
+                    "due_date": "YYYY-MM-DD or null",
+                    "priority": "low|medium|high|critical",
+                    "urgency": "urgent|normal|low"
+                }}
+            ],
+            "hallucination_flags": ["근거 불충분 항목 설명 (없으면 빈 배열)"]
+        }}
+        """
+        result = await llm.ainvoke(prompt)
+        json_match = re.search(r"\{.*\}", result.content, re.DOTALL)
+        try:
+            extracted = json.loads(json_match.group()) if json_match else {}
+        except json.JSONDecodeError:
+            extracted = {}
+
+        now = now_kst().replace(tzinfo=None)
+
+        # -- decisions -> MySQL --
+        for d in extracted.get("decisions", []):
+            db.add(
+                Decision(
+                    meeting_id=meeting_id,
+                    content=d["content"],
+                    speaker_id=None,
+                    detected_at=now,
+                    is_confirmed=False,
+                )
+            )
+
+        # -- wbs_tasks -> wbs_epics _ wbs_tasks -> MySQL
+        wbs_tasks = extracted.get("wbs_tasks", [])
+        if wbs_tasks:
+            epic = WbsEpic(
+                meeting_id=meeting_id,
+                title="회의 액션 아이템",
+                order_index=0,
+            )
+            db.add(epic)
+            db.flush()
+
+            for item in wbs_tasks:
+                due = None
+                if item.get("due_date"):
+                    try:
+                        due = date.fromisoformat(item["due_date"])
+                    except Exception:
+                        pass
+
+                # priority는 Priority enum으로 변환, 범위 밖 값이면 medium 기본값
+                try:
+                    priority = Priority(item.get("priority", "medium"))
+                except ValueError:
+                    priority = Priority.medium
+
+                db.add(
+                    WbsTask(
+                        epic_id=epic.id,
+                        title=item.get("title") or item.get("content", "")[:200],
+                        content=item.get("content"),
+                        assignee_name=item.get("assignee_name"),
+                        priority=priority,
+                        urgency=item.get("urgency", "normal"),
+                        due_date=due,
+                        order_index=item.get("order", 0),
+                    )
+                )
+
+        # summary만 meeting_minutes에 저장 (decisions/wbs_tasks는 별도 테이블에 있으므로 제외)
+        summary_only = {
+            "title": extracted.get("title", ""),
+            "key_points": extracted.get("key_points", []),
+            "hallucination_flags": extracted.get("hallucination_flags", []),
+        }
+        minute = (
+            db.query(MeetingMinute)
+            .filter(MeetingMinute.meeting_id == meeting_id)
+            .one_or_none()
+        )
+        if minute is None:
+            minute = MeetingMinute(meeting_id=meeting_id, status=MinuteStatus.draft)
+            db.add(minute)
+        minute.summary = json.dumps(summary_only, ensure_ascii=False)
+
+        db.commit()
+
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()

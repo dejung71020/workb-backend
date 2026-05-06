@@ -8,6 +8,9 @@ class SharedState(TypedDict):
     current_scenario: str        # 현재 진행 중인 시나리오 ID (SCN-001 등)
     workspace_id: int            # 웹 온보딩에서 생성된 워크스페이스 고유 ID
     meeting_id: int              # 현재 세션의 회의 ID (기록 열람 및 저장용)
+    user_id: int                 # 현재 로그인 사용자 ID
+    is_admin: bool               # 워크스페이스 admin 여부 (WorkspaceMember.role == admin)
+    session_id: str
     
     # --- 2. Meeting 도메인 (Scribe) ---
     # 실시간 발화 스트림 및 화자 정보를 누적 저장
@@ -27,6 +30,7 @@ class SharedState(TypedDict):
     # --- 4. Intelligence 도메인 (Analyst) ---
     summary: dict                 # 회의 전체 요약본 (초안 및 최종본)
     decisions: List[str]         # 도출된 주요 결정사항 및 미결 이슈 목록
+    hallucination_flags: List[str]   # 요약/보고서에서 근거 불충분으로 검증 필요한 항목
     previous_context: str        # [회의 전] AI가 정리한 이전 회의 맥락 데이터
     
     # --- 5. Vision 도메인 (Interpreter) ---

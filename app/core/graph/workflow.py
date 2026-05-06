@@ -4,7 +4,7 @@ from langgraph.graph import StateGraph, END
 from app.core.graph.state import SharedState
 from app.core.graph.supervisor import supervisor_node
 from app.domains.knowledge.agent_utils import (
-    classify_intent, knowledge_node, summary_node, past_summary_node,
+    classify_intent, knowledge_node, past_summary_node,
     quick_report_node, report_guide_node,
 )
 
@@ -60,7 +60,6 @@ app_graph = workflow.compile()
 knowledge_graph = StateGraph(SharedState)
 knowledge_graph.add_node("classifier", classify_intent)
 knowledge_graph.add_node("knowledge_agent", knowledge_node)
-knowledge_graph.add_node("summary", summary_node)
 knowledge_graph.add_node("past_summary", past_summary_node)
 knowledge_graph.add_node("quick_report", quick_report_node)
 knowledge_graph.add_node("report_guide", report_guide_node)
@@ -71,7 +70,6 @@ knowledge_graph.add_conditional_edges(
     # state["function_type"] 값에 따라 해당 노드로 이동
     lambda state: state["function_type"],
     {
-        "summary": "summary",
         "past_summary": "past_summary",
         "quick_report": "quick_report",
         "report_guide": "report_guide",
@@ -79,7 +77,6 @@ knowledge_graph.add_conditional_edges(
     }
 )
 knowledge_graph.add_edge("knowledge_agent", END)
-knowledge_graph.add_edge("summary", END)
 knowledge_graph.add_edge("past_summary", END)
 knowledge_graph.add_edge("quick_report", END)
 knowledge_graph.add_edge("report_guide", END)
