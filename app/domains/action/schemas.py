@@ -110,6 +110,7 @@ class WbsTaskResponse(BaseModel):
     id:             int
     epic_id:        int
     title:          str
+    content:        Optional[str] = None
     assignee_id:    Optional[int] = None
     assignee_name:  Optional[str] = None
     priority:       str
@@ -146,6 +147,7 @@ class WbsEpicPatchRequest(BaseModel):
 class WbsTaskCreateRequest(BaseModel):
     epic_id:     int
     title:       str
+    content:     Optional[str] = None
     assignee_id: Optional[int] = None
     assignee_name: Optional[str] = None
     priority:    Optional[str] = "medium"
@@ -156,6 +158,7 @@ class WbsTaskCreateRequest(BaseModel):
 class WbsTaskPatchRequest(BaseModel):
     epic_id:     Optional[int] = None
     title:       Optional[str] = None
+    content:     Optional[str] = None
     assignee_id: Optional[int] = None
     assignee_name: Optional[str] = None
     priority:    Optional[str] = None
@@ -206,3 +209,26 @@ class JiraPreviewResponse(BaseModel):
     task_create:  int
     task_update:  int
     total:        int
+
+class JiraNotifyRequest(BaseModel):
+    services: List[str]
+    created: int = 0
+    updated: int = 0
+    
+# ===============================================================
+# 다중 export
+# ===============================================================
+class BatchExportRequest(BaseModel):
+    services: List[str]
+    slack_channel_id: Optional[str] = None
+    include_action_items: bool = True
+    include_reports: bool = False
+
+class BatchExportServiceResult(BaseModel):
+    status: str
+    message: str
+    error_code: Optional[str] = None
+
+class BatchExportResponse(BaseModel):
+    overall_status: str
+    results: dict[str, BatchExportServiceResult]

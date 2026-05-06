@@ -71,6 +71,14 @@ class WbsTask(Base):
     updated_at:     Mapped[datetime]    = mapped_column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
     order_index:    Mapped[int]         = mapped_column(Integer, default=0)
 
+class WbsSnapshot(Base):
+    __tablename__ = "wbs_snapshots"
+    
+    id:             Mapped[int] =       mapped_column(Integer, primary_key=True, autoincrement=True)
+    meeting_id:     Mapped[int] =       mapped_column(Integer, ForeignKey("meetings.id"), nullable=False, unique=True)
+    snapshot_data:  Mapped[str] =       mapped_column(Text, nullable=False) #JSON
+    created_at:     Mapped[datetime] = mapped_column(DateTime, default=func.now(), nullable=False)
+
 
 class Report(Base):
     __tablename__ = "reports"

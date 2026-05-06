@@ -19,7 +19,7 @@ from app.domains.user.models import User, UserDeviceSetting
 from app.domains.workspace.models import Workspace, InviteCode, WorkspaceMember, DeviceSetting, Department
 from app.domains.meeting.models import Meeting, MeetingParticipant, SpeakerProfile
 from app.domains.intelligence.models import Decision, MeetingMinute, MinutePhoto, ReviewRequest
-from app.domains.action.models import ActionItem, WbsEpic, WbsTask, Report
+from app.domains.action.models import ActionItem, WbsEpic, WbsTask, Report, WbsSnapshot
 from app.domains.integration.models import Integration
 from app.domains.notification.models import Notification
 

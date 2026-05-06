@@ -20,6 +20,55 @@ _PRIORITY_MAP = {
     "medium":   "Medium",
     "low":      "Low",
 }
+
+async def _clear_stale_jira_ids(
+        db: Session,
+        client: "JiraClient",
+        epics: list,
+        task_ids: Optional[list] = None,
+) -> None:
+    """
+    JIRA에서 삭제된 에픽 태스크를 DB에 갱신시킨다.
+    """
+    epic_keys = [e.jira_epic_id for e in epics if e.jira_epic_id]
+
+    all_tasks = []
+    for e in epics:
+        tasks = repository.get_wbs_tasks_by_epic(db, e.id)
+        if task_ids is not None:
+            tasks = [t for t in tasks if t.id in task_ids]
+        all_tasks.extend(tasks)
+    
+    task_keys = [t.jira_issue_id for t in all_tasks if t.jira_issue_id]
+
+    all_keys = epic_keys + task_keys
+    if not all_keys:
+        return
+    
+    try:
+        live_issues = await client.search_by_jql(
+            f"issueKey in ({', '.join(all_keys)})",
+            fields="summary",
+        )
+        live_keys = {i['key'] for i in live_issues}
+    
+    except Exception as e:
+        return # 조회 실패 시 기존 동작
+    
+    for epic in epics:
+        # 지라에서 삭제된 에픽을 확인
+        if epic.jira_epic_id and epic.jira_epic_id not in live_keys:
+            logger.info(f"Epic JIRA ID stale, 초기화 : {epic.jira_epic_id}")
+            repository.update_epic_jira_id(db, epic.id, None)
+            epic.jira_epic_id = None
+    
+    for task in all_tasks:
+        # 지라에서 삭제된 태스크를 확인
+        if task.jira_issue_id and task.jira_issue_id not in live_keys:
+            logger.info(f"Task JIRA ID stale, 초기화 : {task.jira_issue_id}")
+            repository.update_task_jira_id(db, task.id, None)
+            epic.jira_issue_id = None
+
 async def export_jira(
         db: Session,
         workspace_id: int,
@@ -42,6 +91,9 @@ async def export_jira(
     epics = repository.get_wbs_epics(db, meeting_id)
     if epic_ids is not None:
         epics = [e for e in epics if e.id in epic_ids]
+
+    # JIRA에서 삭제된 ID 정리
+    await _clear_stale_jira_ids(db, client, epics, task_ids)
     
     total_tasks = sum(
         len([t for t in repository.get_wbs_tasks_by_epic(db, e.id) if task_ids is None or t.id in task_ids])
@@ -263,7 +315,17 @@ async def preview_jira_export(
     epics = repository.get_wbs_epics(db, meeting_id)
     if epic_ids is not None:
         epics = [e for e in epics if e.id in epic_ids]
-
+    
+    # JIRA 연결된 경우에만 stale ID 정리 (프리뷰의 정확성을 위햬)
+    try:
+        token = await get_valid_jira_token(db, workspace_id)
+        cloud_id = get_jira_cloud_id(db, workspace_id)
+        client = JiraClient(token, cloud_id)
+        await _clear_stale_jira_ids(db, client, epics, task_ids)
+    
+    except Exception:
+        pass
+    
     result_epics = []
     epic_create = epic_update = task_create = task_update = 0
 

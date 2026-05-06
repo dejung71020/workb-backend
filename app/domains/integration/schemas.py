@@ -43,6 +43,7 @@ class SlackChannelListResponse(BaseModel):
 
 class TestIntegrationResponse(BaseModel):
     success: bool
+    status: str # "ok" | "expired" | "revoked" | "disconnected" | "error"
     message: str
 
 class GoogleCalendarEventItem(BaseModel):

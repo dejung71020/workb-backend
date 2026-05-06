@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import date
 
-from app.domains.action.models import ActionItem, WbsEpic, WbsTask, Report, ReportFormat, Priority
+from app.domains.action.models import ActionItem, WbsEpic, WbsTask, Report, ReportFormat, Priority, WbsSnapshot
 from app.domains.intelligence.models import MeetingMinute
 from app.domains.meeting.models import Meeting
 from app.domains.user.models import User
@@ -99,6 +99,7 @@ def save_wbs_task(
         db: Session,
         epic_id: int,
         title: str,
+        content: Optional[str] = None,
         assignee_id: Optional[int] = None,
         assignee_name: Optional[str] = None,
         priority: str = Priority.medium,
@@ -112,6 +113,7 @@ def save_wbs_task(
     task = WbsTask(
         epic_id=epic_id,
         title=title,
+        content=content,
         assignee_id=assignee_id,
         assignee_name=assignee_name,
         priority=priority if priority else Priority.medium,
@@ -168,6 +170,7 @@ def update_wbs_task(
         db: Session,
         task_id: int,
         title: Optional[str] = None,
+        content: Optional[str] = None,
         assignee_id: Optional[int] = None,
         assignee_name: Optional[str] = None,
         priority: Optional[str] = None,
@@ -182,6 +185,8 @@ def update_wbs_task(
         return None
     if title is not None:
         task.title = title
+    if content is not None:
+        task.content = content
     if assignee_id is not None:
         task.assignee_id = assignee_id
     if assignee_name is not None:
@@ -243,3 +248,87 @@ def reorder_wbs_tasks(db: Session, items: list) -> None:
     for item in items:
         db.query(WbsTask).filter(WbsTask.id == item['id']).update({"order_index": item['order_index']})
     db.commit()
+
+def get_wbs_snapshot(db: Session, meeting_id: int) -> Optional["WbsSnapshot"]:
+    return db.query(WbsSnapshot).filter(WbsSnapshot.meeting_id == meeting_id).first()
+
+def save_wbs_snapshot(db: Session, meeting_id: int, epic_with_tasks: list) -> None:
+    """
+    정리된 wbs_epics 와 wbs_tasks의 초깃값을 저장
+    """
+    import json
+    
+    data = {
+        "epics": [
+            {
+                "title": epic.title,
+                "order_index": epic.order_index,
+                "tasks": [
+                    {
+                        "title": t.title,
+                        "content": t.content,
+                        "assignee_id": t.assignee_id,
+                        "assignee_name": t.assignee_name,
+                        'priority': t.priority.value if hasattr(t.priority, 'value') else t.priority,
+                        'urgency': t.urgency,
+                        'due_date': str(t.due_date) if t.due_date else None,
+                        'progress': t.progress,
+                        "status": t.status.value if hasattr(t.status, "value") else t.status,
+                        "order_index": t.order_index,
+                    } for t in tasks
+                ],
+            } for epic, tasks in epic_with_tasks
+        ]
+    }
+
+    existing = get_wbs_snapshot(db, meeting_id)
+    if existing:
+        return
+    
+    snapshot = WbsSnapshot(meeting_id=meeting_id, snapshot_data=json.dumps(data, ensure_ascii=False))
+    db.add(snapshot)
+    db.commit()
+    
+def restore_wbs_from_snapshot(db: Session, meeting_id: int) -> bool:
+    """
+    스냅샷으로 wbs_epics 와 wbs_tasks 복원. 기존데이터 전부 삭제
+    """
+    import json
+
+    snapshot = get_wbs_snapshot(db, meeting_id)
+    if not snapshot:
+        return False
+    
+    # 태스크 삭제
+    epics = get_wbs_epics(db, meeting_id)
+    for epic in epics:
+        tasks = get_wbs_tasks_by_epic(db, epic.id)
+        for task in tasks:
+            db.delete(task)
+    db.flush()
+
+    # 에픽 삭제
+    for epic in epics:
+        db.delete(epic)
+    
+    # 스냅샷으로 재생성
+    data = json.loads(snapshot.snapshot_data)
+    for epic_data in data['epics']:
+        epic = save_wbs_epic(db, meeting_id, epic_data["title"], epic_data['order_index'])
+
+        for task_data in epic_data["tasks"]:
+            save_wbs_task(
+                db=db,
+                epic_id=epic.id,
+                title=task_data['title'],
+                content=task_data.get("content"),
+                assignee_id=task_data.get("assignee_id"),
+                assignee_name=task_data.get("assignee_name"),
+                priority=task_data.get("priority", "medium"),
+                urgency=task_data.get("urgency"),
+                due_date=task_data.get("due_date"),
+                order_index=task_data.get("order_index", 0),
+            )
+
+    db.commit()
+    return True

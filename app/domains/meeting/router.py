@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status, UploadFile, File
 from sqlalchemy.orm import Session
 
 from app.domains.workspace.deps import require_workspace_admin, require_workspace_member

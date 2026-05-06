@@ -73,15 +73,30 @@ async def export_slack(
                                 "due": str(item.due_date) if item.due_date else None,
                             })
 
-        # 7. 채널 참여
-        link_url = f"{settings.FRONTEND_URL}/meetings/{meeting_id}/minutes"
+        # 7. 딥링크 URL 생성
+        base        = settings.FRONTEND_URL
+        minutes_url = f"{base}/meetings/{meeting_id}/notes"
+        wbs_url     = f"{base}/meetings/{meeting_id}/wbs"
+
+        jira_url = None
+        jira_int = get_integration(db, workspace_id, ServiceType.jira)
+        if jira_int and jira_int.is_connected:
+            extra       = jira_int.extra_config or {}
+            site_url    = extra.get("site_url")
+            project_key = extra.get("project_key")
+            if site_url and project_key:
+                jira_url = f"https://{site_url}/browse/{project_key}"
+
+        # 8. 채널 참여 + 전송
         await slack.join_channel(channel_id)
         ts = await slack.send_minutes(
             channel_id=channel_id,
             meeting_title=meeting.title,
             minutes_text=minute.content or minute.summary or "",
             action_items=action_item_texts,
-            link_url=link_url,
+            link_url=minutes_url,
+            wbs_url=wbs_url,
+            jira_url=jira_url,
         )
         await slack.pin_message(channel_id, ts)
 
