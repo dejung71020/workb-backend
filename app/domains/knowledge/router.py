@@ -41,6 +41,20 @@ from app.domains.user.service import user_profile_context
 
 router = APIRouter()
 
+# 지원 확장자 -> file_type 매핑
+_EXT_MAP = {
+    "pdf": "pdf",
+    "pptx": "pptx",
+    "ppt": "pptx",
+    "html": "html",
+    "htm": "html",
+    "md": "md",
+    "markdown": "md",
+    "docx": "docx",
+    "doc": "doc",
+    "xlsx": "xlsx",
+    "xls": "xls"
+}
 
 @router.get(
     "/workspaces/{workspace_id}/meetings/search",
@@ -69,21 +83,6 @@ def search_workspace_meetings(
     return MeetingSearchService.search(db, workspace_id, params)
 
 
-# 지원 확장자 -> file_type 매핑
-_EXT_MAP = {
-    "pdf": "pdf",
-    "pptx": "pptx",
-    "ppt": "pptx",
-    "html": "html",
-    "htm": "html",
-    "md": "md",
-    "markdown": "md",
-    "docx": "docx",
-    "doc": "doc",
-    "xlsx": "xlsx",
-    "xls": "xls"
-}
-
 @router.post("/workspace/{workspace_id}/chatbot/message")
 async def chatbot_message(
     workspace_id: int,
@@ -92,12 +91,21 @@ async def chatbot_message(
     db: Session = Depends(get_db),
     current_user_id: int = Depends(require_workspace_member),
 ):
+    from app.domains.workspace.repository import get_workspace_membership
+    from app.domains.workspace.models import MemberRole
+
     session_id = session_id or str(uuid.uuid4())
-    meeting_id = req.meeting_id # 회의 중일 때만 전달
     user = get_user_by_id(db, current_user_id)
+
+    membership = get_workspace_membership(db, workspace_id, current_user_id)
+    is_admin = membership is not None and membership.role == MemberRole.admin
+
     state = {
-        "meeting_id": meeting_id,
+        "session_id": session_id,
+        "meeting_id": req.meeting_id,
         "workspace_id": workspace_id,
+        "user_id": current_user_id,
+        "is_admin": is_admin,
         "user_profile": user_profile_context(user) if user else {},
         "user_question": req.message,
         "past_meeting_ids": req.past_meeting_ids,
@@ -106,9 +114,9 @@ async def chatbot_message(
     }
     result = await knowledge_app.ainvoke(state)
 
-    await repository.save_chat_log(workspace_id, session_id, "user", req.message, "")
+    await repository.save_chat_log(workspace_id, current_user_id, session_id, "user", req.message, "")
     await repository.save_chat_log(
-        workspace_id, session_id, "assistant",
+        workspace_id, current_user_id, session_id, "assistant",
         result["chat_response"], result["function_type"]
     )
 
@@ -116,7 +124,10 @@ async def chatbot_message(
         session_id=session_id,
         function_type=result["function_type"],
         answer=result["chat_response"],
-        result={"sources": result.get("web_sources", [])},
+        result={
+            "sources": result.get("web_sources", []),
+            "action_button": result.get("action_button"),
+        },
         timestamp=now_kst()
     )
 
@@ -133,6 +144,55 @@ async def chatbot_history(workspace_id: int, session_id: str):
             ) for log in logs
         ]
     )
+
+@router.get("/workspace/{workspace_id}/past_meetings", response_model=PastMeetingsResponse)
+async def get_past_meetings_endpont(
+    workspace_id: int,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(require_workspace_member),
+):
+    from app.domains.workspace.repository import get_workspace_membership
+    from app.domains.workspace.models import MemberRole
+
+    membership = get_workspace_membership(db, workspace_id. current_user_id)
+    is_admin = membership is not None and membership.role == MemberRole.admin
+    filter_user_id = None if is_admin else current_user_id
+
+    meetings = await repository.get_past_meetings(workspace_id, user_id=filter_user_id)
+    return PastMeetingsResponse(
+        meetings=[PastMeetingItem(**m) for m in meetings],
+        total=len(meetings),
+    )
+    
+
+@router.post("/workspace/{workspace_id}/chatbot/sessions")
+async def create_chatbot_session(
+    workspace_id: int,
+    _memeber: int = Depends(require_workspace_member)
+):
+    """새 대화 시작 — 새 session_id 발급."""
+    return {"session_id": str(uuid.uuid4())}
+
+
+@router.get("/workspace/{workspace_id}/chatbot/sessions")
+async def list_chatbot_sessions(
+    workspace_id: int,
+    _memeber: int = Depends(require_workspace_member),
+):
+    """전 대화 목록 조회."""
+    sessions = await repository.get_chat_sessions(workspace_id)
+    return {"sessions": sessions}
+
+@router.delete("/workspace/{workspace_id}/chatbot/sessions/{session_id}")
+async def delete_chatbot_session(
+    workspace_id: int,
+    session_id: str,
+    _member: int = Depends(require_workspace_member),
+):
+    deleted = await repository.delete_chat_session(workspace_id, session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
+    return {"status": "deleted"}
 
 @router.post("/workspace/{workspace_id}/chatbot/quick_report")
 async def chatbot_report(workspace_id: int, req: ChatbotReportRequest, background_tasks: BackgroundTasks,):
@@ -156,13 +216,6 @@ async def _run_quick_report(workspace_id: int, state: dict):
     except Exception:
         pass  # 백그라운드 실패는 조용히 무시
 
-@router.get("/workspace/{workspace_id}/past_meetings", response_model=PastMeetingsResponse)
-async def get_past_meetings(workspace_id: int):
-    meetings = await repository.get_past_meetings(workspace_id)
-    return PastMeetingsResponse(
-        meetings=[PastMeetingItem(**m) for m in meetings],
-        total=len(meetings),
-    )
 
 @router.post("/workspace/{workspace_id}/documents", response_model=DocumentUploadResponse)
 async def upload_document(

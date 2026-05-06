@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, background, status, UploadFile, File
 from sqlalchemy.orm import Session
 
 from app.domains.workspace.deps import require_workspace_admin, require_workspace_member
@@ -30,6 +30,7 @@ from app.domains.meeting.service import (
     MinutePhotoService,
     SpeakerProfileService,
 )
+from backend.app.domains.knowledge.service import process_meeting_end
 
 router = APIRouter()
 
@@ -206,11 +207,13 @@ def start_workspace_meeting(
 def end_workspace_meeting(
     workspace_id: int,
     meeting_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _member: int = Depends(require_workspace_member),
 ) -> dict:
     """회의를 완료로 전환합니다."""
     MeetingLifecycleService.end_meeting(db, workspace_id, meeting_id)
+    background_tasks.add_task(process_meeting_end, meeting_id, workspace_id)
     return {"status": "ok"}
 
 
