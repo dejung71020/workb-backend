@@ -110,6 +110,7 @@ class WbsTaskResponse(BaseModel):
     id:             int
     epic_id:        int
     title:          str
+    content:        Optional[str] = None
     assignee_id:    Optional[int] = None
     assignee_name:  Optional[str] = None
     priority:       str
@@ -146,6 +147,7 @@ class WbsEpicPatchRequest(BaseModel):
 class WbsTaskCreateRequest(BaseModel):
     epic_id:     int
     title:       str
+    content:     Optional[str] = None
     assignee_id: Optional[int] = None
     assignee_name: Optional[str] = None
     priority:    Optional[str] = "medium"
@@ -156,6 +158,7 @@ class WbsTaskCreateRequest(BaseModel):
 class WbsTaskPatchRequest(BaseModel):
     epic_id:     Optional[int] = None
     title:       Optional[str] = None
+    content:     Optional[str] = None
     assignee_id: Optional[int] = None
     assignee_name: Optional[str] = None
     priority:    Optional[str] = None

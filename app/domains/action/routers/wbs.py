@@ -11,7 +11,6 @@ from app.domains.action.schemas import (
     ExportResponse, WbsMoveTaskRequest,
     WbsReorderRequest
 )
-from app.domains.action.services.wbs_builder import build_wbs_template
 from app.domains.user.dependencies import require_workspace_admin, require_workspace_member
 
 # http://localhost:8000/api/v1/actions/meetings/{meeting_id}/wbs
@@ -22,6 +21,7 @@ def _task_to_response(t, epic_id: int) -> WbsTaskResponse:
         id=t.id,
         epic_id=epic_id,
         title=t.title,
+        content=t.content,
         assignee_id=t.assignee_id,
         assignee_name=t.assignee_name,
         priority=t.priority.value if hasattr(t.priority, 'value') else t.priority,
@@ -41,25 +41,19 @@ async def get_wbs(
         _member = Depends(require_workspace_member),
 ):
     epics = repository.get_wbs_epics(db, meeting_id)
+    epics_with_tasks = [(epic, repository.get_wbs_tasks_by_epic(db, epic.id)) for epic in epics]
+
+    # 스냅샷 없는 경우 최초 저장
+    if epics_with_tasks and not repository.get_wbs_snapshot(db, meeting_id):
+        repository.save_wbs_snapshot(db, meeting_id, epics_with_tasks)
+
     result = []
-    for epic in epics:
-        tasks = repository.get_wbs_tasks_by_epic(db, epic.id)
+    for epic, tasks in epics_with_tasks:
         result.append(WbsEpicResponse(
             id=epic.id,
             title=epic.title,
             order_index=epic.order_index,
-            tasks=[WbsTaskResponse(
-                id=t.id,
-                epic_id=epic.id,
-                title=t.title,
-                assignee_id=t.assignee_id,
-                assignee_name=t.assignee_name,
-                priority=t.priority.value if hasattr(t.priority, 'value') else t.priority,
-                due_date=t.due_date,
-                progress=t.progress,
-                status=t.status.value if hasattr(t.status, 'value') else t.status,
-                jira_issue_id=t.jira_issue_id,
-            ) for t in tasks]
+            tasks=[_task_to_response(t, epic.id) for t in tasks]
         ))
     return WbsPageResponse(epics=result)
     
@@ -70,8 +64,12 @@ async def generate_wbs(
     db: Session = Depends(get_db),
     _admin = Depends(require_workspace_admin),
 ):
-    await build_wbs_template(db, meeting_id)
+    restored = repository.restore_wbs_from_snapshot(db, meeting_id)
+    if not restored:
+        raise HTTPException(status_code=404, detail="스냅샷이 없습니다. WBS 데이터가 존재하지 않습니다.")
+    
     epics = repository.get_wbs_epics(db, meeting_id)
+    
     result = []
     for epic in epics:
         tasks = repository.get_wbs_tasks_by_epic(db, epic.id)
@@ -79,19 +77,9 @@ async def generate_wbs(
             id=epic.id,
             title=epic.title,
             order_index=epic.order_index,
-            tasks=[WbsTaskResponse(
-                id=t.id,
-                epic_id=epic.id,
-                title=t.title,
-                assignee_id=t.assignee_id,
-                assignee_name=t.assignee_name,
-                priority=t.priority.value if hasattr(t.priority, 'value') else t.priority,
-                due_date=t.due_date,
-                progress=t.progress,
-                status=t.status.value if hasattr(t.status, 'value') else t.status,
-                jira_issue_id=t.jira_issue_id,
-            ) for t in tasks]
+            tasks=[_task_to_response(t, epic.id) for t in tasks]
         ))
+        
     return WbsPageResponse(epics=result)
 
 @router.post("/wbs/epics", response_model=WbsEpicResponse)
@@ -121,12 +109,14 @@ def create_task(
     _admin = Depends(require_workspace_admin),
 ):
     task = repository.save_wbs_task(
-        db, body.epic_id, body.title,
-        body.assignee_id, body.assignee_name,
-        body.priority or "medium", 
-        body.urgency,
-        body.due_date,
-        body.order_index,
+        db=db, epic_id=body.epic_id, title=body.title, 
+        content=body.content,
+        assignee_id=body.assignee_id, 
+        assignee_name=body.assignee_name,
+        priority=body.priority or "medium", 
+        urgency=body.urgency,
+        due_date=body.due_date,
+        order_index=body.order_index,
     )
     return _task_to_response(task, task.epic_id)
 
@@ -166,6 +156,7 @@ def patch_task(
         db=db,
         task_id=task_id,
         title=body.title,
+        content=body.content,
         assignee_id=body.assignee_id,
         assignee_name=body.assignee_name,
         priority=body.priority,

@@ -58,6 +58,7 @@ class WbsTask(Base):
     id:             Mapped[int]         = mapped_column(Integer, primary_key=True, autoincrement=True)
     epic_id:        Mapped[int]         = mapped_column(Integer, ForeignKey("wbs_epics.id"), nullable=False)
     title:          Mapped[str]         = mapped_column(String(200), nullable=False)
+    content:        Mapped[str | None]  = mapped_column(Text, nullable=True)
     assignee_id:    Mapped[int | None]  = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
     assignee_name:  Mapped[str | None]  = mapped_column(String(100), nullable=True)
     priority:       Mapped[Priority]    = mapped_column(Enum(Priority), default=Priority.medium)
@@ -69,6 +70,14 @@ class WbsTask(Base):
     created_at:     Mapped[datetime]    = mapped_column(DateTime, default=func.now(), nullable=False)
     updated_at:     Mapped[datetime]    = mapped_column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
     order_index:    Mapped[int]         = mapped_column(Integer, default=0)
+
+class WbsSnapshot(Base):
+    __tablename__ = "wbs_snapshots"
+    
+    id:             Mapped[int] =       mapped_column(Integer, primary_key=True, autoincrement=True)
+    meeting_id:     Mapped[int] =       mapped_column(Integer, ForeignKey("meetings.id"), nullable=False, unique=True)
+    snapshot_data:  Mapped[str] =       mapped_column(Text, nullable=False) #JSON
+    created_at:     Mapped[datetime] = mapped_column(DateTime, default=func.now(), nullable=False)
 
 
 class Report(Base):
