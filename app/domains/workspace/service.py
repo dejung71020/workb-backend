@@ -911,10 +911,10 @@ def _dashboard_meeting_status_value(m: Meeting) -> str:
 
 
 def _dashboard_week_start_local(d: date) -> datetime:
-    # 주 시작: 일요일 00:00 (로컬 naive datetime)
+    # 주 시작: 월요일 00:00 (로컬 naive datetime)
     # date.weekday(): Monday=0 ... Sunday=6
-    sunday = d - timedelta(days=(d.weekday() + 1) % 7)
-    return datetime.combine(sunday, datetime.min.time())
+    monday = d - timedelta(days=d.weekday())
+    return datetime.combine(monday, datetime.min.time())
 
 
 class DashboardService:
@@ -968,7 +968,7 @@ class DashboardService:
             )
 
         today = date.today()
-        # "이번주" 기준: 로컬 기준 일요일 00:00 ~ 토요일 23:59:59 (inclusive)
+        # "이번주" 기준: 로컬 기준 월요일 00:00 ~ 일요일 23:59:59 (inclusive)
         week_start_naive = _dashboard_week_start_local(today)
         week_end_naive = week_start_naive + timedelta(days=6, hours=23, minutes=59, seconds=59)
 

@@ -112,6 +112,24 @@ class TestMeetingHistory:
         assert len(body["meetings"]) == 2
         assert body["total"] == 3
 
+    def test_history_date_filter(self, client, admin_user):
+        _, workspace = admin_user
+        day_a = "2030-03-10T10:00:00+09:00"
+        day_b = "2030-03-11T10:00:00+09:00"
+        client.post(
+            f"{BASE}/workspaces/{workspace.id}",
+            json=make_meeting_body(title="3월 10일 회의", scheduled_at=day_a),
+        )
+        client.post(
+            f"{BASE}/workspaces/{workspace.id}",
+            json=make_meeting_body(title="3월 11일 회의", scheduled_at=day_b),
+        )
+        res = client.get(f"{BASE}/workspaces/{workspace.id}/history?date=2030-03-10")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["total"] == 1
+        assert data["meetings"][0]["title"] == "3월 10일 회의"
+
 
 # ---------------------------------------------------------------------------
 # 회의 상세 조회
