@@ -1,15 +1,6 @@
 from typing import Optional
 
-from fastapi import (
-    APIRouter,
-    BackgroundTasks,
-    Depends,
-    HTTPException,
-    Query,
-    status,
-    UploadFile,
-    File,
-)
+from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File
 from sqlalchemy.orm import Session
 
 from app.domains.workspace.deps import require_workspace_admin, require_workspace_member
@@ -44,6 +35,7 @@ from app.domains.meeting.service import (
     MinutePhotoService,
     SpeakerProfileService,
 )
+from app.domains.knowledge.service import process_meeting_end
 
 router = APIRouter()
 
@@ -233,12 +225,7 @@ def end_workspace_meeting(
 ) -> dict:
     """회의를 완료로 전환하고 후처리 LangGraph 파이프라인을 백그라운드로 실행합니다."""
     MeetingLifecycleService.end_meeting(db, workspace_id, meeting_id)
-    background_tasks.add_task(
-        run_meeting_completion_pipeline,
-        workspace_id,
-        meeting_id,
-    )
-    return {"status": "ok", "pipeline": {"status": "accepted"}}
+    return {"status": "ok"}
 
 
 _WAV_CONTENT_TYPES = {"audio/wav", "audio/wave", "audio/x-wav"}
