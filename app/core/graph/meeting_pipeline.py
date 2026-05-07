@@ -90,6 +90,14 @@ async def postprocess_diarization_node(state: MeetingPipelineState) -> dict[str,
             },
         )
 
+    try:
+        from app.domains.knowledge.service import process_meeting_end
+
+        await process_meeting_end(meeting_id, workspace_id)
+    except Exception as exc:
+        logger.exception("process_meeting_end failed: meeting_id=%s", meeting_id)
+        return _append_error(state, f"process_meeting_end 실패: {exc}")
+
     report_state = {
         "meeting_id": meeting_id,
         "workspace_id": workspace_id,
