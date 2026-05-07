@@ -19,3 +19,30 @@ def get_meeting_utterances(meeting_id: int) -> list[dict]:
         {"_id": 0, "utterances": 1},
     )
     return doc.get("utterances", []) if doc else []
+
+
+async def get_or_build_meeting_summary(meeting_id: int, workspace_id: int) -> dict | None:
+    """
+    meeting_summaries에서 요약을 조회하고, 없으면 knowledge quick_report를 실행해 생성 시도 후 재조회합니다.
+    """
+    summary = get_meeting_summary(meeting_id)
+    if summary:
+        return summary
+
+    try:
+        from app.domains.knowledge.agent_utils import quick_report_node  # noqa: PLC0415
+
+        state = {
+            "meeting_id": meeting_id,
+            "workspace_id": workspace_id,
+            "past_meeting_ids": None,
+            "user_question": "",
+            "function_type": "",
+            "chat_response": "",
+        }
+        await quick_report_node(state)
+    except Exception:
+        # quick_report 실패 시에도 기존 폴백(utterances/meeting_minutes) 경로로 진행한다.
+        pass
+
+    return get_meeting_summary(meeting_id)

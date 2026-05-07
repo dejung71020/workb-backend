@@ -26,6 +26,7 @@ from app.domains.notification import service as notification_service
 from app.domains.workspace.repository import (
     create_invite_code,
     create_workspace_membership,
+    count_workspace_admins,
     count_workspace_members_by_department_id,
     create_department,
     delete_department,
@@ -474,6 +475,14 @@ def update_workspace_member_role_service(
 
     prev_role = str(membership.role.value if hasattr(membership.role, "value") else membership.role)
     next_role = role.value if hasattr(role, "value") else str(role)
+
+    if prev_role == MemberRole.admin.value and next_role != MemberRole.admin.value:
+        if count_workspace_admins(db, workspace_id) <= 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="워크스페이스에는 최소 1명의 관리자가 필요합니다.",
+            )
+
     updated_membership = update_workspace_membership_role(db, workspace_id, user_id, MemberRole(next_role))
     if not updated_membership:
         raise HTTPException(

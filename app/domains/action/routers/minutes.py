@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.domains.action import repository as action_repo
-from app.domains.action.mongo_repository import get_meeting_summary
+from app.domains.action.mongo_repository import get_or_build_meeting_summary
 from app.domains.action.schemas import (
     ExportResponse,
     MinutesPatchRequest,
@@ -177,43 +177,29 @@ async def preview_minutes_pdf(
         fields = data_mapper.from_explicit(body.field_values)
         fields = _enrich_fields_from_db(fields, db, meeting_id)
     else:
-        summary = get_meeting_summary(meeting_id)
-        if summary:
-            meeting_row = action_repo.get_meeting(db, meeting_id)
-            creator_name = ""
-            dept_name = ""
-            if meeting_row:
-                user = action_repo.get_user(db, meeting_row.created_by)
-                if user:
-                    creator_name = user.name
-                    dept_name = minutes_repo.get_dept_name(db, user, int(meeting_row.workspace_id))
-            fields = data_mapper.from_mongo_summary(
-                summary,
-                meeting_row=meeting_row,
-                creator_name=creator_name,
-                dept_name=dept_name,
+        summary = await get_or_build_meeting_summary(meeting_id, workspace_id)
+        if not summary:
+            raise HTTPException(
+                status_code=404,
+                detail="knowledge 요약(meeting_summaries)이 없습니다. 먼저 knowledge 요약을 생성해주세요.",
             )
-        else:
-            minute = action_repo.get_meeting_minute(db, meeting_id)
-            if not minute or not minute.content:
-                raise HTTPException(
-                    status_code=404,
-                    detail="회의 데이터가 없습니다. 먼저 회의록을 생성해주세요.",
-                )
-            meeting_row = action_repo.get_meeting(db, meeting_id)
-            creator_name = ""
-            dept_name = ""
-            if meeting_row:
-                user = action_repo.get_user(db, meeting_row.created_by)
-                if user:
-                    creator_name = user.name
-                    dept_name = minutes_repo.get_dept_name(db, user, int(meeting_row.workspace_id))
-            fields = data_mapper.from_markdown_content(
-                minute.content,
-                meeting_row=meeting_row,
-                creator_name=creator_name,
-                dept_name=dept_name,
-            )
+        meeting_row = action_repo.get_meeting(db, meeting_id)
+        creator_name = ""
+        dept_name = ""
+        if meeting_row:
+            user = action_repo.get_user(db, meeting_row.created_by)
+            if user:
+                creator_name = user.name
+                dept_name = minutes_repo.get_dept_name(db, user, int(meeting_row.workspace_id))
+        fields = data_mapper.from_mongo_summary(
+            summary,
+            meeting_row=meeting_row,
+            creator_name=creator_name,
+            dept_name=dept_name,
+        )
+
+    photos = action_repo.get_meeting_minute_photos(db, meeting_id)
+    fields.photo_urls = [str(p.photo_url) for p in photos if p.photo_url]
 
     # ── PDF 생성 ─────────────────────────────────────────────────────
     _PDF_OUTPUT_STORE.mkdir(parents=True, exist_ok=True)
@@ -223,19 +209,27 @@ async def preview_minutes_pdf(
     pdf_bytes: bytes
 
     try:
-        logger.info("PDF 생성 시작 (meeting_id=%d)", meeting_id)
+        logger.info("PDF 생성 시작 (meeting_id=%d, render_mode=html)", meeting_id)
         pdf_bytes = await loop.run_in_executor(
-            None,
-            lambda: pdf_renderer.render(fields),
+            None, lambda: pdf_renderer.render(fields)
         )
+    except Exception as exc:
+        logger.error("PDF 생성 오류 (meeting_id=%d): %s", meeting_id, exc)
+        raise HTTPException(status_code=500, detail=f"PDF 생성에 실패했습니다: {exc}") from exc
 
+    logger.info(
+        "PDF 생성 완료 (meeting_id=%d, render_mode=html)",
+        meeting_id,
+    )
+
+    try:
         output_pdf.write_bytes(pdf_bytes)
         preview_pngs = await loop.run_in_executor(
             None,
             lambda: pdf_renderer.preview_from_pdf_bytes(pdf_bytes, [0], dpi=150),
         )
     except Exception as exc:
-        logger.error("PDF 생성 오류 (meeting_id=%d): %s", meeting_id, exc)
+        logger.error("PDF 저장/미리보기 오류 (meeting_id=%d): %s", meeting_id, exc)
         raise HTTPException(status_code=500, detail=f"PDF 생성에 실패했습니다: {exc}") from exc
 
     pdf_width, pdf_height = pdf_renderer.get_pdf_page_size(pdf_bytes)

@@ -4,10 +4,9 @@ from typing import List, Optional
 from datetime import date
 
 from app.domains.action.models import ActionItem, WbsEpic, WbsTask, Report, ReportFormat, Priority, WbsSnapshot
-from app.domains.intelligence.models import MeetingMinute
+from app.domains.intelligence.models import MeetingMinute, MinutePhoto
 from app.domains.meeting.models import Meeting
 from app.domains.user.models import User
-
 
 # ----------------------------------------------------------------------
 def get_meeting(db: Session, meeting_id: int) -> Optional[Meeting]:
@@ -15,6 +14,17 @@ def get_meeting(db: Session, meeting_id: int) -> Optional[Meeting]:
 
 def get_meeting_minute(db: Session, meeting_id: int) -> Optional[MeetingMinute]:
     return db.query(MeetingMinute).filter(MeetingMinute.meeting_id == meeting_id).first()
+
+def get_meeting_minute_photos(db: Session, meeting_id: int) -> list[MinutePhoto]:
+    minute = get_meeting_minute(db, meeting_id)
+    if not minute:
+        return []
+    return (
+        db.query(MinutePhoto)
+        .filter(MinutePhoto.minute_id == minute.id)
+        .order_by(MinutePhoto.taken_at.asc())
+        .all()
+    )
 
 def get_action_items(db: Session, meeting_id: int) -> List[ActionItem]:
     return db.query(ActionItem).filter(ActionItem.meeting_id == meeting_id).all()

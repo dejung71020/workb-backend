@@ -3,7 +3,7 @@ from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 
 from fastapi import HTTPException, status
-from sqlalchemy import desc
+from sqlalchemy import case, desc
 from sqlalchemy.orm import Session
 import json as _json
 
@@ -627,7 +627,8 @@ class MeetingSearchService:
             ).distinct()
 
         meetings = q.order_by(
-            Meeting.scheduled_at.is_(None), desc(Meeting.scheduled_at)
+            case((Meeting.scheduled_at.is_(None), 1), else_=0),
+            desc(Meeting.scheduled_at),
         ).all()
 
         if not meetings:

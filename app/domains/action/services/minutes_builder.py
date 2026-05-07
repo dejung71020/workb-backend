@@ -1,9 +1,7 @@
 import logging
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
-from app.domains.action.mongo_repository import get_meeting_summary, get_meeting_utterances
-from app.domains.action.services.minutes_prompt_builder import build_minutes_from_transcript_prompt
+from app.domains.action.mongo_repository import get_or_build_meeting_summary
 from app.domains.intelligence.models import MeetingMinute, MinuteStatus
 from app.domains.meeting.models import Meeting, MeetingParticipant
 from app.domains.notification import service as notification_service
@@ -19,20 +17,16 @@ async def build_and_save_minutes(
     meeting_id: int,
 ) -> MeetingMinute:
     """회의록을 생성하고 DB에 저장합니다. 기존 회의록이 있으면 덮어씁니다."""
-    summary = get_meeting_summary(meeting_id)
-    if summary is not None:
-        content = _format_minutes(summary)
-    else:
-        logger.info(
-            "meeting_id=%d 요약 없음 — utterances 폴백으로 회의록 생성 시도",
-            meeting_id,
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).one_or_none()
+    if meeting is None:
+        raise ValueError(f"회의를 찾을 수 없습니다. (meeting_id: {meeting_id})")
+    workspace_id = int(meeting.workspace_id) if meeting else 0
+    summary = await get_or_build_meeting_summary(meeting_id, workspace_id)
+    if summary is None:
+        raise ValueError(
+            f"knowledge 요약(meeting_summaries)이 없어 회의록을 생성할 수 없습니다. (meeting_id: {meeting_id})"
         )
-        utterances = get_meeting_utterances(meeting_id)
-        if not utterances:
-            raise ValueError(
-                f"회의 요약과 발화 데이터가 모두 없습니다. (meeting_id: {meeting_id})"
-            )
-        content = await _generate_from_transcript(utterances)
+    content = _format_minutes(summary)
 
     existing = (
         db.query(MeetingMinute)
@@ -60,26 +54,6 @@ async def build_and_save_minutes(
 
     _notify_participants(db, meeting_id)
     return minute
-
-
-async def _generate_from_transcript(utterances: list[dict]) -> str:
-    if not settings.OPENAI_API_KEY:
-        logger.warning("OPENAI_API_KEY 미설정 — 발화 폴백에서 LLM 호출 불가")
-        raise ValueError("회의 요약 데이터가 없고 LLM 키도 설정되지 않아 회의록을 생성할 수 없습니다.")
-
-    from openai import AsyncOpenAI  # noqa: PLC0415
-
-    prompt = build_minutes_from_transcript_prompt(utterances)
-    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-
-    response = await client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
-        max_tokens=4000,
-        timeout=60.0,
-    )
-    return response.choices[0].message.content or ""
 
 
 def _notify_participants(db: Session, meeting_id: int) -> None:
@@ -178,49 +152,77 @@ def ensure_minutes(db: Session, meeting_id: int) -> MeetingMinute:
 
 def _format_minutes(summary: dict) -> str:
     lines: list[str] = []
+    meetings = summary.get("meetings", []) or []
+    first_meeting = meetings[0] if meetings and isinstance(meetings[0], dict) else {}
 
-    overview = summary.get("overview", {})
-    if isinstance(overview, dict) and overview:
-        lines.append("## 개요")
-        if overview.get("purpose", ""):
-            lines.append(f"- 목적: {overview['purpose']}")
-        if overview.get("datetime_str", ""):
-            lines.append(f"- 일시: {overview['datetime_str']}")
+    title = first_meeting.get("title", "")
+    date_text = first_meeting.get("date", "")
+    attendees = summary.get("attendees", []) or first_meeting.get("attendees", []) or []
 
-    attendees = summary.get("attendees", [])
+    if title:
+        lines += ["## 제목", str(title), ""]
+    if date_text:
+        lines += ["## 일시", str(date_text), ""]
     if attendees:
-        lines.append(f"- 참석자: {', '.join(str(a) for a in attendees)}")
+        lines += ["## 참석자"]
+        lines.extend(f"- {str(name)}" for name in attendees if str(name).strip())
+        lines.append("")
 
-    discussion_items = summary.get("discussion_items", [])
+    overview_summary = summary.get("overview_summary", "")
+    if overview_summary:
+        lines += ["## 개요", str(overview_summary), ""]
+
+    agenda_items = summary.get("agenda_items", []) or []
+    if agenda_items:
+        lines += ["## 주요 안건"]
+        lines.extend(f"{idx}. {str(item)}" for idx, item in enumerate(agenda_items, 1))
+        lines.append("")
+
+    discussion_items = summary.get("discussion_items", []) or []
     if discussion_items:
-        lines.append("\n## 논의 사항")
+        lines += ["## 논의 사항"]
         for raw in discussion_items:
             item = _as_dict(raw, "content")
-            lines.append(f"### {item.get('topic', '')}")
-            lines.append(item.get("content", ""))
+            topic = str(item.get("topic", "")).strip()
+            content = str(item.get("content", "")).strip()
+            if topic:
+                lines.append(f"### {topic}")
+            if content:
+                lines.append(content)
+        lines.append("")
 
-    decisions = summary.get("decisions", [])
+    decisions = summary.get("decisions", []) or []
     if decisions:
-        lines.append("\n## 결정 사항")
+        lines += ["## 결정 사항"]
         for raw in decisions:
             d = _as_dict(raw, "decision")
-            lines.append(f"- {d.get('decision', '') or d.get('content', '')}")
+            text = str(d.get("decision", "") or d.get("content", "")).strip()
+            if text:
+                lines.append(f"- {text}")
+        lines.append("")
 
-    action_items = summary.get("action_items", [])
+    action_items = summary.get("action_items", []) or []
     if action_items:
-        lines.append("\n## 액션 아이템")
+        lines += ["## 액션 아이템"]
         for raw in action_items:
             a = _as_dict(raw, "content")
-            deadline = f"(~{a['deadline']})" if a.get("deadline") else ""
-            lines.append(
-                f"- [{a.get('assignee', '')}] {a.get('content', '')} {deadline}".rstrip()
-            )
+            content = str(a.get("content", "")).strip()
+            if not content:
+                continue
+            assignee = str(a.get("assignee", "") or "").strip()
+            deadline = str(a.get("deadline", "") or "").strip()
+            prefix = f"{assignee}: " if assignee else ""
+            suffix = f" (~{deadline})" if deadline else ""
+            lines.append(f"- {prefix}{content}{suffix}")
+        lines.append("")
 
-    pending_items = summary.get("pending_items", [])
+    pending_items = summary.get("pending_items", []) or []
     if pending_items:
-        lines.append("\n## 미결 사항")
+        lines += ["## 미결 사항"]
         for raw in pending_items:
             p = _as_dict(raw, "content")
-            lines.append(f"- {p.get('content', '')}")
+            content = str(p.get("content", "")).strip()
+            if content:
+                lines.append(f"- {content}")
 
     return "\n".join(lines)

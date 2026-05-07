@@ -1,6 +1,6 @@
 # app\domains\knowledge\router.py
 import uuid
-from fastapi import BackgroundTasks, APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import BackgroundTasks
 from datetime import date
 from typing import Optional
 
@@ -24,7 +24,6 @@ from app.domains.knowledge.schemas import (
     ChatbotMessageRequest,
     ChatbotMessageResponse,
     ChatbotReportRequest,
-    ChatbotReportResponse,
     DocumentUploadResponse,
     PastMeetingsResponse,
     PastMeetingItem,
