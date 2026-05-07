@@ -39,6 +39,7 @@ class MinuteFields:
     decision_rows: list[str] = field(default_factory=list)
     action_items: str = ""
     special_notes: str = ""
+    photo_urls: list[str] = field(default_factory=list)
 
     def ensure_min_decision_rows(self, min_rows: int = 4) -> None:
         while len(self.decision_rows) < min_rows:
@@ -61,6 +62,7 @@ class MinuteFields:
             "decisions": decisions,
             "action_items": self.action_items,
             "special_notes": self.special_notes,
+            "photo_count": str(len(self.photo_urls)),
         }
 
 
@@ -118,6 +120,12 @@ def from_mongo_summary(
     f.dept = dept_name
     f.author = creator_name
 
+    agenda_items = summary.get("agenda_items", [])
+    if agenda_items:
+        f.agenda_items = "\n".join(
+            f"{i}. {str(item)}" for i, item in enumerate(agenda_items, 1)
+        )
+
     items = summary.get("discussion_items", [])
     if items:
         agenda_lines: list[str] = []
@@ -128,7 +136,8 @@ def from_mongo_summary(
             content = item.get("content", "")
             agenda_lines.append(f"{i}. {topic}")
             content_lines.append(f"**{topic}**\n{content}")
-        f.agenda_items = "\n".join(agenda_lines)
+        if not f.agenda_items:
+            f.agenda_items = "\n".join(agenda_lines)
         f.discussion_content = "\n\n".join(content_lines)
 
     decisions = summary.get("decisions", [])
@@ -160,6 +169,9 @@ def from_mongo_summary(
             for p in pending
         ]
         f.special_notes = "\n".join(lines)
+    elif summary.get("overview_summary"):
+        # pending이 비어있으면 overview를 특이사항에 보강해 빈칸을 줄인다.
+        f.special_notes = str(summary.get("overview_summary", ""))
 
     f.ensure_min_decision_rows()
     return f

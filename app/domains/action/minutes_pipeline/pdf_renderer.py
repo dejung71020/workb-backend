@@ -75,6 +75,20 @@ def _md_bold(text: str) -> str:
     return re.sub(r"__(.+?)__", r"<b>\1</b>", text, flags=re.DOTALL)
 
 
+def _to_renderable_image_url(raw: str) -> str:
+    """로컬 경로면 file:// URI로 변환한다."""
+    if not raw:
+        return ""
+    v = raw.strip()
+    if v.startswith(("http://", "https://", "file://", "data:")):
+        return v
+    p = Path(v)
+    try:
+        return p.resolve().as_uri()
+    except Exception:
+        return v
+
+
 def render(fields: "MinuteFields") -> bytes:
     """
     기본 Jinja2 HTML → Playwright → PDF 렌더링.
@@ -102,6 +116,7 @@ def render(fields: "MinuteFields") -> bytes:
         decision_rows=[_md_bold(r) for r in fields.decision_rows],
         action_items=_md_bold(fields.action_items),
         special_notes=_md_bold(fields.special_notes),
+        photo_urls=[_to_renderable_image_url(u) for u in fields.photo_urls if u],
     )
 
     template_dir = (

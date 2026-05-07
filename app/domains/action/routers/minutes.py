@@ -178,42 +178,28 @@ async def preview_minutes_pdf(
         fields = _enrich_fields_from_db(fields, db, meeting_id)
     else:
         summary = await get_or_build_meeting_summary(meeting_id, workspace_id)
-        if summary:
-            meeting_row = action_repo.get_meeting(db, meeting_id)
-            creator_name = ""
-            dept_name = ""
-            if meeting_row:
-                user = action_repo.get_user(db, meeting_row.created_by)
-                if user:
-                    creator_name = user.name
-                    dept_name = minutes_repo.get_dept_name(db, user, int(meeting_row.workspace_id))
-            fields = data_mapper.from_mongo_summary(
-                summary,
-                meeting_row=meeting_row,
-                creator_name=creator_name,
-                dept_name=dept_name,
+        if not summary:
+            raise HTTPException(
+                status_code=404,
+                detail="knowledge 요약(meeting_summaries)이 없습니다. 먼저 knowledge 요약을 생성해주세요.",
             )
-        else:
-            minute = action_repo.get_meeting_minute(db, meeting_id)
-            if not minute or not minute.content:
-                raise HTTPException(
-                    status_code=404,
-                    detail="회의 데이터가 없습니다. 먼저 회의록을 생성해주세요.",
-                )
-            meeting_row = action_repo.get_meeting(db, meeting_id)
-            creator_name = ""
-            dept_name = ""
-            if meeting_row:
-                user = action_repo.get_user(db, meeting_row.created_by)
-                if user:
-                    creator_name = user.name
-                    dept_name = minutes_repo.get_dept_name(db, user, int(meeting_row.workspace_id))
-            fields = data_mapper.from_markdown_content(
-                minute.content,
-                meeting_row=meeting_row,
-                creator_name=creator_name,
-                dept_name=dept_name,
-            )
+        meeting_row = action_repo.get_meeting(db, meeting_id)
+        creator_name = ""
+        dept_name = ""
+        if meeting_row:
+            user = action_repo.get_user(db, meeting_row.created_by)
+            if user:
+                creator_name = user.name
+                dept_name = minutes_repo.get_dept_name(db, user, int(meeting_row.workspace_id))
+        fields = data_mapper.from_mongo_summary(
+            summary,
+            meeting_row=meeting_row,
+            creator_name=creator_name,
+            dept_name=dept_name,
+        )
+
+    photos = action_repo.get_meeting_minute_photos(db, meeting_id)
+    fields.photo_urls = [str(p.photo_url) for p in photos if p.photo_url]
 
     # ── PDF 생성 ─────────────────────────────────────────────────────
     _PDF_OUTPUT_STORE.mkdir(parents=True, exist_ok=True)

@@ -3,7 +3,7 @@ from collections import defaultdict
 from datetime import datetime, time, timedelta
 
 from fastapi import HTTPException, status
-from sqlalchemy import desc
+from sqlalchemy import case, desc
 from sqlalchemy.orm import Session
 
 from app.utils.time_utils import KST
@@ -582,7 +582,10 @@ class MeetingSearchService:
                 ).filter(MeetingParticipant.user_id == params.participant_id)
             ).distinct()
 
-        meetings = q.order_by(desc(Meeting.scheduled_at).nulls_last()).all()
+        meetings = q.order_by(
+            case((Meeting.scheduled_at.is_(None), 1), else_=0),
+            desc(Meeting.scheduled_at),
+        ).all()
 
         if not meetings:
             return MeetingSearchResponse(
