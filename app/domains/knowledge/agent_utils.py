@@ -34,6 +34,32 @@ _openai_ef = OpenAIEmbeddingFunction(
 
 llm = ChatOpenAI(model="gpt-4o-mini", api_key=settings.OPENAI_API_KEY)
 
+# Tavily 웹검색 도구
+web_search = TavilySearchResults(
+    max_results=5,
+    tavily_api_key=settings.TAVILY_API_KEY,
+)
+
+_ACTION_KEYWORDS = [
+    "담당",
+    "받아",
+    "해주",
+    "기한",
+    "마감",
+    "까지",
+    "작성",
+    "개발",
+    "구현",
+    "배포",
+    "테스트",
+    "검토",
+    "준비",
+    "완료",
+    "예정",
+    "진행",
+    "처리",
+]
+
 # --- 도구 정의 ---
 # react_agent에 bind되어 LLM이 필요에 따라 호출함.
 # @tool 데코레이터가 함수 시그니처와 docstring을 LLM용 tool_schema로 변환함.
@@ -192,17 +218,88 @@ def get_document_full_content(document_name: str, workspace_id: int) -> str:
         return ""
 
 
-# Tavily 웹검색 도구
-web_search = TavilySearchResults(
-    max_results=5,
-    tavily_api_key=settings.TAVILY_API_KEY,
-)
+@tool
+async def regenerate_meeting_data(meeting_id: int, workspace_id: int) -> str:
+    """
+    회의 WBS나 요약이 없다고 사용자가 말할 때 호출
+    MySQL에 데이터가 있는지 확인하고, 없으면 MongoDB 발화를 읽어 재생성을 시도한다.
+    """
+    from app.db.session import SessionLocal
+    from app.domains.meeting.models import MeetingMinute
+    from app.domains.action.models import WbsTask
+
+    db = SessionLocal()
+    try:
+        existing_minute = (
+            db.query(MeetingMinute)
+            .filter(MeetingMinute.meeting_id == meeting_id)
+            .first()
+        )
+        existing_wbs = (
+            db.query(WbsTask).filter(WbsTask.meeting_id == meeting_id).first()
+        )
+        if existing_minute and existing_wbs:
+            return (
+                "회의 요약과 WBS가 이미 저장되어 있습니다. 페이지를 새로고침해 주세요."
+            )
+    finally:
+        db.close()
+
+    # MongoDB 발화 확인
+    utterance_doc = await mongo_db["utterances"].find_one(
+        {"$or": [{"meeting_id": meeting_id}, {"meeting_id": str(meeting_id)}]}
+    )
+    if not utterance_doc:
+        return (
+            "이 회의의 발화 기록이 없습니다. "
+            "회의 중 STT가 정상 작동했는지 확인해 주세요."
+        )
+
+    utterances = utterance_doc.get("utterances", [])
+    if not utterances:
+        return "발화 기록이 비어 있어 데이터를 생성할 수 없습니다."
+
+    # 발화에서 액션 아이템 생성 가능 여부 판단 (재생성 전에 미리 체크)
+    full_text = " ".join(u.get("text") or u.get("content", "") for u in utterances)
+    has_action_items = any(kw in full_text for kw in _ACTION_KEYWORDS)
+
+    # 재생성 실행
+    from app.domains.knowledge.service import process_meeting_end
+
+    await process_meeting_end(meeting_id, workspace_id)
+
+    # 재생성 후 실제로 저장됐는지 확인
+    db2 = SessionLocal()
+    try:
+        wbs_count = db2.query(WbsTask).filter(WbsTask.meeting_id == meeting_id).count()
+    finally:
+        db2.close()
+
+    if wbs_count > 0:
+        return (
+            f"회의 데이터를 재생성했습니다. "
+            f"WBS 항목 {wbs_count}개와 요약이 저장됐습니다. 페이지를 새로고침해 주세요."
+        )
+
+    if not has_action_items:
+        return (
+            "발화 기록을 확인했으나 담당자・기한・작업 지시 등 액션 아이템으로 "
+            "분류할 만한 내용이 없어 WBS를 생성하지 못했습니다. "
+            "회의 요약은 저장됐을 수 있으니 회의록 페이지에서 확인해 주세요."
+        )
+
+    return (
+        "발화 기록을 처리했으나 WBS 항목을 추출하지 못했습니다. "
+        "회의록 페이지에서 요약을 확인하고, 필요하면 직접 WBS를 추가해 주세요."
+    )
+
 
 tools = [
     web_search,
     search_past_meetings,
     search_internal_db,
     get_document_full_content,
+    regenerate_meeting_data,
 ]
 
 
@@ -376,6 +473,7 @@ async def knowledge_node(state: SharedState) -> dict:
     - 확실하지 않은 정보는 "~라고 언급됐습니다" 형식으로 답변하세요.
     - 외부 자료가 필요하면 web_search를 사용하세요.
     - 이전 회의 내용이 필요하면 search_past_meetings를 사용하세요.
+    - 사용자가 WBS·요약·회의록이 없다고 하면 → regenerate_meeting_data 를 호출하세요. meeting_id와 workspace_id는 상태에서 가져옵니다.
     
     최종 답변은 반드시 아래 JSON 형식으로만 출력하세요.
     {{

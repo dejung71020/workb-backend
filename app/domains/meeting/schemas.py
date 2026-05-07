@@ -27,6 +27,7 @@ class CreateMeetingResponse(BaseModel):
     data: CreateMeetingResponseData
     message: str = "OK"
 
+
 class UpdateMeetingRequest(BaseModel):
     title: str
     meeting_type: str
@@ -35,6 +36,7 @@ class UpdateMeetingRequest(BaseModel):
     participant_ids: list[int] = Field(default_factory=list)
     sync_google_calendar: bool | None = None
     duration_minutes: int = 60
+
 
 class DeleteMeetingResponse(BaseModel):
     success: bool = True
@@ -58,6 +60,7 @@ class MeetingDetailOut(BaseModel):
     scheduled_at: Optional[datetime] = None
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
+    summary: Optional[str] = None
     participants: list[MeetingDetailParticipantOut] = Field(default_factory=list)
 
 
