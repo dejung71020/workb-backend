@@ -225,8 +225,8 @@ async def regenerate_meeting_data(meeting_id: int, workspace_id: int) -> str:
     MySQL에 데이터가 있는지 확인하고, 없으면 MongoDB 발화를 읽어 재생성을 시도한다.
     """
     from app.db.session import SessionLocal
-    from app.domains.meeting.models import MeetingMinute
-    from app.domains.action.models import WbsTask
+    from app.domains.intelligence.models import MeetingMinute
+    from app.domains.action.models import WbsEpic, WbsTask
 
     db = SessionLocal()
     try:
@@ -236,7 +236,10 @@ async def regenerate_meeting_data(meeting_id: int, workspace_id: int) -> str:
             .first()
         )
         existing_wbs = (
-            db.query(WbsTask).filter(WbsTask.meeting_id == meeting_id).first()
+            db.query(WbsTask)
+            .join(WbsEpic, WbsTask.epic_id == WbsEpic.id)
+            .filter(WbsEpic.meeting_id == meeting_id)
+            .first()
         )
         if existing_minute and existing_wbs:
             return (
@@ -271,7 +274,12 @@ async def regenerate_meeting_data(meeting_id: int, workspace_id: int) -> str:
     # 재생성 후 실제로 저장됐는지 확인
     db2 = SessionLocal()
     try:
-        wbs_count = db2.query(WbsTask).filter(WbsTask.meeting_id == meeting_id).count()
+        wbs_count = (
+            db2.query(WbsTask)
+            .join(WbsEpic, WbsTask.epic_id == WbsEpic.id)
+            .filter(WbsEpic.meeting_id == meeting_id)
+            .count()
+        )
     finally:
         db2.close()
 
@@ -341,11 +349,17 @@ def _select_history(history: list[dict], max_chars: int = 6000) -> list[dict]:
     return selected
 
 
-async def _resolve_references(question: str, history: list[dict], llm) -> str:
-    """이전 대화를 참고해 지시어・대명사를 구체적 표현으로 치환."""
+async def _resolve_references(
+    question: str, history: list[dict], llm, force: bool = False
+) -> str:
+    """이전 대화를 참고해 지시어・대명사를 구체적 표현으로 치환.
+
+    force=True: 지시어 키워드 없어도 히스토리 있으면 무조건 LLM 해소 시도.
+                quick_report_node / past_summary_node 처럼 회의 특정이 필요한 경우에 사용.
+    """
     if not history:
         return question
-    if not any(
+    if not force and not any(
         w in question
         for w in [
             "그",
@@ -366,8 +380,20 @@ async def _resolve_references(question: str, history: list[dict], llm) -> str:
         f"[{m['role']}] {m['content'][:150]}" for m in history[-4:]
     )
     prompt = f"""
-    이전 대화를 참고해 현재 질문의 지시어・대명사를 구체적 표현으로 바꾸세요.
-    바꿀 필요 없으면 그대로 출력하세요. 질문만 출력하세요.
+    이전 대화에서 언급된 구체적인 이름(회의명, 사람 이름, 문서명 등)으로
+    현재 질문의 지시어(그거, 그것, 저거, 거기, 그 회의 등)만 교체하세요.
+
+    규칙:
+    1. 지시어가 가리키는 명사만 찾아 교체. 그 외 단어나 문장 구조 변경 금지.
+    2. WBS, API, FAQ, STT 같은 영어 약어는 절대 번역하거나 바꾸지 마세요.
+    3. 질문의 의미, 어순, 표현 방식을 바꾸지 마세요. 최소한의 치환만 하세요.
+    4. 교체할 명사가 불명확하면 원문 그대로 반환하세요.
+    5. 결과는 질문 한 줄만 출력하세요.
+
+    예시:
+      이전 대화에 "4월 기획 회의" 언급 →
+        "그거 WBS 알려줘" → "4월 기획 회의 WBS 알려줘"  (O)
+        "그것의 작업 분류 구조를 알려줘" → 이렇게 바꾸면 안 됨 (X)
 
     이전 대화:
     {history_text}
@@ -432,6 +458,17 @@ async def knowledge_node(state: SharedState) -> dict:
 
     ontology_ctx = await build_ontology_context(resolved_question, workspace_id, llm)
 
+    # ── 진단 로그 (문제 파악 후 제거) ────────────────────────────
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+    _log.warning(
+        "[DEBUG] original=%r | resolved=%r | history_len=%d | ontology_len=%d",
+        original_question, resolved_question, len(recent_history), len(ontology_ctx),
+    )
+    if ontology_ctx:
+        _log.warning("[DEBUG] ontology_ctx preview: %s", ontology_ctx[:300])
+    # ─────────────────────────────────────────────────────────────
+
     # 권한 힌트
     if is_admin:
         permission_hint = "이 사용자는 관리자입니다. 모든 데이터 접근 가능."
@@ -453,6 +490,10 @@ async def knowledge_node(state: SharedState) -> dict:
     system_prompt = f"""
     당신은 회의 AI 어시스턴트입니다.
 
+    [현재 컨텍스트]
+    meeting_id: {meeting_id if meeting_id else "없음"}
+    workspace_id: {workspace_id}
+
     [접근 권한]
     {permission_hint}
 
@@ -471,9 +512,10 @@ async def knowledge_node(state: SharedState) -> dict:
     - 회의 내용만으로 답할 수 있으면 도구 없이 답변하세요.
     - 정보가 불완전하더라도 회의에서 언급된 내용을 바탕으로 최대한 답변하세요.
     - 확실하지 않은 정보는 "~라고 언급됐습니다" 형식으로 답변하세요.
+    - 온톨로지 컨텍스트와 발화 데이터가 모두 없는 경우, WBS·결정사항·태스크 등 DB 데이터를 절대 임의로 생성하지 마세요. 반드시 "데이터를 찾을 수 없습니다"로 답변하세요.
     - 외부 자료가 필요하면 web_search를 사용하세요.
     - 이전 회의 내용이 필요하면 search_past_meetings를 사용하세요.
-    - 사용자가 WBS·요약·회의록이 없다고 하면 → regenerate_meeting_data 를 호출하세요. meeting_id와 workspace_id는 상태에서 가져옵니다.
+    - 사용자가 WBS·요약·회의록이 "없다", "안 보인다", "왜 없어", "생성해줘" 처럼 데이터가 없거나 생성을 요청할 때만 → regenerate_meeting_data 를 호출하세요. "알려줘", "보여줘", "뭐야" 같은 조회 요청에는 절대 호출하지 마세요. meeting_id={meeting_id if meeting_id else 0}, workspace_id={workspace_id} 를 반드시 그대로 사용하세요.
     
     최종 답변은 반드시 아래 JSON 형식으로만 출력하세요.
     {{
@@ -485,20 +527,22 @@ async def knowledge_node(state: SharedState) -> dict:
     }}
 
     confidence 기준:
-    - high: 발화에 명확한 근거 있음
+    - high: [사전 조회된 관련 정보 - 온톨로지 그래프]에 명확한 근거 있음, 또는 발화에 명확한 근거 있음
     - medium: 발화에 간접적으로 언급됨
-    - Low: 발화에 근거 없거나 추측
-    
+    - low: 발화에 근거 없거나 추측 (온톨로지 데이터도 발화도 없는 경우)
+
     citations 규칙:
+    - [사전 조회된 관련 정보 - 온톨로지 그래프]를 사용해 답변했으면 반드시 []. (DB에서 직접 가져온 신뢰 데이터이므로 인용 불필요)
     - web_search 도구를 사용했으면 반드시 []. 절대 웹 검색 내용을 citations에 넣지 마세요.
     - search_past_meetings 도구를 사용했으면 반환된 snippet 원문을 그대로 복사.
     - search_internal_db 도구를 사용했으면 반환된 snippet 원문을 그대로 복사.
     - 회의 발화 기반이면 [화자명] 발화내용 형식으로 원문 발췌.
 
     answer 작성 규칙:
-    - # 헤딩 사용 금지. ## 이하만 사용.            
+    - # 헤딩 사용 금지. ## 이하만 사용.
+    - 헤딩(##)은 실제 구조화된 목록·데이터를 제시할 때만 사용하세요. 상태 안내·오류·단순 메시지에는 헤딩을 붙이지 마세요.
     - 목록은 마크다운 bullet(-) 또는 번호 사용
-    - 표 형태 데이터는 마크다운 테이블로 표현 
+    - 표 형태 데이터는 마크다운 테이블로 표현
 
     action_button 규칙:
     - WBS 수정 요청 시: {{"label": "WBS 페이지로 이동", "path": "/meetings/{meeting_id}/wbs"}}
@@ -609,8 +653,14 @@ async def knowledge_node(state: SharedState) -> dict:
                 # citation이 원문에 없음 -> LLM이 인용을 조작(fabrication)한 케이스
                 citation_failed = True
 
-        if citation_failed or (not citations and confidence == "low"):
+        # 발화도 온톨로지도 없는데 도구 미사용 → LLM이 꾸며냈을 가능성 높음
+        # 즉시 차단 대신 confidence를 low로 강제해 기존 검증 로직에서 처리
+        if not tool_used and no_meeting_context and not ontology_ctx:
+            confidence = "low"
+
+        if citation_failed or (not citations and confidence == "low" and not ontology_ctx):
             # 불일치 또는 근거 없음 -> 답변 자체를 대체
+            # ontology_ctx 있으면 DB 기반 답변이므로 차단하지 않음
             if not tool_used and no_meeting_context:
                 # 회의 없는 상태에서 도구 미사용 → 내부 문서 검색 유도
                 answer = "관련 내용을 찾지 못했습니다. 해당 파일이 업로드되어 있는지 확인해주세요."
@@ -636,44 +686,55 @@ async def knowledge_node(state: SharedState) -> dict:
     }
 
 
-async def _get_meetings_by_question(
+async def _find_meeting_by_question(
     question: str, workspace_id: int
 ) -> tuple[list[dict], bool]:
-    """user_question에서 날짜 범위 추출해서 MongoDB 필터링.
-    반환: (meetings, has_date_range) — has_date_range=True면 날짜 조건으로 필터링된 결과.
+    """
+    사용자 질문에서 의도하는 회의를 semantic하게 찾음.
+    제목·날짜·시각·내용 등 회의의 모든 메타데이터를 LLM에 넘겨 매칭.
+    반환: (meetings, has_match) — has_match=True면 특정된 결과.
     """
     from app.domains.knowledge.repository import get_all_past_meetings_by_workspace
-    from datetime import datetime
 
     all_meetings = await get_all_past_meetings_by_workspace(workspace_id)
+    if not all_meetings:
+        return [], False
 
-    date_prompt = f"""
-    아래 질문에서 날짜 범위를 추출하세요. JSON으로만 답하세요.
-    없으면 {{"start": null, "end": null}}
+    def _fmt_time(t) -> str:
+        if hasattr(t, "strftime"):
+            return t.strftime("%Y-%m-%d %H:%M")
+        return ""
+
+    meetings_text = "\n".join(
+        f"- id={m['meeting_id']}, title={m['title']}"
+        f", 시작={_fmt_time(m.get('started_at'))}"
+        f", 예정={_fmt_time(m.get('scheduled_at'))}"
+        f", 내용={m.get('summary', '')[:150]}"
+        for m in all_meetings
+    )
+
+    prompt = f"""
+    사용자 질문을 보고 아래 회의 목록 중 해당하는 회의를 골라주세요.
+    제목·날짜·시각·내용 중 어느 것이든 질문과 일치하면 선택하세요.
+    확실히 특정되면 해당 id만, 여러 개면 여러 id, 특정 불가면 빈 배열.
+    JSON으로만 답하세요.
 
     질문: {question}
     현재 날짜: {now_kst().strftime("%Y-%m-%d")}
 
-    {{"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}}
+    회의 목록:
+    {meetings_text}
+
+    {{"matched_ids": [id, ...]}}
     """
-    result = await llm.ainvoke(date_prompt)
+    result = await llm.ainvoke(prompt)
     try:
-        dates = json.loads(re.search(r"\{.*\}", result.content, re.DOTALL).group())
-        start = datetime.fromisoformat(dates["start"]) if dates.get("start") else None
-        end = datetime.fromisoformat(dates["end"]) if dates.get("end") else None
+        parsed = json.loads(re.search(r"\{.*\}", result.content, re.DOTALL).group())
+        matched_ids = set(parsed.get("matched_ids", []))
+        matched = [m for m in all_meetings if m["meeting_id"] in matched_ids]
+        return matched, len(matched) > 0
     except Exception:
-        start, end = None, None
-
-    if start or end:
-        filtered = [
-            m
-            for m in all_meetings
-            if (not start or m.get("created_at", datetime.min) >= start)
-            and (not end or m.get("created_at", datetime.max) <= end)
-        ]
-        return filtered, True
-
-    return all_meetings, False
+        return [], False
 
 
 async def past_summary_node(state: SharedState) -> dict:
@@ -693,16 +754,24 @@ async def past_summary_node(state: SharedState) -> dict:
     user_id = state.get("user_id")
     is_admin = state.get("is_admin", False)
     filter_user_id = None if is_admin else user_id
+    session_id = state.get("session_id")
 
     if not past_meeting_ids:
-        meetings, has_date = await _get_meetings_by_question(
-            state.get("user_question", ""), workspace_id
+        from app.domains.knowledge.repository import get_chat_history
+
+        history = await get_chat_history(workspace_id, session_id)
+        recent_history = _select_history(history)
+        resolved_question = await _resolve_references(
+            state.get("user_question", ""), recent_history, llm, force=True
+        )
+        meetings, has_match = await _find_meeting_by_question(
+            resolved_question, workspace_id
         )
         if not meetings:
             meetings = await get_past_meetings(workspace_id, user_id=filter_user_id)
 
-        # 회의가 2개 이상이고 날짜/키워드로 범위가 특정되지 않은 경우 → 선택 요청
-        if len(meetings) >= 2 and not has_date:
+        # 회의가 2개 이상이고 특정되지 않은 경우 → 선택 요청
+        if len(meetings) >= 2 and not has_match:
             return {
                 "chat_response": "어떤 회의를 요약할까요? 아래에서 선택해주세요.",
                 "function_type": "past_summary",
@@ -720,9 +789,28 @@ async def past_summary_node(state: SharedState) -> dict:
     # 단일 회의 -> LLM 없이 바로 반환
     if len(meetings) == 1:
         m = meetings[0]
+        summary_text = m.get("summary", "").strip()
+
+        # summary가 없으면 재생성 시도
+        if not summary_text:
+            from app.domains.knowledge.service import process_meeting_end
+
+            await process_meeting_end(m["meeting_id"], workspace_id)
+            refreshed = await get_past_meetings_by_ids([m["meeting_id"]])
+            if refreshed:
+                summary_text = refreshed[0].get("summary", "").strip()
+
+        if not summary_text:
+            return {
+                "chat_response": "발화 기록이 없거나 요약을 생성할 수 없습니다.",
+                "function_type": "past_summary",
+            }
+
+        raw_lines = summary_text.split("\n")
+        key_points = [ln.lstrip("- ").strip() for ln in raw_lines if ln.strip()]
         return {
             "chat_response": _format_summary_markdown(
-                {"title": m["title"], "key_points": m["summary"].split("\n")}
+                {"title": m["title"], "key_points": key_points}
             ),
             "function_type": "past_summary",
         }
@@ -779,14 +867,30 @@ async def quick_report_node(state: SharedState) -> dict:
     user_id = state.get("user_id")
     is_admin = state.get("is_admin", False)
     filter_user_id = None if is_admin else user_id
+    session_id = state.get("session_id")
 
     if past_meeting_ids:
         meetings = await get_past_meetings_by_ids(past_meeting_ids)
     elif meeting_id:
         meetings = await get_past_meetings_by_ids([meeting_id])
     else:
-        all_ids = await get_past_meeting_ids(workspace_id, user_id=filter_user_id)
-        meetings = await get_past_meetings_by_ids(all_ids)
+        from app.domains.knowledge.repository import get_chat_history
+
+        history = await get_chat_history(workspace_id, session_id)
+        recent_history = _select_history(history)
+        resolved_question = await _resolve_references(
+            state.get("user_question", ""), recent_history, llm, force=True
+        )
+        question_meetings, has_match = await _find_meeting_by_question(
+            resolved_question, workspace_id
+        )
+        if question_meetings and has_match:
+            meetings = question_meetings
+        else:
+            return {
+                "chat_response": "어떤 회의의 간이보고서를 생성할까요? 아래에서 선택해주세요.",
+                "function_type": "quick_report",
+            }
 
     if not meetings:
         return {
@@ -1044,8 +1148,8 @@ async def classify_intent(state: SharedState) -> dict:
     prompt = f"""
     사용자 입력을 아래 4가지 중 하나로 분류하세요. 단어 하나만 출력하세요.
 
-    - past_summary: **회의** 내용을 요약해달라는 요청. 반드시 "회의"가 주어여야 함.
-        예) "이전 회의 요약해줘", "지난 회의 정리해줘", "전 회의 내용 요약", "N월 회의 요약", "4월 1일부터 현재까지 회의 요약"
+    - past_summary: 회의 내용을 요약해달라는 요청. "회의"라는 단어가 없어도 회의 제목·날짜·시간대가 주어인 경우 포함.
+        예) "이전 회의 요약해줘", "지난 회의 정리해줘", "N월 회의 요약", "0506 오후 회의 요약해줘", "어제 오후 회의 정리해줘"
         비고: 문서·파일·보고서 이름이 주어인 요약 요청은 past_summary가 아님.
     - quick_report: 간이보고서/보고서 생성 요청 (형식 미지정 또는 간단 정리).
         예) "간이보고서 만들어줘", "보고서 만들어줘", "회의 보고서 생성해줘"

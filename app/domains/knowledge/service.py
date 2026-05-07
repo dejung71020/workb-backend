@@ -548,7 +548,7 @@ async def process_meeting_end(meeting_id: int, workspace_id: int) -> None:
     from app.core.config import settings
     from app.infra.database.session import SessionLocal
     from app.domains.intelligence.models import Decision, MeetingMinute, MinuteStatus
-    from app.domains.action.models import WbsEpic, WbsTask
+    from app.domains.action.models import WbsEpic, WbsTask, Priority
     from app.utils.time_utils import now_kst
 
     mongo_db = AsyncIOMotorClient(settings.MONGODB_URL)["meeting_assistant"]
@@ -556,7 +556,7 @@ async def process_meeting_end(meeting_id: int, workspace_id: int) -> None:
     try:
         # -- utterances 조회 --
         ctx_doc = await mongo_db["utterances"].find_one(
-            {"meeting_id": meeting_id, "workspace_id": workspace_id}
+            {"$or": [{"meeting_id": meeting_id}, {"meeting_id": str(meeting_id)}]}
         )
         if not ctx_doc or not ctx_doc.get("utterances"):
             return

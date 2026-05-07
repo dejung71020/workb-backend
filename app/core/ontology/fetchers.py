@@ -1,12 +1,13 @@
+from sqlalchemy import func
 from app.infra.database.session import SessionLocal
 from app.core.ontology.schema import EntityType, RelationType, Relation
 from datetime import date
 from app.utils.time_utils import now_kst
 
+
 # ──────────────────────────────────────────────────────────────────
 # 공통 헬퍼
 # ──────────────────────────────────────────────────────────────────
-
 
 def _parse_date(val) -> date | None:
     """ctx에서 꺼낸 날짜값을 date 객체로 변환. 이미 date면 그대로."""
@@ -20,13 +21,10 @@ def _parse_date(val) -> date | None:
         return None
 
 
-# ──────────────────────────────────────────────
-# 단건 엔티티 fetch 함수
-# 시그니처: (entity_id, workspace_id, ctx=None) → list[dict]
-# - entity_id: 출발 엔티티의 PK
-# - workspace_id: 접근 범위 제한용 (다른 워크스페이스 데이터 노출 방지)
-# - ctx : {"date_from": date, "date_to": date} 날짜 필터
-# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────
+# [순방향] User 기점 fetch 함수
+# ──────────────────────────────────────────────────────────────────
+
 def fetch_user_meetings(
     user_id: int, workspace_id: int, ctx: dict | None = None
 ) -> list[dict]:
@@ -34,7 +32,7 @@ def fetch_user_meetings(
     from app.domains.meeting.models import Meeting, MeetingParticipant
 
     date_from = _parse_date((ctx or {}).get("date_from"))
-    date_to = _parse_date((ctx or {}).get("date_to"))
+    date_to   = _parse_date((ctx or {}).get("date_to"))
 
     db = SessionLocal()
     try:
@@ -51,7 +49,6 @@ def fetch_user_meetings(
         if date_to:
             q = q.filter(Meeting.scheduled_at <= date_to)
         rows = q.order_by(Meeting.scheduled_at.desc()).limit(10).all()
-
         return [
             {
                 "id": r.id,
@@ -72,27 +69,25 @@ def fetch_user_tasks(
     user_id: int, workspace_id: int, ctx: dict | None = None
 ) -> list[dict]:
     """User → 담당한 WbsTask 목록 (날짜 필터: due_date 기준)"""
-    from app.domains.action.models import WbsTask
+    from app.domains.action.models import WbsTask, WbsEpic
     from app.domains.meeting.models import Meeting
 
     date_from = _parse_date((ctx or {}).get("date_from"))
-    date_to = _parse_date((ctx or {}).get("date_to"))
+    date_to   = _parse_date((ctx or {}).get("date_to"))
 
     db = SessionLocal()
     try:
         q = (
             db.query(WbsTask)
-            .join(Meeting, WbsTask.meeting_id == Meeting.id)
-            .filter(
-                WbsTask.assignee_id == user_id, Meeting.workspace_id == workspace_id
-            )
+            .join(WbsEpic, WbsTask.epic_id == WbsEpic.id)
+            .join(Meeting, WbsEpic.meeting_id == Meeting.id)
+            .filter(WbsTask.assignee_id == user_id, Meeting.workspace_id == workspace_id)
         )
         if date_from:
             q = q.filter(WbsTask.due_date >= date_from)
         if date_to:
             q = q.filter(WbsTask.due_date <= date_to)
         rows = q.order_by(WbsTask.due_date.desc()).limit(10).all()
-
         return [
             {
                 "id": r.id,
@@ -136,6 +131,62 @@ def fetch_user_department(
         db.close()
 
 
+def fetch_user_stats(
+    user_id: int, workspace_id: int, ctx: dict | None = None
+) -> list[dict]:
+    """
+    User → 활동 통계 요약 (terminal node).
+
+    반환 타입 "UserStats"는 ONTOLOGY에 from_entity로 등록되지 않으므로
+    traverser가 이 노드에서 추가 탐색을 하지 않는다.
+
+    "00은 어떤 사람이야?" 류 질문에 정량적 맥락을 제공.
+    """
+    from app.domains.meeting.models import Meeting, MeetingParticipant
+    from app.domains.action.models import WbsTask, WbsEpic, TaskStatus
+
+    db = SessionLocal()
+    try:
+        meeting_count = (
+            db.query(func.count(Meeting.id))
+            .join(MeetingParticipant, Meeting.id == MeetingParticipant.meeting_id)
+            .filter(
+                MeetingParticipant.user_id == user_id,
+                Meeting.workspace_id == workspace_id,
+            )
+            .scalar()
+        ) or 0
+
+        tasks = (
+            db.query(WbsTask.status)
+            .join(WbsEpic, WbsTask.epic_id == WbsEpic.id)
+            .join(Meeting, WbsEpic.meeting_id == Meeting.id)
+            .filter(WbsTask.assignee_id == user_id, Meeting.workspace_id == workspace_id)
+            .all()
+        )
+        task_count = len(tasks)
+        done_count = sum(1 for t in tasks if t.status == TaskStatus.done)
+        rate = f"{round(done_count / task_count * 100)}%" if task_count > 0 else "0%"
+
+        return [
+            {
+                "type": "UserStats",
+                "meetings_count": meeting_count,
+                "tasks_count": task_count,
+                "completed_tasks": done_count,
+                "completion_rate": rate,
+            }
+        ]
+    except Exception:
+        return []
+    finally:
+        db.close()
+
+
+# ──────────────────────────────────────────────────────────────────
+# [순방향] Meeting 기점 fetch 함수
+# ──────────────────────────────────────────────────────────────────
+
 def fetch_meeting_decisions(
     meeting_id: int, workspace_id: int, ctx: dict | None = None
 ) -> list[dict]:
@@ -143,7 +194,7 @@ def fetch_meeting_decisions(
     from app.domains.intelligence.models import Decision
 
     date_from = _parse_date((ctx or {}).get("date_from"))
-    date_to = _parse_date((ctx or {}).get("date_to"))
+    date_to   = _parse_date((ctx or {}).get("date_to"))
 
     db = SessionLocal()
     try:
@@ -159,9 +210,7 @@ def fetch_meeting_decisions(
                 "type": EntityType.DECISION.value,
                 "content": r.content,
                 "is_confirmed": r.is_confirmed,
-                "detected_at": (
-                    r.detected_at.strftime("%Y-%m-%d") if r.detected_at else None
-                ),
+                "detected_at": r.detected_at.strftime("%Y-%m-%d") if r.detected_at else None,
             }
             for r in rows
         ]
@@ -174,14 +223,20 @@ def fetch_meeting_decisions(
 def fetch_meeting_tasks(
     meeting_id: int, workspace_id: int, ctx: dict | None = None
 ) -> list[dict]:
-    """Meeting → WbsTask 목록"""
-    from app.domains.action.models import WbsTask
+    """
+    Meeting → WbsTask 목록 (WbsEpic 경유).
+
+    WbsTask에 meeting_id 컬럼이 없으므로 반드시 WbsEpic join 필요.
+    WbsTask.epic_id → WbsEpic.meeting_id → Meeting.id 체인.
+    """
+    from app.domains.action.models import WbsTask, WbsEpic
 
     db = SessionLocal()
     try:
         rows = (
             db.query(WbsTask)
-            .filter(WbsTask.meeting_id == meeting_id)
+            .join(WbsEpic, WbsTask.epic_id == WbsEpic.id)
+            .filter(WbsEpic.meeting_id == meeting_id)
             .order_by(WbsTask.due_date.asc())
             .all()
         )
@@ -210,7 +265,6 @@ def fetch_meeting_members(
     from app.domains.user.models import User
 
     db = SessionLocal()
-
     try:
         rows = (
             db.query(User.id, User.name, MeetingParticipant.is_host)
@@ -219,7 +273,6 @@ def fetch_meeting_members(
             .order_by(MeetingParticipant.is_host.desc(), User.name.asc())
             .all()
         )
-
         return [
             {
                 "id": r.id,
@@ -238,11 +291,10 @@ def fetch_meeting_members(
 def fetch_meeting_reports(
     meeting_id: int, workspace_id: int, ctx: dict | None = None
 ) -> list[dict]:
-    """Meeting → Report 목록"""
+    """Meeting → MeetingMinute(Report) 목록"""
     from app.domains.intelligence.models import MeetingMinute
 
     db = SessionLocal()
-
     try:
         rows = (
             db.query(MeetingMinute).filter(MeetingMinute.meeting_id == meeting_id).all()
@@ -262,11 +314,381 @@ def fetch_meeting_reports(
         db.close()
 
 
+def fetch_meeting_stats(
+    meeting_id: int, workspace_id: int, ctx: dict | None = None
+) -> list[dict]:
+    """
+    Meeting → 회의 통계 요약 (terminal node).
+
+    참석자 수 / 결정사항 수 / WBS 태스크 수 / 완료율을 한 번에 조회.
+    "이 회의 어떻게 됐어?", "그 회의 정리해줘" 질문에 정량적 맥락 제공.
+    """
+    from app.domains.meeting.models import MeetingParticipant
+    from app.domains.intelligence.models import Decision
+    from app.domains.action.models import WbsTask, WbsEpic, TaskStatus
+
+    db = SessionLocal()
+    try:
+        participant_count = (
+            db.query(func.count(MeetingParticipant.id))
+            .filter(MeetingParticipant.meeting_id == meeting_id)
+            .scalar()
+        ) or 0
+
+        decision_count = (
+            db.query(func.count(Decision.id))
+            .filter(Decision.meeting_id == meeting_id)
+            .scalar()
+        ) or 0
+
+        tasks = (
+            db.query(WbsTask.status)
+            .join(WbsEpic, WbsTask.epic_id == WbsEpic.id)
+            .filter(WbsEpic.meeting_id == meeting_id)
+            .all()
+        )
+        task_count = len(tasks)
+        done_count = sum(1 for t in tasks if t.status == TaskStatus.done)
+        rate = f"{round(done_count / task_count * 100)}%" if task_count > 0 else "0%"
+
+        return [
+            {
+                "type": "MeetingStats",
+                "participants_count": participant_count,
+                "decisions_count": decision_count,
+                "tasks_count": task_count,
+                "tasks_completion_rate": rate,
+            }
+        ]
+    except Exception:
+        return []
+    finally:
+        db.close()
+
+
 # ──────────────────────────────────────────────────────────────────
-# 워크스페이스 집합 fetch 함수
-# entity_id 자리에 workspace_id 가 들어온다
+# [역방향] WbsTask 기점 fetch 함수
+#
+# WbsTask는 직접 meeting_id를 갖지 않으므로
+# WbsEpic을 경유하는 join이 필수다.
 # ──────────────────────────────────────────────────────────────────
 
+def fetch_task_source_meeting(
+    task_id: int, workspace_id: int, ctx: dict | None = None
+) -> list[dict]:
+    """
+    WbsTask → 태스크가 생성된 Meeting (역방향, WbsEpic 경유).
+
+    "이 태스크 어느 회의에서 나온 거야?" 질문 처리.
+    WbsTask를 seed로 출발해 소속 회의를 역추적한다.
+    """
+    from app.domains.action.models import WbsTask, WbsEpic
+    from app.domains.meeting.models import Meeting
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(Meeting.id, Meeting.title, Meeting.scheduled_at, Meeting.status)
+            .join(WbsEpic, Meeting.id == WbsEpic.meeting_id)
+            .join(WbsTask, WbsEpic.id == WbsTask.epic_id)
+            .filter(WbsTask.id == task_id, Meeting.workspace_id == workspace_id)
+            .first()
+        )
+        if not row:
+            return []
+        return [
+            {
+                "id": row.id,
+                "type": EntityType.MEETING.value,
+                "title": row.title,
+                "date": row.scheduled_at.strftime("%Y-%m-%d") if row.scheduled_at else None,
+                "status": row.status.value if row.status else None,
+            }
+        ]
+    except Exception:
+        return []
+    finally:
+        db.close()
+
+
+def fetch_task_assignee(
+    task_id: int, workspace_id: int, ctx: dict | None = None
+) -> list[dict]:
+    """
+    WbsTask → 담당자 User (역방향).
+
+    "이 태스크 담당자 누구야?" 질문 처리.
+    WbsTask.assignee_id → User.id로 역추적.
+    """
+    from app.domains.action.models import WbsTask
+    from app.domains.user.models import User
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(User.id, User.name)
+            .join(WbsTask, User.id == WbsTask.assignee_id)
+            .filter(WbsTask.id == task_id)
+            .first()
+        )
+        if not row:
+            return []
+        return [{"id": row.id, "type": EntityType.USER.value, "name": row.name}]
+    except Exception:
+        return []
+    finally:
+        db.close()
+
+
+def fetch_task_context(
+    task_id: int, workspace_id: int, ctx: dict | None = None
+) -> list[dict]:
+    """
+    WbsTask → 태스크 전체 컨텍스트 요약 (terminal node).
+
+    에픽명 / 소속 회의 / 담당자 / 진행률을 한 번에 조회.
+    "UI 개선 태스크 현황 알려줘" 류 질문에 풍부한 맥락 제공.
+    """
+    from app.domains.action.models import WbsTask, WbsEpic
+    from app.domains.meeting.models import Meeting
+    from app.domains.user.models import User
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(
+                WbsTask,
+                WbsEpic.title.label("epic_title"),
+                Meeting.title.label("meeting_title"),
+                User.name.label("assignee_name"),
+            )
+            .join(WbsEpic, WbsTask.epic_id == WbsEpic.id)
+            .join(Meeting, WbsEpic.meeting_id == Meeting.id)
+            .outerjoin(User, WbsTask.assignee_id == User.id)
+            .filter(WbsTask.id == task_id, Meeting.workspace_id == workspace_id)
+            .first()
+        )
+        if not row:
+            return []
+        task, epic_title, meeting_title, assignee_name = row
+        return [
+            {
+                "type": "TaskContext",
+                "task_title": task.title,
+                "epic": epic_title,
+                "meeting": meeting_title,
+                "assignee": assignee_name or task.assignee_name or "미배정",
+                "status": task.status.value if task.status else None,
+                "progress": task.progress,
+                "due_date": task.due_date.strftime("%Y-%m-%d") if task.due_date else None,
+            }
+        ]
+    except Exception:
+        return []
+    finally:
+        db.close()
+
+
+# ──────────────────────────────────────────────────────────────────
+# [역방향] Decision 기점 fetch 함수
+# ──────────────────────────────────────────────────────────────────
+
+def fetch_decision_meeting(
+    decision_id: int, workspace_id: int, ctx: dict | None = None
+) -> list[dict]:
+    """
+    Decision → 결정사항이 나온 Meeting (역방향).
+
+    "이 결정 어느 회의에서 나왔어?" 질문 처리.
+    Decision.meeting_id → Meeting 역추적.
+    """
+    from app.domains.intelligence.models import Decision
+    from app.domains.meeting.models import Meeting
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(Meeting.id, Meeting.title, Meeting.scheduled_at, Meeting.status)
+            .join(Decision, Meeting.id == Decision.meeting_id)
+            .filter(Decision.id == decision_id, Meeting.workspace_id == workspace_id)
+            .first()
+        )
+        if not row:
+            return []
+        return [
+            {
+                "id": row.id,
+                "type": EntityType.MEETING.value,
+                "title": row.title,
+                "date": row.scheduled_at.strftime("%Y-%m-%d") if row.scheduled_at else None,
+                "status": row.status.value if row.status else None,
+            }
+        ]
+    except Exception:
+        return []
+    finally:
+        db.close()
+
+
+def fetch_decision_speaker(
+    decision_id: int, workspace_id: int, ctx: dict | None = None
+) -> list[dict]:
+    """
+    Decision → 결정을 제안한 User (역방향, speaker_id 기반).
+
+    "이 결정 누가 제안했어?" 질문 처리.
+    speaker_id가 null인 경우 빈 list 반환.
+    """
+    from app.domains.intelligence.models import Decision
+    from app.domains.user.models import User
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(User.id, User.name)
+            .join(Decision, User.id == Decision.speaker_id)
+            .filter(Decision.id == decision_id)
+            .first()
+        )
+        if not row:
+            return []
+        return [{"id": row.id, "type": EntityType.USER.value, "name": row.name}]
+    except Exception:
+        return []
+    finally:
+        db.close()
+
+
+def fetch_decision_context(
+    decision_id: int, workspace_id: int, ctx: dict | None = None
+) -> list[dict]:
+    """
+    Decision → 결정사항 전체 컨텍스트 (terminal node).
+
+    회의 제목 / 발언자 / 확정 여부를 한 번에 조회.
+    "이 결정사항 정리해줘" 질문에 풍부한 맥락 제공.
+    """
+    from app.domains.intelligence.models import Decision
+    from app.domains.meeting.models import Meeting
+    from app.domains.user.models import User
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(
+                Decision,
+                Meeting.title.label("meeting_title"),
+                User.name.label("speaker_name"),
+            )
+            .join(Meeting, Decision.meeting_id == Meeting.id)
+            .outerjoin(User, Decision.speaker_id == User.id)
+            .filter(Decision.id == decision_id, Meeting.workspace_id == workspace_id)
+            .first()
+        )
+        if not row:
+            return []
+        decision, meeting_title, speaker_name = row
+        return [
+            {
+                "type": "DecisionContext",
+                "content": decision.content,
+                "meeting": meeting_title,
+                "speaker": speaker_name or "미상",
+                "is_confirmed": decision.is_confirmed,
+                "detected_at": decision.detected_at.strftime("%Y-%m-%d") if decision.detected_at else None,
+            }
+        ]
+    except Exception:
+        return []
+    finally:
+        db.close()
+
+
+# ──────────────────────────────────────────────────────────────────
+# [역방향] Department 기점 fetch 함수
+# ──────────────────────────────────────────────────────────────────
+
+def fetch_department_members(
+    dept_id: int, workspace_id: int, ctx: dict | None = None
+) -> list[dict]:
+    """
+    Department → 소속 User 목록 (역방향).
+
+    "개발팀 구성원 보여줘" 질문 처리.
+    Department를 seed로 출발해 멤버를 탐색.
+    depth=2 탐색 시 User→WbsTask까지 이어져
+    "개발팀 사람들 담당 태스크"도 추론 가능.
+    """
+    from app.domains.workspace.models import WorkspaceMember
+    from app.domains.user.models import User
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(User.id, User.name, WorkspaceMember.role)
+            .join(WorkspaceMember, User.id == WorkspaceMember.user_id)
+            .filter(
+                WorkspaceMember.department_id == dept_id,
+                WorkspaceMember.workspace_id == workspace_id,
+            )
+            .all()
+        )
+        return [
+            {
+                "id": r.id,
+                "type": EntityType.USER.value,
+                "name": r.name,
+                "role": r.role.value if r.role else None,
+            }
+            for r in rows
+        ]
+    except Exception:
+        return []
+    finally:
+        db.close()
+
+
+def fetch_department_stats(
+    dept_id: int, workspace_id: int, ctx: dict | None = None
+) -> list[dict]:
+    """
+    Department → 부서 통계 요약 (terminal node).
+
+    멤버 수 등 집계값 제공.
+    "개발팀 현황 알려줘" 질문에 정량적 맥락 추가.
+    """
+    from app.domains.workspace.models import WorkspaceMember, Department
+
+    db = SessionLocal()
+    try:
+        member_count = (
+            db.query(func.count(WorkspaceMember.id))
+            .filter(
+                WorkspaceMember.department_id == dept_id,
+                WorkspaceMember.workspace_id == workspace_id,
+            )
+            .scalar()
+        ) or 0
+
+        dept = db.query(Department.name).filter(Department.id == dept_id).first()
+
+        return [
+            {
+                "type": "DeptStats",
+                "department": dept.name if dept else "Unknown",
+                "member_count": member_count,
+            }
+        ]
+    except Exception:
+        return []
+    finally:
+        db.close()
+
+
+# ──────────────────────────────────────────────────────────────────
+# [워크스페이스 집합] fetch 함수
+# entity_id 자리에 workspace_id가 들어온다
+# ──────────────────────────────────────────────────────────────────
 
 def fetch_ws_members(
     workspace_id: int, _ws_id: int, ctx: dict | None = None
@@ -328,7 +750,7 @@ def fetch_ws_reports(
     from app.domains.meeting.models import Meeting
 
     date_from = _parse_date((ctx or {}).get("date_from"))
-    date_to = _parse_date((ctx or {}).get("date_to"))
+    date_to   = _parse_date((ctx or {}).get("date_to"))
 
     db = SessionLocal()
     try:
@@ -363,10 +785,9 @@ def fetch_ws_schedule(
 ) -> list[dict]:
     """워크스페이스 예정 회의 일정 (날짜 필터 가능, 기본: 미래 회의)"""
     from app.domains.meeting.models import Meeting, MeetingStatus
-    from datetime import datetime
 
     date_from = _parse_date((ctx or {}).get("date_from")) or now_kst().date()
-    date_to = _parse_date((ctx or {}).get("date_to"))
+    date_to   = _parse_date((ctx or {}).get("date_to"))
 
     db = SessionLocal()
     try:
@@ -385,11 +806,7 @@ def fetch_ws_schedule(
                 "id": r.id,
                 "type": EntityType.MEETING.value,
                 "title": r.title,
-                "date": (
-                    r.scheduled_at.strftime("%Y-%m-%d %H:%M")
-                    if r.scheduled_at
-                    else None
-                ),
+                "date": r.scheduled_at.strftime("%Y-%m-%d %H:%M") if r.scheduled_at else None,
             }
             for r in rows
         ]
@@ -448,9 +865,7 @@ def fetch_ws_integration(
                 "type": EntityType.WS_INTEGRATION.value,
                 "service": r.service_name,
                 "is_connected": r.is_connected,
-                "token_expire_at": (
-                    r.token_expire_at.isoformat() if r.token_expire_at else None
-                ),
+                "token_expire_at": r.token_expire_at.isoformat() if r.token_expire_at else None,
             }
             for r in rows
         ]
@@ -464,17 +879,18 @@ def fetch_ws_tasks(
     workspace_id: int, _ws_id: int, ctx: dict | None = None
 ) -> list[dict]:
     """워크스페이스 전체 WBS 태스크 (날짜 필터: due_date 기준)"""
-    from app.domains.action.models import WbsTask
+    from app.domains.action.models import WbsTask, WbsEpic
     from app.domains.meeting.models import Meeting
 
     date_from = _parse_date((ctx or {}).get("date_from"))
-    date_to = _parse_date((ctx or {}).get("date_to"))
+    date_to   = _parse_date((ctx or {}).get("date_to"))
 
     db = SessionLocal()
     try:
         q = (
             db.query(WbsTask)
-            .join(Meeting, WbsTask.meeting_id == Meeting.id)
+            .join(WbsEpic, WbsTask.epic_id == WbsEpic.id)
+            .join(Meeting, WbsEpic.meeting_id == Meeting.id)
             .filter(Meeting.workspace_id == workspace_id)
         )
         if date_from:
@@ -507,7 +923,7 @@ def fetch_ws_decisions(
     from app.domains.meeting.models import Meeting
 
     date_from = _parse_date((ctx or {}).get("date_from"))
-    date_to = _parse_date((ctx or {}).get("date_to"))
+    date_to   = _parse_date((ctx or {}).get("date_to"))
 
     db = SessionLocal()
     try:
@@ -528,11 +944,7 @@ def fetch_ws_decisions(
                 "content": decision.content,
                 "is_confirmed": decision.is_confirmed,
                 "meeting_title": title,
-                "detected_at": (
-                    decision.detected_at.strftime("%Y-%m-%d")
-                    if decision.detected_at
-                    else None
-                ),
+                "detected_at": decision.detected_at.strftime("%Y-%m-%d") if decision.detected_at else None,
             }
             for decision, title in rows
         ]
@@ -545,19 +957,20 @@ def fetch_ws_decisions(
 # ──────────────────────────────────────────────────────────────────
 # ONTOLOGY 레지스트리
 #
-# 온톨로지의 "공리(Axiom)" 목록.
 # 각 Relation이 "어떤 엔티티에서 어떤 엔티티로 어떻게 이동하는가"를
-# 선언적으로 정의한다. traverser는 이 목록을 참조해 탐색 경로를 결정한다.
+# 선언적으로 정의한다. traverser는 이 목록만 보고 탐색 경로를 결정한다.
 #
 # weight 가이드:
-#   2.0 = 질문 의도와 직결될 확률이 높은 핵심 관계 (결정사항, 태스크)
-#   1.8 = 중요도 높은 관계 (할당된 태스크)
-#   1.5 = 보통 이상 (보고서, 참여 회의, 부서)
-#   1.2 = 맥락용 (참석자, 일반 관계)
-#   1.0 = 기본값 (워크스페이스 집합 조회)
+#   2.0 = 질문 의도와 직결 (결정사항, 태스크)
+#   1.8 = 중요도 높음 (태스크 컨텍스트, 담당 태스크)
+#   1.5 = 보통 이상 (보고서, 참여 회의, 역방향 회의 추적)
+#   1.2 = 맥락용 (참석자, 담당자 역방향)
+#   1.0 = 기본값 (워크스페이스 집합, 부서 멤버, 발언자)
+#   0.8 = 보조 정보 (stats — 항상 마지막에 읽힘)
 # ──────────────────────────────────────────────────────────────────
 ONTOLOGY: list[Relation] = [
-    # User 기점 관계
+
+    # ── User 기점 순방향 ─────────────────────────────────────────
     Relation(
         type=RelationType.PARTICIPATED_IN,
         from_entity=EntityType.USER,
@@ -585,17 +998,26 @@ ONTOLOGY: list[Relation] = [
         infer_at_depth=1,
         weight=1.0,
     ),
-    # Meeting 기점 관계
-    # infer_at_depth=2: User→Meeting을 거친 후에만 로드 (root에서 직접 fetch 시 건너뜀)
-    # → "박민준의 회의" 컨텍스트 아래에서만 결정사항/태스크를 프리패치
+    Relation(
+        type=RelationType.HAS_STATS,
+        from_entity=EntityType.USER,
+        to_entity=EntityType.USER,  # terminal: UserStats 타입 반환 → 추가 탐색 없음
+        fetch_fn=fetch_user_stats,
+        description="사용자 활동 통계",
+        infer_at_depth=1,
+        weight=0.8,
+    ),
+
+    # ── Meeting 기점 순방향 ──────────────────────────────────────
+    # infer_at_depth=1: Meeting이 직접 seed일 때도 탐색
     Relation(
         type=RelationType.HAS_DECISION,
         from_entity=EntityType.MEETING,
         to_entity=EntityType.DECISION,
         fetch_fn=fetch_meeting_decisions,
         description="회의에서 나온 결정 사항",
-        infer_at_depth=2,
-        weight=2.0,  # 가장 높은 우선순위 — 결정사항은 핵심 정보
+        infer_at_depth=1,
+        weight=2.0,
     ),
     Relation(
         type=RelationType.HAS_TASK,
@@ -603,7 +1025,7 @@ ONTOLOGY: list[Relation] = [
         to_entity=EntityType.WBS_TASK,
         fetch_fn=fetch_meeting_tasks,
         description="회의에서 생성된 WBS 태스크",
-        infer_at_depth=2,
+        infer_at_depth=1,
         weight=1.8,
     ),
     Relation(
@@ -612,7 +1034,7 @@ ONTOLOGY: list[Relation] = [
         to_entity=EntityType.REPORT,
         fetch_fn=fetch_meeting_reports,
         description="회의 보고서",
-        infer_at_depth=2,
+        infer_at_depth=1,
         weight=1.5,
     ),
     Relation(
@@ -621,10 +1043,102 @@ ONTOLOGY: list[Relation] = [
         to_entity=EntityType.USER,
         fetch_fn=fetch_meeting_members,
         description="회의 참석자",
-        infer_at_depth=2,
+        infer_at_depth=1,
         weight=1.2,
     ),
-    # 워크스페이스 집합 관계 (WS_* 엔티티 → 목록 반환)
+    Relation(
+        type=RelationType.HAS_STATS,
+        from_entity=EntityType.MEETING,
+        to_entity=EntityType.MEETING,  # terminal: MeetingStats 타입 반환
+        fetch_fn=fetch_meeting_stats,
+        description="회의 통계 요약",
+        infer_at_depth=1,
+        weight=0.8,
+    ),
+
+    # ── WbsTask 기점 역방향 ──────────────────────────────────────
+    # "이 태스크 어느 회의 거야?", "이 태스크 담당자 누구야?" 처리
+    Relation(
+        type=RelationType.SOURCE_MEETING,
+        from_entity=EntityType.WBS_TASK,
+        to_entity=EntityType.MEETING,
+        fetch_fn=fetch_task_source_meeting,
+        description="태스크가 생성된 회의",
+        infer_at_depth=1,
+        weight=1.5,
+    ),
+    Relation(
+        type=RelationType.ASSIGNED_BY,
+        from_entity=EntityType.WBS_TASK,
+        to_entity=EntityType.USER,
+        fetch_fn=fetch_task_assignee,
+        description="태스크 담당자",
+        infer_at_depth=1,
+        weight=1.2,
+    ),
+    Relation(
+        type=RelationType.HAS_CONTEXT,
+        from_entity=EntityType.WBS_TASK,
+        to_entity=EntityType.WBS_TASK,  # terminal: TaskContext 타입 반환
+        fetch_fn=fetch_task_context,
+        description="태스크 전체 컨텍스트",
+        infer_at_depth=1,
+        weight=1.8,
+    ),
+
+    # ── Decision 기점 역방향 ─────────────────────────────────────
+    # "이 결정 어느 회의 거야?", "이 결정 누가 제안했어?" 처리
+    Relation(
+        type=RelationType.FROM_MEETING,
+        from_entity=EntityType.DECISION,
+        to_entity=EntityType.MEETING,
+        fetch_fn=fetch_decision_meeting,
+        description="결정사항이 나온 회의",
+        infer_at_depth=1,
+        weight=1.5,
+    ),
+    Relation(
+        type=RelationType.PROPOSED_BY,
+        from_entity=EntityType.DECISION,
+        to_entity=EntityType.USER,
+        fetch_fn=fetch_decision_speaker,
+        description="결정을 제안한 사람",
+        infer_at_depth=1,
+        weight=1.0,
+    ),
+    Relation(
+        type=RelationType.HAS_CONTEXT,
+        from_entity=EntityType.DECISION,
+        to_entity=EntityType.DECISION,  # terminal: DecisionContext 타입 반환
+        fetch_fn=fetch_decision_context,
+        description="결정사항 전체 컨텍스트",
+        infer_at_depth=1,
+        weight=1.8,
+    ),
+
+    # ── Department 기점 역방향 ───────────────────────────────────
+    # "개발팀 구성원 보여줘" 처리
+    # depth=2 탐색으로 Department→User→WbsTask 추론 가능
+    Relation(
+        type=RelationType.HAS_DEPT_MEMBER,
+        from_entity=EntityType.DEPARTMENT,
+        to_entity=EntityType.USER,
+        fetch_fn=fetch_department_members,
+        description="부서 소속 멤버",
+        infer_at_depth=1,
+        weight=1.5,
+    ),
+    Relation(
+        type=RelationType.HAS_STATS,
+        from_entity=EntityType.DEPARTMENT,
+        to_entity=EntityType.DEPARTMENT,  # terminal: DeptStats 타입 반환
+        fetch_fn=fetch_department_stats,
+        description="부서 통계",
+        infer_at_depth=1,
+        weight=0.8,
+    ),
+
+    # ── 워크스페이스 집합 관계 ───────────────────────────────────
     Relation(
         type=RelationType.LISTS_MEMBERS,
         from_entity=EntityType.WS_MEMBERS,
