@@ -90,6 +90,14 @@ async def postprocess_diarization_node(state: MeetingPipelineState) -> dict[str,
             },
         )
 
+    try:
+        from app.domains.knowledge.service import process_meeting_end
+
+        await process_meeting_end(meeting_id, workspace_id)
+    except Exception as exc:
+        logger.exception("process_meeting_end failed: meeting_id=%s", meeting_id)
+        return _append_error(state, f"process_meeting_end 실패: {exc}")
+
     report_state = {
         "meeting_id": meeting_id,
         "workspace_id": workspace_id,
@@ -103,7 +111,9 @@ async def postprocess_diarization_node(state: MeetingPipelineState) -> dict[str,
 
         await quick_report_node(report_state)
     except Exception as exc:
-        logger.exception("quick_report failed in meeting pipeline: meeting_id=%s", meeting_id)
+        logger.exception(
+            "quick_report failed in meeting pipeline: meeting_id=%s", meeting_id
+        )
         return _append_error(state, f"quick_report 실패: {exc}")
 
     summary = get_meeting_summary(meeting_id) or {}
@@ -125,7 +135,10 @@ async def wbs_node(state: MeetingPipelineState) -> dict[str, Any]:
         wbs = await build_wbs_template(db, int(state["meeting_id"]))
         return {"wbs": wbs}
     except Exception as exc:
-        logger.exception("WBS generation failed in meeting pipeline: meeting_id=%s", state.get("meeting_id"))
+        logger.exception(
+            "WBS generation failed in meeting pipeline: meeting_id=%s",
+            state.get("meeting_id"),
+        )
         return _append_error(state, f"WBS 생성 실패: {exc}")
     finally:
         db.close()
@@ -137,14 +150,19 @@ async def minutes_node(state: MeetingPipelineState) -> dict[str, Any]:
         minute = await build_and_save_minutes(db, int(state["meeting_id"]))
         return {"minutes_id": int(minute.id)}
     except Exception as exc:
-        logger.exception("minutes generation failed in meeting pipeline: meeting_id=%s", state.get("meeting_id"))
+        logger.exception(
+            "minutes generation failed in meeting pipeline: meeting_id=%s",
+            state.get("meeting_id"),
+        )
         return _append_error(state, f"회의록 생성 실패: {exc}")
     finally:
         db.close()
 
 
 def _route_mode(state: MeetingPipelineState) -> str:
-    return "meeting_start" if state.get("mode") == "start" else "postprocess_diarization"
+    return (
+        "meeting_start" if state.get("mode") == "start" else "postprocess_diarization"
+    )
 
 
 def _build_graph():
@@ -178,24 +196,28 @@ async def run_meeting_start_pipeline(
     workspace_id: int,
     meeting_id: int,
 ) -> MeetingPipelineState:
-    return await meeting_pipeline_graph.ainvoke({
-        "workspace_id": workspace_id,
-        "meeting_id": meeting_id,
-        "mode": "start",
-        "errors": [],
-    })
+    return await meeting_pipeline_graph.ainvoke(
+        {
+            "workspace_id": workspace_id,
+            "meeting_id": meeting_id,
+            "mode": "start",
+            "errors": [],
+        }
+    )
 
 
 async def run_meeting_completion_pipeline(
     workspace_id: int,
     meeting_id: int,
 ) -> MeetingPipelineState:
-    return await meeting_pipeline_graph.ainvoke({
-        "workspace_id": workspace_id,
-        "meeting_id": meeting_id,
-        "mode": "complete",
-        "errors": [],
-    })
+    return await meeting_pipeline_graph.ainvoke(
+        {
+            "workspace_id": workspace_id,
+            "meeting_id": meeting_id,
+            "mode": "complete",
+            "errors": [],
+        }
+    )
 
 
 def _session() -> Session:
@@ -229,23 +251,29 @@ async def _collect_redis_utterances(meeting_id: int) -> list[dict[str, Any]]:
             continue
 
         speaker_ref = payload.get("speaker_id")
-        mapped_user_id = speaker_map.get(str(speaker_ref)) if speaker_ref is not None else None
-        speaker_id = int(mapped_user_id) if mapped_user_id and mapped_user_id.isdigit() else None
+        mapped_user_id = (
+            speaker_map.get(str(speaker_ref)) if speaker_ref is not None else None
+        )
+        speaker_id = (
+            int(mapped_user_id) if mapped_user_id and mapped_user_id.isdigit() else None
+        )
         speaker_label = payload.get("speaker") or payload.get("speaker_label")
         if not speaker_label:
             speaker_label = f"User {speaker_id}" if speaker_id else "알 수 없음"
 
-        utterances.append({
-            "seq": seq,
-            "speaker_id": speaker_id,
-            "speaker_label": speaker_label,
-            "timestamp": payload.get("timestamp"),
-            "content": str(content).strip(),
-            "text": str(content).strip(),
-            "start": payload.get("start", 0.0),
-            "end": payload.get("end", 0.0),
-            "confidence": payload.get("confidence"),
-        })
+        utterances.append(
+            {
+                "seq": seq,
+                "speaker_id": speaker_id,
+                "speaker_label": speaker_label,
+                "timestamp": payload.get("timestamp"),
+                "content": str(content).strip(),
+                "text": str(content).strip(),
+                "start": payload.get("start", 0.0),
+                "end": payload.get("end", 0.0),
+                "confidence": payload.get("confidence"),
+            }
+        )
 
     return utterances
 
@@ -296,16 +324,18 @@ def _persist_action_items_from_summary(
             continue
 
         assignee = user_by_name.get(assignee_name)
-        db.add(ActionItem(
-            meeting_id=meeting_id,
-            content=content,
-            assignee_id=int(assignee.id) if assignee else None,
-            due_date=_parse_date(deadline),
-            status=ActionStatus.pending,
-            detected_at=now_kst().replace(tzinfo=None),
-            priority=Priority(priority),
-            urgency=urgency[:20],
-        ))
+        db.add(
+            ActionItem(
+                meeting_id=meeting_id,
+                content=content,
+                assignee_id=int(assignee.id) if assignee else None,
+                due_date=_parse_date(deadline),
+                status=ActionStatus.pending,
+                detected_at=now_kst().replace(tzinfo=None),
+                priority=Priority(priority),
+                urgency=urgency[:20],
+            )
+        )
         existing_contents.add(content)
 
     db.commit()
