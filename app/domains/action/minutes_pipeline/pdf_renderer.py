@@ -3,7 +3,6 @@
 Playwright 미설치 시 fallback_renderer(reportlab)로 자동 폴백.
 """
 import logging
-import re
 import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -70,9 +69,28 @@ def _get_font_urls() -> tuple[str, str]:
     return reg_url, bold_url
 
 
-def _md_bold(text: str) -> str:
-    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text, flags=re.DOTALL)
-    return re.sub(r"__(.+?)__", r"<b>\1</b>", text, flags=re.DOTALL)
+def _md_to_html(text: str) -> str:
+    """마크다운 텍스트를 HTML로 변환한다."""
+    if not text:
+        return ""
+    import markdown as _md
+    return _md.markdown(text, extensions=["tables", "nl2br"])
+
+
+def _md_to_html_row(text: str) -> str:
+    """결정사항 행용: 앞의 리스트 마커(- / * / 1.)를 제거하고 인라인 마크다운만 변환한다."""
+    if not text:
+        return ""
+    import re
+    t = text.strip()
+    t = re.sub(r"^[-*]\s+", "", t)
+    t = re.sub(r"^\d+\.\s+", "", t)
+    import markdown as _md
+    html = _md.markdown(t, extensions=["nl2br"])
+    # 단일 <p> 래핑 제거
+    if html.startswith("<p>") and html.endswith("</p>") and html.count("<p>") == 1:
+        html = html[3:-4]
+    return html
 
 
 def _to_renderable_image_url(raw: str) -> str:
@@ -111,11 +129,11 @@ def render(fields: "MinuteFields") -> bytes:
         dept=fields.dept,
         author=fields.author,
         attendees=fields.attendees,
-        agenda_items=_md_bold(fields.agenda_items),
-        discussion_content=_md_bold(fields.discussion_content),
-        decision_rows=[_md_bold(r) for r in fields.decision_rows],
-        action_items=_md_bold(fields.action_items),
-        special_notes=_md_bold(fields.special_notes),
+        agenda_items=_md_to_html(fields.agenda_items),
+        discussion_content=_md_to_html(fields.discussion_content),
+        decision_rows=[_md_to_html_row(r) for r in fields.decision_rows],
+        action_items=_md_to_html(fields.action_items),
+        special_notes=_md_to_html(fields.special_notes),
         photo_urls=[_to_renderable_image_url(u) for u in fields.photo_urls if u],
     )
 
