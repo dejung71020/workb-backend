@@ -551,66 +551,72 @@ async def process_meeting_end(meeting_id: int, workspace_id: int) -> None:
     from app.domains.action.models import WbsEpic, WbsTask, Priority
     from app.utils.time_utils import now_kst
 
-    mongo_db = AsyncIOMotorClient(settings.MONGODB_URL)["meeting_assistant"]
-    db = SessionLocal()
+    # Phase 1: MongoDB fetch — no DB session held
+    mongo_client = AsyncIOMotorClient(settings.MONGODB_URL)
     try:
-        # -- utterances 조회 --
+        mongo_db = mongo_client["meeting_assistant"]
         ctx_doc = await mongo_db["utterances"].find_one(
             {"$or": [{"meeting_id": meeting_id}, {"meeting_id": str(meeting_id)}]}
         )
-        if not ctx_doc or not ctx_doc.get("utterances"):
-            return
+    finally:
+        mongo_client.close()
 
-        transcript_text = "\n".join(
-            f"[{u.get('speaker_label', '?')}] {u.get('content', '')}"
-            for u in ctx_doc["utterances"]
-        )
+    if not ctx_doc or not ctx_doc.get("utterances"):
+        return
 
-        # -- LLM으로 decisions + action_items + 요약 한 번에 추출 --
-        llm = ChatOpenAI(model="gpt-4o-mini", api_key=settings.OPENAI_API_KEY)
-        prompt = f"""
-        다음 회의 발화에서 구조화된 정보를 추출하세요.
+    transcript_text = "\n".join(
+        f"[{u.get('speaker_label', '?')}] {u.get('content', '')}"
+        for u in ctx_doc["utterances"]
+    )
 
-        [발화 내용]
-        {transcript_text}
+    # Phase 2: LLM call — no DB session held
+    llm = ChatOpenAI(model="gpt-4o-mini", api_key=settings.OPENAI_API_KEY)
+    prompt = f"""
+    다음 회의 발화에서 구조화된 정보를 추출하세요.
 
-        액션 아이템 우선순위(priority) 판단 기준:
-        - high: 결정 사항과 직접 연결 / 다른 액션의 선행 조건 / "반드시·꼭·최우선" 발화 / 다수 인원 영향
-        - normal: 그 외
+    [발화 내용]
+    {transcript_text}
 
-        긴급도(urgency) 판단 기준:
-        - urgent: 기한 3일 이내 / 다음 회의 전 완료 필요 / "빨리·즉시·오늘까지·ASAP·as soon as possible" 발화
-        - normal: 기한 4~7일 이내
-        - low: 기한 7일 초과 또는 미언급
+    액션 아이템 우선순위(priority) 판단 기준:
+    - high: 결정 사항과 직접 연결 / 다른 액션의 선행 조건 / "반드시·꼭·최우선" 발화 / 다수 인원 영향
+    - normal: 그 외
 
-        반드시 아래 JSON 형식으로만 답변하세요.
-        {{
-            "title": "회의 핵심 주제 (한 줄)",
-            "key_points": ["핵심 논의 내용 1", ...],
-            "decisions": [
-                {{"content": "결정 사항 내용"}}
-            ],
-            "wbs_tasks": [
-                {{
-                    "order": 0,
-                    "title": "할 일 제목 (한 줄, 30자 이내)",
-                    "content": "할 일 상세 내용 (담당자·기한·배경 포함, 없으면 null)",
-                    "assignee_name": "담당자 이름 or null",
-                    "due_date": "YYYY-MM-DD or null",
-                    "priority": "low|medium|high|critical",
-                    "urgency": "urgent|normal|low"
-                }}
-            ],
-            "hallucination_flags": ["근거 불충분 항목 설명 (없으면 빈 배열)"]
-        }}
-        """
-        result = await llm.ainvoke(prompt)
-        json_match = re.search(r"\{.*\}", result.content, re.DOTALL)
-        try:
-            extracted = json.loads(json_match.group()) if json_match else {}
-        except json.JSONDecodeError:
-            extracted = {}
+    긴급도(urgency) 판단 기준:
+    - urgent: 기한 3일 이내 / 다음 회의 전 완료 필요 / "빨리·즉시·오늘까지·ASAP·as soon as possible" 발화
+    - normal: 기한 4~7일 이내
+    - low: 기한 7일 초과 또는 미언급
 
+    반드시 아래 JSON 형식으로만 답변하세요.
+    {{
+        "title": "회의 핵심 주제 (한 줄)",
+        "key_points": ["핵심 논의 내용 1", ...],
+        "decisions": [
+            {{"content": "결정 사항 내용"}}
+        ],
+        "wbs_tasks": [
+            {{
+                "order": 0,
+                "title": "할 일 제목 (한 줄, 30자 이내)",
+                "content": "할 일 상세 내용 (담당자·기한·배경 포함, 없으면 null)",
+                "assignee_name": "담당자 이름 or null",
+                "due_date": "YYYY-MM-DD or null",
+                "priority": "low|medium|high|critical",
+                "urgency": "urgent|normal|low"
+            }}
+        ],
+        "hallucination_flags": ["근거 불충분 항목 설명 (없으면 빈 배열)"]
+    }}
+    """
+    result = await llm.ainvoke(prompt)
+    json_match = re.search(r"\{.*\}", result.content, re.DOTALL)
+    try:
+        extracted = json.loads(json_match.group()) if json_match else {}
+    except json.JSONDecodeError:
+        extracted = {}
+
+    # Phase 3: DB writes — session opened only for the write phase
+    db = SessionLocal()
+    try:
         now = now_kst().replace(tzinfo=None)
 
         # -- decisions -> MySQL --
@@ -683,5 +689,6 @@ async def process_meeting_end(meeting_id: int, workspace_id: int) -> None:
 
     except Exception:
         db.rollback()
+        raise
     finally:
         db.close()
