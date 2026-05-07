@@ -6,7 +6,9 @@
 이 router에 이어서 추가할 수 있습니다.
 """
 
-from fastapi import APIRouter, Depends, status
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user_id
@@ -57,6 +59,7 @@ from app.domains.workspace.service import (
     list_my_workspaces_service,
 )
 from app.domains.workspace.deps import require_workspace_admin, require_workspace_member
+from app.utils.local_images import save_local_image
 
 
 router = APIRouter()
@@ -69,6 +72,23 @@ async def list_my_workspaces(
 ) -> WorkspaceListResponse:
     """현재 사용자가 속한 워크스페이스 목록."""
     return list_my_workspaces_service(db, current_user_id)
+
+
+@router.post(
+    "/{workspace_id}/logo-file",
+    status_code=status.HTTP_200_OK,
+)
+async def upload_workspace_logo_file(
+    workspace_id: int,
+    file: UploadFile = File(...),
+    _admin=Depends(require_workspace_admin),
+) -> dict[str, str]:
+    logo_url = await save_local_image(
+        file=file,
+        directory=Path("storage/teamlogo"),
+        stem=f"workspace-{workspace_id}",
+    )
+    return {"logo_url": logo_url}
 
 
 @router.post("/join", response_model=WorkspaceJoinResponse, status_code=status.HTTP_200_OK)

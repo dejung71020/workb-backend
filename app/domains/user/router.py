@@ -19,8 +19,9 @@ service가 repository로 DB 작업
 """
 
 from urllib.parse import urlencode
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -68,9 +69,23 @@ from app.domains.user.service import (
     update_my_device_settings_service,
     withdraw_my_account_service,
 )
+from app.utils.local_images import save_local_image
 
 
 router = APIRouter()
+
+
+@router.post("/me/profile-image", status_code=status.HTTP_200_OK)
+async def upload_my_profile_image(
+    file: UploadFile = File(...),
+    current_user_id: int = Depends(get_current_user_id),
+) -> dict[str, str]:
+    image_url = await save_local_image(
+        file=file,
+        directory=Path("storage/profile"),
+        stem=f"user-{current_user_id}",
+    )
+    return {"image_url": image_url}
 
 
 @router.get(
