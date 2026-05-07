@@ -101,8 +101,31 @@ td {
 .cell {
   vertical-align: top;
   font-size: 8.5pt;
-  white-space: pre-wrap;
 }
+
+/* 마크다운 렌더링 요소 */
+.cell p { margin: 0 0 3pt; }
+.cell p:last-child { margin-bottom: 0; }
+.cell h1, .cell h2, .cell h3, .cell h4 {
+  font-size: 9pt;
+  font-weight: bold;
+  margin: 4pt 0 2pt;
+}
+.cell ul, .cell ol {
+  padding-left: 13pt;
+  margin: 2pt 0;
+}
+.cell li { margin: 1pt 0; }
+.cell strong { font-weight: bold; }
+.cell em { font-style: italic; }
+.cell code {
+  font-family: monospace;
+  font-size: 8pt;
+  background: #f4f4f4;
+  padding: 0 2pt;
+}
+.cell table { margin: 3pt 0; font-size: 8pt; }
+.cell-dec p { margin: 0; }
 
 /* 최소높이 확보용 하단 패딩 */
 .cell-agenda    { padding-bottom: 35pt; }

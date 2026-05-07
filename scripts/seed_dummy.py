@@ -10,6 +10,7 @@ seed_dummy.py - /docs 테스트용 더미 데이터 삽입
 실행:
     python scripts/seed_dummy.py
     python scripts/seed_dummy.py --flush   # 기존 데이터 삭제 후 재삽입
+    python scripts/seed_dummy.py --delete  # 더미 데이터만 안전하게 삭제
 """
 import sys, os, json, argparse
 from pymongo import MongoClient
@@ -176,16 +177,97 @@ MEETING_SUMMARIES = [
 ]
 
 
+def _dummy_meeting_ids(current_meeting_id: int) -> list[int]:
+    past_ids = [m["meeting_id"] for m in PAST_MEETINGS]
+    # 현재 회의 + 다음 예정 회의(quick_report next_meeting 조회용)
+    return past_ids + [int(current_meeting_id), 37]
+
+
+def delete_mysql(current_meeting_id: int, workspace_id: int) -> None:
+    """seed_dummy.py가 만든(또는 기대한) 더미 데이터만 정리합니다."""
+    engine = create_engine(settings.DATABASE_URL)
+    ids = _dummy_meeting_ids(current_meeting_id)
+
+    def safe_exec(conn, sql: str, params: dict) -> None:
+        try:
+            conn.execute(text(sql), params)
+        except Exception as exc:
+            # 환경별로 테이블이 없거나 스키마가 다를 수 있어 best-effort로 진행
+            print(f"  [MySQL] skip: {sql.splitlines()[0][:60]}... ({exc})")
+
+    with engine.connect() as conn:
+        print(f"  [MySQL] 더미 데이터 삭제 시작: meeting_id={ids} (workspace_id={workspace_id})")
+
+        # 1) meeting_minutes 기반으로 minute_photos / review_requests 제거
+        safe_exec(
+            conn,
+            """
+            DELETE mp
+            FROM minute_photos mp
+            JOIN meeting_minutes mm ON mm.id = mp.minute_id
+            WHERE mm.meeting_id IN :ids
+            """,
+            {"ids": tuple(ids)},
+        )
+        safe_exec(
+            conn,
+            """
+            DELETE rr
+            FROM review_requests rr
+            JOIN meeting_minutes mm ON mm.id = rr.minute_id
+            WHERE mm.meeting_id IN :ids
+            """,
+            {"ids": tuple(ids)},
+        )
+
+        # 2) WBS (tasks -> epics)
+        safe_exec(
+            conn,
+            """
+            DELETE wt
+            FROM wbs_tasks wt
+            JOIN wbs_epics we ON we.id = wt.epic_id
+            WHERE we.meeting_id IN :ids
+            """,
+            {"ids": tuple(ids)},
+        )
+        safe_exec(
+            conn,
+            "DELETE FROM wbs_epics WHERE meeting_id IN :ids",
+            {"ids": tuple(ids)},
+        )
+
+        # 3) 기타 meeting_id FK 테이블들 (있을 수 있는 것들)
+        safe_exec(conn, "DELETE FROM action_items WHERE meeting_id IN :ids", {"ids": tuple(ids)})
+        safe_exec(conn, "DELETE FROM reports WHERE meeting_id IN :ids", {"ids": tuple(ids)})
+        safe_exec(conn, "DELETE FROM decisions WHERE meeting_id IN :ids", {"ids": tuple(ids)})
+
+        # 4) 참가자/회의록/회의
+        safe_exec(conn, "DELETE FROM meeting_participants WHERE meeting_id IN :ids", {"ids": tuple(ids)})
+        safe_exec(conn, "DELETE FROM meeting_minutes WHERE meeting_id IN :ids", {"ids": tuple(ids)})
+        safe_exec(conn, "DELETE FROM meetings WHERE id IN :ids", {"ids": tuple(ids)})
+
+        conn.commit()
+        print("  [MySQL] 더미 데이터 삭제 완료")
+
+
+def delete_mongo(current_meeting_id: int, workspace_id: int) -> None:
+    """seed_dummy.py가 만든 더미 문서만 정리합니다."""
+    ids = _dummy_meeting_ids(current_meeting_id)
+    print(f"  [MongoDB] 더미 데이터 삭제 시작: meeting_id={ids} (workspace_id={workspace_id})")
+
+    mongo_db["utterances"].delete_many({"meeting_id": {"$in": ids}})
+    mongo_db["meeting_contexts"].delete_many({"meeting_id": {"$in": ids}, "workspace_id": workspace_id})
+    mongo_db["meeting_summaries"].delete_many({"meeting_id": {"$in": ids}, "workspace_id": workspace_id})
+
+    print("  [MongoDB] 더미 데이터 삭제 완료")
+
+
 def seed_mysql(meeting_id: int, workspace_id: int, flush: bool):
     engine = create_engine(settings.DATABASE_URL)
     with engine.connect() as conn:
         if flush:
-            past_ids = [m["meeting_id"] for m in PAST_MEETINGS]
-            all_ids = past_ids + [meeting_id, 37]
-            conn.execute(text("SET FOREIGN_KEY_CHECKS=0"))
-            conn.execute(text("DELETE FROM meetings WHERE id IN :ids"), {"ids": tuple(all_ids)})
-            conn.execute(text("SET FOREIGN_KEY_CHECKS=1"))
-            print(f"  [MySQL] 기존 데이터 삭제: meeting_id={all_ids}")
+            delete_mysql(meeting_id, workspace_id)
 
         row = conn.execute(
             text("SELECT id FROM users WHERE workspace_id = :wid LIMIT 1"),
@@ -400,8 +482,9 @@ def seed_mongo(workspace_id: int, flush: bool):
     ctx_col = mongo_db["meeting_contexts"]
 
     if flush:
-        ctx_col.delete_many({})
-        print("  [MongoDB] meeting_contexts 전체 삭제")
+        ids = [m["meeting_id"] for m in PAST_MEETINGS] + [CURRENT_UTTERANCES["meeting_id"], 37]
+        ctx_col.delete_many({"meeting_id": {"$in": ids}, "workspace_id": workspace_id})
+        print(f"  [MongoDB] meeting_contexts 더미 데이터 삭제: meeting_id={ids}")
 
     ctx_indexes = [idx["name"] for idx in ctx_col.list_indexes()]
     if "summary_text" not in ctx_indexes:
@@ -438,10 +521,20 @@ def main():
     parser.add_argument("--meeting-id", default=DEFAULT_MEETING_ID, help="현재 회의 meeting_id")
     parser.add_argument("--workspace-id", type=int, default=2, help="테스트용 workspace_id")
     parser.add_argument("--flush", action="store_true", help="기존 데이터 삭제 후 재삽입")
+    parser.add_argument("--delete", action="store_true", help="더미 데이터만 삭제하고 종료")
     args = parser.parse_args()
 
+    meeting_id_int = int(args.meeting_id)
+
+    if args.delete:
+        print(f"\n더미 데이터 삭제 시작 (current meeting_id={meeting_id_int}, workspace_id={args.workspace_id})")
+        delete_mysql(meeting_id_int, args.workspace_id)
+        delete_mongo(meeting_id_int, args.workspace_id)
+        print("\n완료. 더미 데이터 삭제가 끝났습니다.")
+        return
+
     print(f"\n더미 데이터 삽입 시작 (현재 meeting_id={args.meeting_id}, workspace_id={args.workspace_id}, flush={args.flush})")
-    seed_mysql(int(args.meeting_id), args.workspace_id, args.flush)
+    seed_mysql(meeting_id_int, args.workspace_id, args.flush)
     seed_mongo(args.workspace_id, args.flush)
     print(f"\n완료. /live/{args.meeting_id} 에서 ChatFAB 테스트하세요.")
 
