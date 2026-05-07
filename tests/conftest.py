@@ -35,7 +35,6 @@ _MOCK_MODULES = [
     # redis_utils 가 numpy._core(numpy 2.x 전용) 를 임포트하므로 모듈 자체를 mock
     "app.utils.redis_utils",
     # 모듈 수준에서 AI 초기화가 일어나는 앱 내부 모듈
-    "app.core.graph",
     "app.core.graph.state",
     "app.core.graph.workflow",
     "app.core.graph.supervisor",
@@ -96,12 +95,18 @@ def client():
 # ── 6. 함수 스코프 픽스처 ───────────────────────────────────────────────────
 
 @pytest.fixture(autouse=True)
-def clean_db(client):
+def clean_db(request):
     """매 테스트 전에 모든 테이블 데이터를 삭제합니다.
 
-    client 에 의존함으로써 세션 스코프 픽스처가 먼저 실행되도록 보장합니다.
+    일반 API 테스트는 client 세션 스코프 픽스처가 먼저 실행되도록 보장합니다.
+    graph 단위 테스트는 FastAPI TestClient가 필요 없으므로 앱 lifespan을 띄우지 않습니다.
     SQLite 는 기본적으로 FK 제약을 강제하지 않으므로 순서 무관하게 삭제 가능합니다.
     """
+    if "tests/graph" in str(request.node.fspath):
+        yield
+        return
+
+    request.getfixturevalue("client")
     with test_engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
             conn.execute(table.delete())

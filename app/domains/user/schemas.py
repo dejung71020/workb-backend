@@ -30,13 +30,15 @@ class Gender(str, Enum):
 
 
 class UserProfileFields(BaseModel):
-    birth_date: date
-    phone_number: str = Field(min_length=9, max_length=30)
-    gender: Gender
+    birth_date: date | None = None
+    phone_number: str | None = Field(default=None, min_length=9, max_length=30)
+    gender: Gender | None = None
 
     @field_validator("birth_date")
     @classmethod
-    def validate_birth_date(cls, value: date) -> date:
+    def validate_birth_date(cls, value: date | None) -> date | None:
+        if value is None:
+            return value
         today = date.today()
         if value >= today:
             raise ValueError("생년월일은 오늘 이전 날짜여야 합니다.")
@@ -48,7 +50,9 @@ class UserProfileFields(BaseModel):
 
     @field_validator("phone_number")
     @classmethod
-    def validate_phone_number(cls, value: str) -> str:
+    def validate_phone_number(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
         normalized = value.strip()
         if not re.fullmatch(r"[\d+\-\s()]+", normalized):
             raise ValueError("전화번호는 숫자와 +, -, 공백, 괄호만 사용할 수 있습니다.")
@@ -302,6 +306,19 @@ class DeviceSettingsResponse(DeviceSettingsRequest):
 
 class OAuthUrlResponse(BaseModel):
     auth_url: str
+
+
+class SocialSignupRequest(BaseModel):
+    signup_token: str
+    role: UserRole
+    invite_code: str | None = Field(default=None, min_length=6, max_length=20)
+
+    @field_validator("invite_code")
+    @classmethod
+    def normalize_optional_invite_code(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return value.strip().upper()
 
 
 class UserResponse(BaseModel):

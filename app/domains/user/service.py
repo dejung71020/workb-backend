@@ -75,6 +75,7 @@ from app.domains.user.schemas import (
     PasswordResetConfirmRequest,
     PasswordResetRequest,
     RefreshTokenRequest,
+    SocialSignupRequest,
     TokenResponse,
     UserProfileResponse,
     UserProfileUpdateRequest,
@@ -151,6 +152,52 @@ def _token_response_for_user(user: User) -> TokenResponse:
         ),
         refresh_token=create_refresh_token(subject=str(user.id)),
     )
+
+
+class PendingSocialSignup(Exception):
+    def __init__(self, signup_token: str, email: str, name: str):
+        self.signup_token = signup_token
+        self.email = email
+        self.name = name
+        super().__init__("소셜 회원가입이 필요합니다.")
+
+
+def _create_social_signup_token(profile: dict[str, str], provider: str) -> str:
+    return create_access_token(
+        subject=profile["email"],
+        expires_delta=timedelta(minutes=15),
+        extra_claims={
+            "type": "social_signup",
+            "provider": provider,
+            "social_id": profile["social_id"],
+            "email": profile["email"],
+            "name": profile["name"],
+        },
+    )
+
+
+def _decode_social_signup_token(signup_token: str) -> dict:
+    try:
+        decoded = decode_token(signup_token)
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="소셜 회원가입 정보가 만료되었거나 올바르지 않습니다.",
+        ) from None
+
+    if decoded.get("type") != "social_signup":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="소셜 회원가입 정보가 올바르지 않습니다.",
+        )
+
+    required = ("provider", "social_id", "email", "name")
+    if any(not decoded.get(key) for key in required):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="소셜 회원가입 정보가 올바르지 않습니다.",
+        )
+    return decoded
 
 
 def _ensure_requested_social_role(user: User, requested_role: str) -> None:
@@ -273,7 +320,7 @@ def signup_admin_service(db: Session, payload: AdminSignupRequest) -> AdminSignu
         workspace_id=workspace.id,
         birth_date=payload.birth_date,
         phone_number=payload.phone_number,
-        gender=payload.gender.value,
+        gender=payload.gender.value if payload.gender else None,
     )
     create_workspace_membership(
         db=db,
@@ -361,7 +408,7 @@ def signup_member_service(db: Session, payload: MemberSignupRequest) -> UserResp
         workspace_id=workspace.id,
         birth_date=payload.birth_date,
         phone_number=payload.phone_number,
-        gender=payload.gender.value,
+        gender=payload.gender.value if payload.gender else None,
     )
     create_workspace_membership(
         db=db,
@@ -550,27 +597,58 @@ async def social_login_callback_service(db: Session, provider: str, code: str, s
             user = update_user_social_identity(db, existing_user, provider, profile["social_id"])
 
     if not user:
-        if state_data["role"] != UserRole.ADMIN.value:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="멤버 소셜 로그인은 기존 가입 계정만 사용할 수 있습니다. 초대코드로 먼저 가입해주세요.",
-            )
+        raise PendingSocialSignup(
+            signup_token=_create_social_signup_token(profile, provider),
+            email=profile["email"],
+            name=profile["name"],
+        )
 
+    if not user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="탈퇴했거나 비활성화된 계정입니다.")
+
+    return _token_response_for_user(user)
+
+
+def complete_social_signup_service(db: Session, payload: SocialSignupRequest) -> TokenResponse:
+    profile = _decode_social_signup_token(payload.signup_token)
+    provider = str(profile["provider"])
+    social_id = str(profile["social_id"])
+    email = str(profile["email"])
+    name = str(profile["name"])
+
+    user = get_user_by_social_identity(db, provider, social_id)
+    if not user:
+        existing_user = get_user_by_email(db, email)
+        if existing_user:
+            user = update_user_social_identity(db, existing_user, provider, social_id)
+
+    if user:
+        if not user.is_active:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="탈퇴했거나 비활성화된 계정입니다.")
+        return _token_response_for_user(user)
+
+    if payload.role not in (UserRole.ADMIN, UserRole.MEMBER):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="소셜 회원가입 유형은 관리자 또는 멤버만 선택할 수 있습니다.",
+        )
+
+    if payload.role == UserRole.ADMIN:
         workspace = create_workspace(
             db=db,
-            name=f"{profile['name']} Workspace",
+            name=f"{name} Workspace",
             invite_code=_generate_invite_code(),
         )
         create_default_integrations(db=db, workspace_id=workspace.id)
         user = create_user(
             db=db,
-            email=profile["email"],
+            email=email,
             hashed_password=hash_password(secrets.token_urlsafe(32)),
-            name=profile["name"],
+            name=name,
             role=UserRole.ADMIN.value,
             workspace_id=workspace.id,
             social_provider=provider,
-            social_id=profile["social_id"],
+            social_id=social_id,
         )
         create_workspace_membership(
             db=db,
@@ -578,9 +656,52 @@ async def social_login_callback_service(db: Session, provider: str, code: str, s
             user_id=user.id,
             role=MemberRole.admin,
         )
+        return _token_response_for_user(user)
 
-    if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="탈퇴했거나 비활성화된 계정입니다.")
+    invite_code = payload.invite_code
+    if not invite_code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="초대코드를 입력해주세요.",
+        )
+
+    invite = get_invite_code_by_code(db, invite_code)
+    invite_role = MemberRole.member
+    if invite:
+        if invite.is_used or invite.expires_at < datetime.utcnow():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="올바르지 않은 초대코드입니다.",
+            )
+        workspace = get_workspace_by_id(db, invite.workspace_id)
+        invite_role = invite.role
+    else:
+        workspace = get_workspace_by_invite_code(db, invite_code)
+
+    if not workspace:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="올바르지 않은 초대코드입니다.",
+        )
+
+    user = create_user(
+        db=db,
+        email=email,
+        hashed_password=hash_password(secrets.token_urlsafe(32)),
+        name=name,
+        role=invite_role.value,
+        workspace_id=workspace.id,
+        social_provider=provider,
+        social_id=social_id,
+    )
+    create_workspace_membership(
+        db=db,
+        workspace_id=workspace.id,
+        user_id=user.id,
+        role=invite_role,
+    )
+    if invite:
+        mark_invite_code_used(db, invite, user.id)
 
     return _token_response_for_user(user)
 

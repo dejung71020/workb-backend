@@ -1,3 +1,4 @@
+import logging
 from datetime import date
 from typing import Optional
 
@@ -36,9 +37,9 @@ from app.domains.meeting.service import (
     MinutePhotoService,
     SpeakerProfileService,
 )
-from app.domains.knowledge.service import process_meeting_end
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post(
@@ -230,6 +231,27 @@ async def start_workspace_meeting(
     }
 
 
+async def _run_meeting_completion_pipeline_background(
+    workspace_id: int,
+    meeting_id: int,
+) -> None:
+    try:
+        state = await run_meeting_completion_pipeline(workspace_id, meeting_id)
+        if state.get("errors"):
+            logger.warning(
+                "Meeting completion pipeline finished with errors: workspace_id=%s meeting_id=%s errors=%s",
+                workspace_id,
+                meeting_id,
+                state.get("errors"),
+            )
+    except Exception:
+        logger.exception(
+            "Meeting completion pipeline failed: workspace_id=%s meeting_id=%s",
+            workspace_id,
+            meeting_id,
+        )
+
+
 @router.post("/workspaces/{workspace_id}/{meeting_id}/end")
 def end_workspace_meeting(
     workspace_id: int,
@@ -240,8 +262,12 @@ def end_workspace_meeting(
 ) -> dict:
     """회의를 완료로 전환하고 후처리 LangGraph 파이프라인을 백그라운드로 실행합니다."""
     MeetingLifecycleService.end_meeting(db, workspace_id, meeting_id)
-    background_tasks.add_task(process_meeting_end, meeting_id, workspace_id)
-    return {"status": "ok"}
+    background_tasks.add_task(
+        _run_meeting_completion_pipeline_background,
+        workspace_id,
+        meeting_id,
+    )
+    return {"status": "ok", "pipeline": {"completion_queued": True}}
 
 
 _WAV_CONTENT_TYPES = {"audio/wav", "audio/wave", "audio/x-wav"}
