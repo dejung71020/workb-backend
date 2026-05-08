@@ -27,6 +27,7 @@ from app.domains.meeting.schemas import (
     SpeakerProfileRegisterResponse,
     UpdateMeetingRequest,
 )
+from app.utils.s3_utils import resolve_minute_photo_url
 from app.domains.meeting.service import (
     MeetingCreateService,
     MeetingDeleteService,
@@ -338,8 +339,9 @@ async def upload_minute_photo(
     """
     진행 중 회의에서 캡처한 이미지를 저장하고 minute_photos에 기록합니다.
 
-    - 파일 저장: storage/meetings/{meeting_id}/minute_photos/{filename}.png
-    - DB 저장: minute_photos(minute_id, photo_url, taken_at, taken_by)
+    - 파일 저장: AWS S3 (key: ``meetings/{meeting_id}/minute_photos/{filename}.{ext}``)
+    - DB 저장: minute_photos.photo_url 컬럼에 S3 object key 저장
+    - 응답: 프론트엔드가 즉시 표시할 수 있도록 presigned URL 변환 후 반환
     """
     filename = (file.filename or "").lower()
     if filename.endswith(".png"):
@@ -380,7 +382,7 @@ async def upload_minute_photo(
         photo=MinutePhotoOut(
             id=int(photo.id),
             minute_id=int(photo.minute_id),
-            photo_url=str(photo.photo_url),
+            photo_url=resolve_minute_photo_url(str(photo.photo_url)),
             taken_at=photo.taken_at,
             taken_by=int(photo.taken_by),
         ),

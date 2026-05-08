@@ -156,6 +156,34 @@ def get_object_url(key: str, bucket: Optional[str] = None) -> str:
     return f"https://{target_bucket}.s3.{settings.AWS_REGION}.amazonaws.com/{key}"
 
 
+def resolve_minute_photo_url(value: str, expires_in: Optional[int] = None) -> str:
+    """`minute_photos.photo_url` 컬럼 값을 즉시 표시 가능한 URL로 변환한다.
+
+    - 이미 외부 URL/data URI/file URI 이면 그대로 반환.
+    - 과거 로컬 경로 데이터(예: ``storage\\meetings\\3\\minute_photos\\xxx.png``)면
+      그대로 반환해 기존 정적 마운트(`/storage/...`) 또는 PDF 렌더러의
+      file:// 변환 로직과 호환되게 한다.
+    - 그 외에는 S3 object key 로 간주하고 Presigned URL 을 발급한다.
+    """
+    if not value:
+        return ""
+
+    text = value.strip()
+    if text.startswith(("http://", "https://", "file://", "data:")):
+        return text
+
+    # 레거시 로컬 경로 데이터 보호 (Windows 백슬래시 / 정규화된 storage 경로)
+    if (
+        "\\" in text
+        or text.startswith("storage/")
+        or text.startswith("storage\\")
+        or text.startswith("/storage/")
+    ):
+        return text
+
+    return generate_presigned_url(text, expires_in=expires_in)
+
+
 def generate_presigned_url(
     key: str,
     expires_in: Optional[int] = None,
