@@ -93,6 +93,11 @@ async def postprocess_diarization_node(state: MeetingPipelineState) -> dict[str,
             state,
             "후처리 발화(MongoDB)가 없어 회의 종료 후처리를 진행할 수 없습니다.",
         )
+    elif utterances:
+        logger.info(
+            "MongoDB utterances already exist; skip Redis fallback save to avoid overwriting postprocessed diarization. meeting_id=%s",
+            meeting_id,
+        )
 
     try:
         from app.domains.knowledge.service import process_meeting_end

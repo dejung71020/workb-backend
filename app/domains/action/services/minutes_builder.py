@@ -194,14 +194,21 @@ async def build_and_save_minutes(
     "pending_items": [{{"content": "미결 사항 내용"}}]
 }}"""
 
-    result = await llm.ainvoke(prompt)
-    json_match = re.search(r"\{.*\}", result.content, re.DOTALL)
     try:
-        summary_dict = json.loads(json_match.group()) if json_match else {}
-    except json.JSONDecodeError:
-        summary_dict = {}
+        result = await llm.ainvoke(prompt)
+        json_match = re.search(r"\{.*\}", result.content, re.DOTALL)
+        try:
+            summary_dict = json.loads(json_match.group()) if json_match else {}
+        except json.JSONDecodeError:
+            summary_dict = {}
 
-    content = _format_minutes(summary_dict)
+        content = _format_minutes(summary_dict) or _build_default_minutes(db, meeting_id)
+    except Exception:
+        logger.exception(
+            "LLM 회의록 생성 실패, 기본 회의록으로 대체합니다. (meeting_id=%d)",
+            meeting_id,
+        )
+        content = _build_default_minutes(db, meeting_id)
 
     # ── DB 저장 ──────────────────────────────────────────────────────────
     now = now_kst()

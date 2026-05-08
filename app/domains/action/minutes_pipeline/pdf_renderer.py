@@ -143,24 +143,28 @@ def render(fields: "MinuteFields") -> bytes:
     env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=False)
     html_str = env.get_template("meeting_minutes.html").render(**ctx)
 
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch()
-        page = browser.new_page()
-        page.set_viewport_size({"width": 794, "height": 1123})
-        try:
-            page.emulate_media(media="print")
-        except Exception:
-            pass
-        page.set_content(html_str, wait_until="load")
-        pdf_bytes: bytes = page.pdf(
-            format="A4",
-            print_background=True,
-            prefer_css_page_size=True,
-            margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
-        )
-        browser.close()
-
-    return pdf_bytes
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch()
+            page = browser.new_page()
+            page.set_viewport_size({"width": 794, "height": 1123})
+            try:
+                page.emulate_media(media="print")
+            except Exception:
+                pass
+            page.set_content(html_str, wait_until="load")
+            pdf_bytes: bytes = page.pdf(
+                format="A4",
+                print_background=True,
+                prefer_css_page_size=True,
+                margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
+            )
+            browser.close()
+        return pdf_bytes
+    except Exception as exc:
+        logger.warning("Playwright PDF 렌더링 실패 — reportlab 폴백: %s", exc)
+        from app.domains.action.minutes_pipeline import fallback_renderer
+        return fallback_renderer.render(fields)
 
 
 def preview_from_pdf_bytes(

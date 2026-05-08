@@ -19,6 +19,7 @@ class WorkspaceListItem(BaseModel):
     id: int
     name: str
     role: str
+    logo_url: str | None = None
 
 
 class WorkspaceListResponse(BaseModel):
