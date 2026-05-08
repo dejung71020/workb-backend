@@ -51,8 +51,9 @@ _EXT_MAP = {
     "docx": "docx",
     "doc": "doc",
     "xlsx": "xlsx",
-    "xls": "xls"
+    "xls": "xls",
 }
+
 
 @router.get(
     "/workspaces/{workspace_id}/meetings/search",
@@ -63,7 +64,9 @@ def search_workspace_meetings(
     db: Session = Depends(get_db),
     _member: int = Depends(require_workspace_member),
     keyword: Optional[str] = Query(None, description="회의 제목 부분 일치 검색"),
-    from_date: Optional[date] = Query(None, description="scheduled_at 기준 시작일(포함)"),
+    from_date: Optional[date] = Query(
+        None, description="scheduled_at 기준 시작일(포함)"
+    ),
     to_date: Optional[date] = Query(None, description="scheduled_at 기준 종료일(포함)"),
     participant_id: Optional[int] = Query(
         None, description="해당 user_id가 참석자로 포함된 회의만"
@@ -108,14 +111,30 @@ async def chatbot_message(
         "user_question": req.message,
         "past_meeting_ids": req.past_meeting_ids,
         "function_type": "",
-        "chat_response": ""
+        "chat_response": "",
     }
     result = await knowledge_app.ainvoke(state)
 
-    await repository.save_chat_log(workspace_id, current_user_id, session_id, "user", req.message, "")
+    import logging as _rlog
+
+    _cm = result.get("candidate_meetings")
+    _rlog.getLogger(__name__).warning(
+        "[router] function_type=%r candidate_meetings=%s",
+        result.get("function_type"),
+        len(_cm) if _cm else None,
+    )
+
     await repository.save_chat_log(
-        workspace_id, current_user_id, session_id, "assistant",
-        result["chat_response"], result["function_type"]
+        workspace_id, current_user_id, session_id, "user", req.message, ""
+    )
+    await repository.save_chat_log(
+        workspace_id,
+        current_user_id,
+        session_id,
+        "assistant",
+        result["chat_response"],
+        result["function_type"],
+        active_meeting_ids=result.get("active_meeting_ids"),
     )
 
     return ChatbotMessageResponse(
@@ -125,11 +144,15 @@ async def chatbot_message(
         result={
             "sources": result.get("web_sources", []),
             "action_button": result.get("action_button"),
+            "candidate_meetings": result.get("candidate_meetings"),
         },
-        timestamp=now_kst()
+        timestamp=now_kst(),
     )
 
-@router.get("/workspace/{workspace_id}/chatbot/history", response_model=ChatbotHistoryResponse)
+
+@router.get(
+    "/workspace/{workspace_id}/chatbot/history", response_model=ChatbotHistoryResponse
+)
 async def chatbot_history(workspace_id: int, session_id: str):
     logs = await repository.get_chat_history(workspace_id, session_id)
     return ChatbotHistoryResponse(
@@ -138,12 +161,16 @@ async def chatbot_history(workspace_id: int, session_id: str):
                 role=log["role"],
                 content=log["content"],
                 function_type=log["function_type"],
-                timestamp=log["timestamp"]
-            ) for log in logs
+                timestamp=log["timestamp"],
+            )
+            for log in logs
         ]
     )
 
-@router.get("/workspace/{workspace_id}/past_meetings", response_model=PastMeetingsResponse)
+
+@router.get(
+    "/workspace/{workspace_id}/past_meetings", response_model=PastMeetingsResponse
+)
 async def get_past_meetings_endpont(
     workspace_id: int,
     db: Session = Depends(get_db),
@@ -161,12 +188,11 @@ async def get_past_meetings_endpont(
         meetings=[PastMeetingItem(**m) for m in meetings],
         total=len(meetings),
     )
-    
+
 
 @router.post("/workspace/{workspace_id}/chatbot/sessions")
 async def create_chatbot_session(
-    workspace_id: int,
-    _memeber: int = Depends(require_workspace_member)
+    workspace_id: int, _memeber: int = Depends(require_workspace_member)
 ):
     """새 대화 시작 — 새 session_id 발급."""
     return {"session_id": str(uuid.uuid4())}
@@ -180,6 +206,7 @@ async def list_chatbot_sessions(
     """전 대화 목록 조회."""
     sessions = await repository.get_chat_sessions(workspace_id)
     return {"sessions": sessions}
+
 
 @router.patch("/workspace/{workspace_id}/chatbot/sessions/{session_id}")
 async def rename_chatbot_session(
@@ -208,20 +235,26 @@ async def delete_chatbot_session(
         raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
     return {"status": "deleted"}
 
+
 @router.post("/workspace/{workspace_id}/chatbot/quick_report")
-async def chatbot_report(workspace_id: int, req: ChatbotReportRequest, background_tasks: BackgroundTasks,):
+async def chatbot_report(
+    workspace_id: int,
+    req: ChatbotReportRequest,
+    background_tasks: BackgroundTasks,
+):
     state = {
         "meeting_id": req.meeting_id,
         "workspace_id": workspace_id,
         "past_meeting_ids": req.past_meeting_ids,
         "user_question": "",
         "function_type": "",
-        "chat_response": ""
+        "chat_response": "",
     }
     # 백그라운드로 실행 — 회의 종료 시 fire-and-forget 호출용
     # quick_report_node 내부에서 meeting_summaries에 저장까지 처리
     background_tasks.add_task(_run_quick_report, workspace_id, state)
     return {"status": "accepted"}
+
 
 async def _run_quick_report(workspace_id: int, state: dict):
     """백그라운드 quick_report 생성 헬퍼."""
@@ -231,7 +264,9 @@ async def _run_quick_report(workspace_id: int, state: dict):
         pass  # 백그라운드 실패는 조용히 무시
 
 
-@router.post("/workspace/{workspace_id}/documents", response_model=DocumentUploadResponse)
+@router.post(
+    "/workspace/{workspace_id}/documents", response_model=DocumentUploadResponse
+)
 async def upload_document(
     workspace_id: int,
     background_tasks: BackgroundTasks,
@@ -247,7 +282,10 @@ async def upload_document(
     file_type = _EXT_MAP.get(ext)
     if not file_type:
         supported = ", ".join(f".{e}" for e in _EXT_MAP)
-        raise HTTPException(status_code=415, detail=f".{ext}는 지원하지 않는 형식입니다. 지원 형식: {supported}")
+        raise HTTPException(
+            status_code=415,
+            detail=f".{ext}는 지원하지 않는 형식입니다. 지원 형식: {supported}",
+        )
 
     file_bytes = await file.read()
 
@@ -257,28 +295,31 @@ async def upload_document(
         filename=file.filename,
         file_type=file_type,
         file_bytes=file_bytes,
-        title=title
+        title=title,
     )
 
     return DocumentUploadResponse(
         doc_id=f"{workspace_id}_{file.filename}",
         chunks=-1,
         title=title or file.filename,
-        uploaded_at=now_kst()
+        uploaded_at=now_kst(),
     )
+
 
 @router.post("/workspace/{workspace_id}/documents/analyze")
 async def analyze_document_endpoint(
     workspace_id: int,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    title: Optional[str] = Form(None)
-): 
+    title: Optional[str] = Form(None),
+):
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
     file_type = _EXT_MAP.get(ext)
     if not file_type:
-        raise HTTPException(status_code=415, detail=f".{ext}는 지원하지 않는 형식입니다.")
-        
+        raise HTTPException(
+            status_code=415, detail=f".{ext}는 지원하지 않는 형식입니다."
+        )
+
     file_bytes = await file.read()
 
     result = await analyze_document_for_display(
@@ -289,13 +330,13 @@ async def analyze_document_endpoint(
         title=title,
     )
 
-    background_tasks.add_task(                                                                                     
-        ingest_document,      
+    background_tasks.add_task(
+        ingest_document,
         workspace_id=workspace_id,
-        filename=file.filename,   
-        file_type=file_type,                                                                                         
+        filename=file.filename,
+        file_type=file_type,
         file_bytes=file_bytes,
-        title=title,                                                                                                 
+        title=title,
     )
 
     return {**result, "timestamp": now_kst().isoformat()}

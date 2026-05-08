@@ -1,3 +1,4 @@
+import json
 from sqlalchemy import func
 from app.infra.database.session import SessionLocal
 from app.core.ontology.schema import EntityType, RelationType, Relation
@@ -293,23 +294,51 @@ def fetch_meeting_profile(
         db.close()
 
 
-def fetch_meeting_decisions(
+def fetch_meeting_summary(
     meeting_id: int, workspace_id: int, ctx: dict | None = None
 ) -> list[dict]:
-    """Meeting → Decision 목록 (날짜 필터: detected_at 기준)"""
-    from app.domains.intelligence.models import Decision
+    """
+    Meeting → 회의 요약 key_points (terminal node).
 
-    date_from = _parse_date((ctx or {}).get("date_from"))
-    date_to   = _parse_date((ctx or {}).get("date_to"))
+    MeetingMinute.summary JSON의 key_points를 반환한다.
+    "이 회의 요약해줘" 처럼 온톨로지 경로로 요약을 요청할 때
+    knowledge_node LLM에 summary 컨텍스트를 제공한다.
+    """
+    from app.domains.intelligence.models import MeetingMinute
 
     db = SessionLocal()
     try:
-        q = db.query(Decision).filter(Decision.meeting_id == meeting_id)
-        if date_from:
-            q = q.filter(Decision.detected_at >= date_from)
-        if date_to:
-            q = q.filter(Decision.detected_at <= date_to)
-        rows = q.order_by(Decision.detected_at.asc()).all()
+        row = db.query(MeetingMinute).filter(MeetingMinute.meeting_id == meeting_id).first()
+        if not row or not row.summary:
+            return []
+        try:
+            summary_dict = json.loads(row.summary) if isinstance(row.summary, str) else row.summary
+        except Exception:
+            return []
+        key_points = summary_dict.get("key_points", [])
+        if not key_points:
+            return []
+        return [{"type": "MeetingSummary", "key_points": key_points}]
+    except Exception:
+        return []
+    finally:
+        db.close()
+
+
+def fetch_meeting_decisions(
+    meeting_id: int, workspace_id: int, ctx: dict | None = None
+) -> list[dict]:
+    """Meeting → Decision 목록 (회의 특정 후 전체 반환, 날짜 필터 없음)"""
+    from app.domains.intelligence.models import Decision
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(Decision)
+            .filter(Decision.meeting_id == meeting_id)
+            .order_by(Decision.detected_at.asc())
+            .all()
+        )
         return [
             {
                 "id": r.id,
@@ -330,34 +359,39 @@ def fetch_meeting_tasks(
     meeting_id: int, workspace_id: int, ctx: dict | None = None
 ) -> list[dict]:
     """
-    Meeting → WbsTask 목록 (WbsEpic 경유).
+    Meeting → WbsTask 목록 (WbsEpic 경유, 날짜 필터: due_date 기준).
 
     WbsTask에 meeting_id 컬럼이 없으므로 반드시 WbsEpic join 필요.
     WbsTask.epic_id → WbsEpic.meeting_id → Meeting.id 체인.
     """
+    import logging as _log
     from app.domains.action.models import WbsTask, WbsEpic
 
     db = SessionLocal()
     try:
-        rows = (
+        q = (
             db.query(WbsTask)
             .join(WbsEpic, WbsTask.epic_id == WbsEpic.id)
             .filter(WbsEpic.meeting_id == meeting_id)
-            .order_by(WbsTask.due_date.asc())
-            .all()
+        )
+        rows = q.order_by(WbsTask.due_date.asc()).all()
+        _log.getLogger(__name__).warning(
+            "[fetch_meeting_tasks] meeting_id=%s → %d rows", meeting_id, len(rows)
         )
         return [
             {
                 "id": r.id,
                 "type": EntityType.WBS_TASK.value,
                 "title": r.title,
+                "assignee": r.assignee_name,
                 "status": r.status.value if r.status else None,
                 "progress": r.progress,
                 "due_date": r.due_date.strftime("%Y-%m-%d") if r.due_date else None,
             }
             for r in rows
         ]
-    except Exception:
+    except Exception as e:
+        _log.getLogger(__name__).warning("[fetch_meeting_tasks] ERROR meeting_id=%s: %s", meeting_id, e)
         return []
     finally:
         db.close()
@@ -1132,6 +1166,15 @@ ONTOLOGY: list[Relation] = [
         description="회의 기본 정보",
         infer_at_depth=1,
         weight=1.6,
+    ),
+    Relation(
+        type=RelationType.HAS_SUMMARY,
+        from_entity=EntityType.MEETING,
+        to_entity=EntityType.MEETING,  # terminal: MeetingSummary 타입 반환
+        fetch_fn=fetch_meeting_summary,
+        description="회의 요약 핵심 포인트",
+        infer_at_depth=1,
+        weight=1.9,  # HAS_DECISION(2.0) 다음으로 높게 — 요약 질문에 최우선
     ),
     # infer_at_depth=1: Meeting이 직접 seed일 때도 탐색
     Relation(

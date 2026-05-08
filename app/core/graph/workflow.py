@@ -77,8 +77,17 @@ knowledge_graph.add_conditional_edges(
     }
 )
 knowledge_graph.add_edge("knowledge_agent", END)
-knowledge_graph.add_edge("past_summary", END)
-knowledge_graph.add_edge("quick_report", END)
 knowledge_graph.add_edge("report_guide", END)
+# past_summary, quick_report → 회의 특정 후 knowledge_agent로 위임
+knowledge_graph.add_conditional_edges(
+    "past_summary",
+    lambda state: "knowledge_agent" if state.get("active_meeting_ids") and not state.get("chat_response") else END,
+    {"knowledge_agent": "knowledge_agent", END: END},
+)
+knowledge_graph.add_conditional_edges(
+    "quick_report",
+    lambda state: "knowledge_agent" if state.get("active_meeting_ids") and not state.get("chat_response") else END,
+    {"knowledge_agent": "knowledge_agent", END: END},
+)
 
 knowledge_app = knowledge_graph.compile()

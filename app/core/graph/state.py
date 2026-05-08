@@ -24,6 +24,8 @@ class SharedState(TypedDict):
     user_profile: dict           # 현재 로그인 사용자 프로필(이름, 나이, 연락처 등)
     chat_response: str           # 챗봇의 최종 답변
     past_meeting_ids: Optional[List[int]] # None = 전체, [1, 2, 3] = 선택된 이전 회의만
+    active_meeting_ids: Optional[List[int]] # 세션 활성 회의 ID (이전 턴에서 논의된 회의들)
+    candidate_meetings: Optional[List[dict]] # 선택기에 표시할 후보 회의 목록 (날짜 필터 적용)
     function_type: str           # "chat|search|summary|report|calendar|agent"
     web_sources: List[dict]      # 웹검색 결과 [{title, url, snippet}]
     

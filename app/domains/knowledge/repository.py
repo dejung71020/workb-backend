@@ -22,7 +22,16 @@ async def save_chat_log(
     role: str,
     content: str,
     function_type: str,
+    active_meeting_ids: list[int] | None = None,
 ) -> None:
+    message: dict = {
+        "role": role,
+        "content": content,
+        "function_type": function_type,
+        "timestamp": now_kst(),
+    }
+    if active_meeting_ids:
+        message["active_meeting_ids"] = active_meeting_ids
     await mongo_db["chatbot_logs"].update_one(
         {"session_id": session_id},
         {
@@ -32,14 +41,7 @@ async def save_chat_log(
                 "session_id": session_id,
                 "created_at": now_kst(),
             },
-            "$push": {
-                "messages": {
-                    "role": role,
-                    "content": content,
-                    "function_type": function_type,
-                    "timestamp": now_kst(),
-                }
-            },
+            "$push": {"messages": message},
         },
         upsert=True,
     )
@@ -97,6 +99,20 @@ async def get_chat_history(workspace_id: int, session_id: str) -> list[dict]:
         {"_id": 0, "messages": 1},
     )
     return doc.get("messages", []) if doc else []
+
+
+async def get_active_meeting_ids(workspace_id: int, session_id: str) -> list[int]:
+    """세션의 가장 최근 assistant 메시지에서 active_meeting_ids 복원."""
+    doc = await mongo_db["chatbot_logs"].find_one(
+        {"workspace_id": workspace_id, "session_id": session_id},
+        {"_id": 0, "messages": 1},
+    )
+    if not doc:
+        return []
+    for msg in reversed(doc.get("messages", [])):
+        if msg.get("role") == "assistant" and msg.get("active_meeting_ids"):
+            return msg["active_meeting_ids"]
+    return []
 
 
 # -------------------------------------------------------------
@@ -170,7 +186,7 @@ async def get_past_meetings(
 
     db = SessionLocal()
     try:
-        q = db.query(Meeting.id, Meeting.title, Meeting.scheduled_at).filter(
+        q = db.query(Meeting.id, Meeting.title, Meeting.started_at, Meeting.scheduled_at).filter(
             Meeting.workspace_id == workspace_id,
             Meeting.status == MeetingStatus.done,
         )
@@ -180,7 +196,7 @@ async def get_past_meetings(
             ).filter(MeetingParticipant.user_id == user_id)
         rows = q.order_by(Meeting.scheduled_at.desc()).all()
         return [
-            {"meeting_id": r.id, "title": r.title, "created_at": r.scheduled_at}
+            {"meeting_id": r.id, "title": r.title, "started_at": r.started_at or r.scheduled_at}
             for r in rows
         ]
 
@@ -281,6 +297,50 @@ def get_workspace_id(meeting_id: int) -> int:
             {"meeting_id": int(meeting_id)},
         ).fetchone()
         return row.workspace_id if row else None
+    finally:
+        db.close()
+
+
+def get_meeting_report_data(meeting_id: int) -> dict:
+    """meeting_id로 간이보고서 구성에 필요한 DB 데이터 조회.
+
+    반환: {participants, decisions, action_items}
+    """
+    from app.domains.intelligence.models import Decision
+    from app.domains.action.models import WbsTask, WbsEpic
+
+    db = SessionLocal()
+    try:
+        # 참석자
+        participants = get_meeting_participants(meeting_id)
+
+        # 결정사항
+        decisions = [
+            row.content
+            for row in db.query(Decision.content)
+            .filter(Decision.meeting_id == meeting_id)
+            .all()
+        ]
+
+        # WBS 태스크 (WbsEpic 경유)
+        urgency_map = {"urgent": "urgent", "high": "urgent", "normal": "normal", "low": "low"}
+        tasks = (
+            db.query(WbsTask)
+            .join(WbsEpic, WbsTask.epic_id == WbsEpic.id)
+            .filter(WbsEpic.meeting_id == meeting_id)
+            .all()
+        )
+        action_items = [
+            {
+                "assignee": t.assignee_name or "미정",
+                "content": t.title,
+                "deadline": t.due_date.strftime("%Y-%m-%d") if t.due_date else None,
+                "urgency": urgency_map.get(t.urgency or "", "normal"),
+            }
+            for t in tasks
+        ]
+
+        return {"participants": participants, "decisions": decisions, "action_items": action_items}
     finally:
         db.close()
 

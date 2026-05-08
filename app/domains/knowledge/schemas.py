@@ -120,7 +120,7 @@ class ChatbotReportResponse(BaseModel):
 class PastMeetingItem(BaseModel):
     meeting_id: int
     title: str
-    created_at: datetime
+    started_at: Optional[datetime] = None
 
 class PastMeetingsResponse(BaseModel):
     meetings: list[PastMeetingItem]
