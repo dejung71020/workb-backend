@@ -486,7 +486,9 @@ async def knowledge_node(state: SharedState) -> dict:
     if not active_meeting_ids and session_id:
         active_meeting_ids = await get_active_meeting_ids(workspace_id, session_id)
     ontology_ctx = await build_ontology_context(
-        resolved_question, workspace_id, llm,
+        resolved_question,
+        workspace_id,
+        llm,
         user_id=user_id,
         active_meeting_ids=active_meeting_ids if active_meeting_ids else None,
     )
@@ -561,21 +563,38 @@ async def knowledge_node(state: SharedState) -> dict:
     elif function_type == "quick_report":
         format_instruction = """
 ## 응답 형식
-간이보고서 요청입니다. 반드시 아래 마크다운 형식으로 작성하세요:
+간이보고서 요청입니다. answer 필드를 반드시 아래 마크다운 형식으로 작성하세요:
 
-## 📋 [회의명] 간이보고서
+## 📋 [회의명]
 **일시:** [날짜]  **참석자:** [이름, ...]
 
-### 주요 논의
-- [논의 사항]
+**회의 내용 요약**
+[전반적인 회의 내용 1~2문장]
 
-### 결정사항
+### 📌 주요 안건
+- [안건]
+
+### 🗂 구체적으로 논의된 사항
+**1. [주제]**
+[내용]
+
+### ✅ 최종 결론
 - [결정 내용]
 
-### 액션 아이템
-- **[담당자]** [내용] (~[마감일])
+### 📋 할 일
+| 담당자 | 내용 | 기한 | 긴급도 |
+|---|---|---|---|
+| [담당자] | [내용] | [기한] | 🔴 긴급/⚠️ 보통/🟢 낮음 |
+
+### 🔁 미결 사항
+- [미결 내용] (없으면 생략)
+
+### 🔜 다음 회의에서 다룰 내용
+**일정:** [미정 또는 날짜]
+- [안건]
 
 여러 회의인 경우 각 회의를 별도 섹션으로 구분하세요.
+온톨로지 컨텍스트의 key_points, decisions, wbs_tasks를 최대한 활용하세요.
 """
 
     system_prompt = f"""
@@ -614,7 +633,6 @@ async def knowledge_node(state: SharedState) -> dict:
         "confidence": "high" | "medium" | "low"
         "hedge_note": "근거 있음 | 근거 불충분 | 근거 없음",
         "citations": ["근거가 된 발화를 [화자명] 내용 형식 그대로 복사. 요약・재서술 금지. 최대 3개."]
-        "action_button": {{"label": "버튼 텍스트", "path": "/경로"}} | null
     }}
 
     confidence 기준:
@@ -634,10 +652,6 @@ async def knowledge_node(state: SharedState) -> dict:
     - 헤딩(##)은 실제 구조화된 목록·데이터를 제시할 때만 사용하세요. 상태 안내·오류·단순 메시지에는 헤딩을 붙이지 마세요.
     - 목록은 마크다운 bullet(-) 또는 번호 사용
     - 표 형태 데이터는 마크다운 테이블로 표현
-
-    action_button 규칙:
-    - WBS 수정 요청 시: {{"label": "WBS 페이지로 이동", "path": "/meetings/{meeting_id}/wbs"}}
-    - 그 외: null
 
     {meeting_filter_hint}
 
@@ -711,7 +725,6 @@ async def knowledge_node(state: SharedState) -> dict:
     answer = parsed.get("answer", raw)  # JSON 파싱 실패 시 원문 그대로 사용
     confidence = parsed.get("confidence", "low")
     citations = parsed.get("citations", [])
-    action_button = parsed.get("action_button")
 
     if web_sources:
         pass  # 프론트엔드에서 web_sources 별도 표시
@@ -777,7 +790,6 @@ async def knowledge_node(state: SharedState) -> dict:
         "chat_response": answer,
         "function_type": "agent",
         "web_sources": web_sources,
-        "action_button": action_button,
         "active_meeting_ids": active_meeting_ids or None,
     }
 
@@ -798,11 +810,18 @@ async def _find_meeting_by_question(
 
     반환: (meetings, has_match) — has_match=True면 특정된 결과.
     """
-    from app.domains.knowledge.repository import get_all_past_meetings_by_workspace
+    from app.domains.knowledge.repository import get_past_meetings
     from app.core.ontology.schema import ExtractionResult
     from datetime import date as _date
 
-    all_meetings = await get_all_past_meetings_by_workspace(workspace_id)
+    import logging as _fmlog
+
+    all_meetings = await get_past_meetings(workspace_id)
+    _fmlog.getLogger(__name__).warning(
+        "[find_meeting] all_meetings=%s ids=%s",
+        len(all_meetings),
+        [m["meeting_id"] for m in all_meetings],
+    )
     if not all_meetings:
         return [], False
 
@@ -822,6 +841,7 @@ async def _find_meeting_by_question(
 
     # ── 최신/최근 superlative 처리: 완료 순서(ended_at) 기준 가장 최근 1개 반환 ──
     if any(kw in question for kw in _LATEST_KEYWORDS):
+
         def _completion_key(m):
             """실제 완료 시각 기준 정렬 키. ended_at → started_at → scheduled_at 순 fallback."""
             for field in ("ended_at", "started_at", "scheduled_at"):
@@ -838,6 +858,7 @@ async def _find_meeting_by_question(
     # ── Step 1: 날짜 추출 (ExtractionResult 재사용, 오늘 날짜 포함) ──
     structured_llm = llm.with_structured_output(ExtractionResult)
     date_from = date_to = None
+    today = _date.fromisoformat(today_str)
     try:
         extracted = await structured_llm.ainvoke(
             f"오늘 날짜: {today_str}\n질문: {question}"
@@ -849,14 +870,34 @@ async def _find_meeting_by_question(
     except Exception:
         pass
 
+    # ── keyword fallback: LLM이 날짜를 못 잡은 경우 ────────────────
+    if not date_from and not date_to:
+        from datetime import timedelta as _td
+
+        if "오늘" in question:
+            date_from = date_to = today
+        elif "어제" in question:
+            date_from = date_to = today - _td(days=1)
+        elif "이번 주" in question or "이번주" in question:
+            date_from = today - _td(days=today.weekday())
+            date_to = today
+
     # ── Step 2: started_at 기준 날짜 pre-filter ───────────────────
     if date_from or date_to:
         filtered = [
-            m for m in all_meetings
+            m
+            for m in all_meetings
             if (d := _actual_date(m)) is not None
             and (date_from is None or d >= date_from)
             and (date_to is None or d <= date_to)
         ]
+        _fmlog.getLogger(__name__).warning(
+            "[find_meeting] date_from=%s date_to=%s filtered=%s ids=%s",
+            date_from,
+            date_to,
+            len(filtered),
+            [m["meeting_id"] for m in filtered],
+        )
         if len(filtered) == 1:
             return filtered, True  # 날짜만으로 확정
         candidate = filtered if filtered else all_meetings
@@ -884,13 +925,29 @@ async def _find_meeting_by_question(
     """
     result = await llm.ainvoke(prompt)
     try:
-        parsed = json.loads(re.search(r"\{.*\}", result.content, re.DOTALL).group())
-        matched_ids = set(parsed.get("matched_ids", []))
+        parsed = json.loads(re.search(r"\{[\s\S]*\}", result.content).group())
+        matched_ids = {int(i) for i in parsed.get("matched_ids", []) if i is not None}
         matched = [m for m in candidate if m["meeting_id"] in matched_ids]
+        import logging as _mlog
+
+        _mlog.getLogger(__name__).warning(
+            "[find_meeting] matched_ids=%s matched=%s",
+            matched_ids,
+            [m["meeting_id"] for m in matched],
+        )
         if matched:
-            return matched, True
-    except Exception:
-        pass
+            if len(matched) > 1:
+                return matched, True  # 복수 매칭 → 선택창
+            # LLM이 1개로 좁혔지만 날짜 후보가 여러 개였으면 → 후보 전체로 선택창
+            if candidate is not all_meetings and len(candidate) > 1:
+                return candidate, False
+            return matched, True  # 후보도 1개였던 경우만 auto-select
+    except Exception as e:
+        import logging as _mlog
+
+        _mlog.getLogger(__name__).warning(
+            "[find_meeting] parse error: %s | raw: %s", e, result.content[:200]
+        )
 
     # ── Step 4: LLM 실패 시 날짜 필터 결과라도 반환 ───────────────
     if candidate is not all_meetings:
@@ -923,6 +980,34 @@ async def past_summary_node(state: SharedState) -> dict:
     if past_meeting_ids:
         # UI에서 선택된 회의
         meetings = await get_past_meetings_by_ids(past_meeting_ids)
+        if len(meetings) > 1:
+            # 다중 선택 → 각 회의 key_points를 직접 종합하여 반환
+            lines = ["## 📋 선택한 회의 종합 요약\n"]
+            for m in meetings:
+                date_str = ""
+                if m.get("created_at"):
+                    try:
+                        date_str = (
+                            m["created_at"].strftime("%m/%d")
+                            if hasattr(m["created_at"], "strftime")
+                            else str(m["created_at"])[:10]
+                        )
+                    except Exception:
+                        pass
+                lines.append(f"### {m.get('title', '회의')} ({date_str})")
+                summary_text = m.get("summary", "")
+                if summary_text:
+                    for pt in summary_text.strip().split("\n"):
+                        if pt.strip():
+                            lines.append(pt.strip())
+                else:
+                    lines.append("- 요약 데이터 없음")
+                lines.append("")
+            return {
+                "chat_response": "\n".join(lines),
+                "function_type": "past_summary",
+                "active_meeting_ids": [m["meeting_id"] for m in meetings],
+            }
     else:
         user_question = state.get("user_question", "")
 
@@ -935,27 +1020,58 @@ async def past_summary_node(state: SharedState) -> dict:
         if any(kw in user_question for kw in _LATEST_KEYWORDS):
             resolved_question = user_question
         else:
-            resolved_question = await _resolve_references(user_question, recent_history, llm)
+            resolved_question = await _resolve_references(
+                user_question, recent_history, llm
+            )
 
-        meetings, has_match = await _find_meeting_by_question(resolved_question, workspace_id)
+        meetings, has_match = await _find_meeting_by_question(
+            resolved_question, workspace_id
+        )
 
-        if not has_match and session_active:
-            # 특정된 회의 없고 세션 활성 회의 있으면 → 재사용
-            meetings = await get_past_meetings_by_ids(session_active)
-            return {"active_meeting_ids": [m["meeting_id"] for m in meetings], "function_type": "past_summary"}
-
-        if not meetings:
-            meetings = await get_past_meetings(workspace_id, user_id=filter_user_id)
-
-        if len(meetings) >= 2 and not has_match:
+        if has_match and len(meetings) == 1:
+            # 1개 정확히 특정 → 바로 사용
+            pass
+        elif meetings:
+            # 여러 후보 (날짜만 일치하거나 복수 매칭) → 선택창
             return {
                 "chat_response": "어떤 회의를 요약할까요? 아래에서 선택해주세요.",
                 "function_type": "past_summary",
                 "candidate_meetings": [
-                    {"meeting_id": m["meeting_id"], "title": m["title"]}
+                    {
+                        "meeting_id": m["meeting_id"],
+                        "title": m["title"],
+                        "started_at": str(
+                            m.get("started_at") or m.get("scheduled_at", "")
+                        ),
+                    }
                     for m in meetings
                 ],
             }
+        elif session_active:
+            # 아무것도 못 찾고 세션 있으면 → 재사용
+            meetings = await get_past_meetings_by_ids(session_active)
+            return {
+                "active_meeting_ids": [m["meeting_id"] for m in meetings],
+                "function_type": "past_summary",
+            }
+        else:
+            # 완전 미지정 → 전체 목록 선택창
+            meetings = await get_past_meetings(workspace_id, user_id=filter_user_id)
+            if len(meetings) >= 2:
+                return {
+                    "chat_response": "어떤 회의를 요약할까요? 아래에서 선택해주세요.",
+                    "function_type": "past_summary",
+                    "candidate_meetings": [
+                        {
+                            "meeting_id": m["meeting_id"],
+                            "title": m["title"],
+                            "started_at": str(
+                                m.get("started_at") or m.get("scheduled_at", "")
+                            ),
+                        }
+                        for m in meetings
+                    ],
+                }
 
     if not meetings:
         return {
@@ -994,39 +1110,87 @@ async def quick_report_node(state: SharedState) -> dict:
     filter_user_id = None if is_admin else user_id
     session_id = state.get("session_id")
 
+    import logging as _qlog
+
     if past_meeting_ids:
+        # 사용자가 selector에서 직접 선택한 경우 → 바로 사용
         meetings = await get_past_meetings_by_ids(past_meeting_ids)
-    elif meeting_id:
-        meetings = await get_past_meetings_by_ids([meeting_id])
     else:
+        # past_meeting_ids 없으면 항상 질문 기반 탐색 먼저
+        # (meeting_id가 라이브 회의 컨텍스트여도 "오늘 회의" 같은 명시적 질문이 우선)
         user_question = state.get("user_question", "")
         session_active = await get_active_meeting_ids(workspace_id, session_id)
+        _qlog.getLogger(__name__).warning(
+            "[quick_report_node] workspace_id=%s session_id=%s session_active=%s meeting_id=%s",
+            workspace_id,
+            session_id,
+            session_active,
+            meeting_id,
+        )
 
-        # 질문에서 회의 찾기 (항상 먼저 실행 — 날짜/제목 명시가 세션보다 우선)
         history = await get_chat_history(workspace_id, session_id)
         recent_history = _select_history(history)
 
         if any(kw in user_question for kw in _LATEST_KEYWORDS):
             resolved_question = user_question
         else:
-            resolved_question = await _resolve_references(user_question, recent_history, llm)
+            resolved_question = await _resolve_references(
+                user_question, recent_history, llm
+            )
 
-        question_meetings, has_match = await _find_meeting_by_question(resolved_question, workspace_id)
+        question_meetings, has_match = await _find_meeting_by_question(
+            resolved_question, workspace_id
+        )
+        _qlog.getLogger(__name__).warning(
+            "[quick_report_node] resolved=%r has_match=%s question_meetings=%s",
+            resolved_question,
+            has_match,
+            [m["meeting_id"] for m in question_meetings],
+        )
 
-        if not has_match and session_active:
-            # 특정된 회의 없고 세션 활성 회의 있으면 → 재사용
-            meetings = await get_past_meetings_by_ids(session_active)
-            return {"active_meeting_ids": [m["meeting_id"] for m in meetings], "function_type": "quick_report"}
-
-        if question_meetings and has_match:
+        if has_match and len(question_meetings) == 1:
+            # 1개 정확히 특정 → 바로 사용
             meetings = question_meetings
-        else:
-            candidate = question_meetings if question_meetings else await get_past_meetings(workspace_id, user_id=filter_user_id)
+        elif question_meetings:
+            # 날짜 필터 후보 여러 개 → 선택창
             return {
                 "chat_response": "어떤 회의의 간이보고서를 생성할까요? 아래에서 선택해주세요.",
                 "function_type": "quick_report",
                 "candidate_meetings": [
-                    {"meeting_id": m["meeting_id"], "title": m["title"]}
+                    {
+                        "meeting_id": m["meeting_id"],
+                        "title": m["title"],
+                        "started_at": str(
+                            m.get("started_at") or m.get("scheduled_at", "")
+                        ),
+                    }
+                    for m in question_meetings
+                ],
+            }
+        elif session_active:
+            # 질문에서 못 찾고 세션 있으면 → 재사용
+            meetings = await get_past_meetings_by_ids(session_active)
+            return {
+                "active_meeting_ids": [m["meeting_id"] for m in meetings],
+                "function_type": "quick_report",
+            }
+        elif meeting_id:
+            # 라이브 회의 컨텍스트 fallback
+            meetings = await get_past_meetings_by_ids([meeting_id])
+        else:
+            # 완전 미지정 → 전체 목록 선택창
+            candidate = await get_past_meetings(workspace_id, user_id=filter_user_id)
+            return {
+                "chat_response": "어떤 회의의 간이보고서를 생성할까요? 아래에서 선택해주세요.",
+                "function_type": "quick_report",
+                "candidate_meetings": [
+                    {
+                        "meeting_id": m["meeting_id"],
+                        "title": m["title"],
+                        "started_at": str(
+                            m.get("started_at") or m.get("scheduled_at", "")
+                        ),
+                    }
                     for m in candidate
                 ],
             }
@@ -1037,6 +1201,57 @@ async def quick_report_node(state: SharedState) -> dict:
             "function_type": "quick_report",
         }
 
+    # 다중 회의 선택 → 통합 보고서 직접 생성 (knowledge_agent 위임 X)
+    if len(meetings) > 1:
+        from app.domains.knowledge.repository import get_meeting_report_data
+
+        parts = []
+        for m in meetings:
+            mid = m["meeting_id"]
+            cached = await mongo_db["meeting_summaries"].find_one({"meeting_id": mid})
+            if cached and cached.get("summary"):
+                report_md = _format_quick_report_markdown(cached["summary"])
+            else:
+                # 캐시 없으면 DB에서 직접 조회해 구조 채움
+                date_str = ""
+                raw_date = m.get("created_at") or m.get("started_at")
+                if raw_date:
+                    try:
+                        date_str = (
+                            raw_date.strftime("%Y-%m-%d")
+                            if hasattr(raw_date, "strftime")
+                            else str(raw_date)[:10]
+                        )
+                    except Exception:
+                        pass
+                db_data = get_meeting_report_data(mid)
+                key_points = [
+                    pt.lstrip("- ").strip()
+                    for pt in (m.get("summary") or "").strip().split("\n")
+                    if pt.strip()
+                ]
+                report_md = _format_quick_report_markdown({
+                    "meetings": [{
+                        "title": m.get("title", ""),
+                        "date": date_str,
+                        "attendees": db_data["participants"],
+                    }],
+                    "overview_summary": " / ".join(key_points) if key_points else "요약 정보 없음",
+                    "agenda_items": key_points,
+                    "discussion_items": [],
+                    "decisions": db_data["decisions"],
+                    "action_items": db_data["action_items"],
+                    "pending_items": [],
+                    "next_meeting": None,
+                    "next_meeting_agenda": [],
+                })
+            parts.append(report_md)
+        return {
+            "chat_response": "\n\n---\n\n".join(parts),
+            "function_type": "quick_report",
+        }
+
+    # 단일 회의 → knowledge_agent에 위임
     meeting_ids = [m["meeting_id"] for m in meetings]
     return {
         "active_meeting_ids": meeting_ids,
@@ -1155,10 +1370,10 @@ async def classify_intent(state: SharedState) -> dict:
     사용자 입력을 아래 4가지 중 하나로 분류하세요. 단어 하나만 출력하세요.
 
     - past_summary: 회의 내용을 요약해달라는 요청. "회의"라는 단어가 없어도 회의 제목·날짜·시간대가 주어인 경우 포함.
-        예) "이전 회의 요약해줘", "지난 회의 정리해줘", "N월 회의 요약", "0506 오후 회의 요약해줘", "어제 오후 회의 정리해줘"
+        예) "이전 회의 요약해줘", "지난 회의 정리해줘", "오늘 회의 요약해줘", "오늘 회의 정리해줘", "N월 회의 요약", "0506 오후 회의 요약해줘", "어제 오후 회의 정리해줘", "이번 주 회의 요약해줘"
         비고: 문서·파일·보고서 이름이 주어인 요약 요청은 past_summary가 아님.
     - quick_report: 간이보고서/보고서 생성 요청 (형식 미지정 또는 간단 정리).
-        예) "간이보고서 만들어줘", "보고서 만들어줘", "회의 보고서 생성해줘"
+        예) "간이보고서 만들어줘", "보고서 만들어줘", "회의 보고서 생성해줘", "오늘 회의 보고서 만들어줘", "어제 회의 간이보고서", "이번 주 회의 보고서"
     - report_guide: 특정 파일 포맷 보고서 요청 (Excel·PDF·HTML·다운로드 등).
         예) "Excel로 저장", "HTML 보고서", "보고서 다운로드", "PDF로 내보내기", "회의록 파일로 저장"
     - agent: 문서·파일 내용 조회, 외부 정보 검색, 일정 관련, DB 조회, 그 외 모든 입력.
@@ -1168,6 +1383,13 @@ async def classify_intent(state: SharedState) -> dict:
     """
     result = await llm.ainvoke(prompt)
     function_type = result.content.strip().lower()
+    import logging as _clog
+
+    _clog.getLogger(__name__).warning(
+        "[classify_intent] raw=%r → function_type=%r",
+        result.content.strip(),
+        function_type,
+    )
     # LLM이 예상 밖의 값을 반환하면 agent로 fallback
     if function_type not in (
         "summary",
