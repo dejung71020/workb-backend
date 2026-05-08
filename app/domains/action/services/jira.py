@@ -1,6 +1,6 @@
 # app/domains/action/services/jira.py
 import logging
-from datetime import datetime
+from datetime import datetime, date
 from sqlalchemy.orm import Session
 from typing import Optional
 
@@ -8,7 +8,7 @@ from app.domains.action import repository
 from app.domains.integration import repository as integration_repo
 from app.domains.integration.models import ServiceType
 from app.domains.integration.service import get_valid_jira_token, get_jira_cloud_id
-from app.infra.clients.jira import JiraClient
+from app.infra.clients.jira import JiraClient, _to_adf, _from_adf
 from app.utils.time_utils import now_kst
 
 logger = logging.getLogger(__name__)
@@ -165,6 +165,7 @@ async def export_jira(
                         priority=priority,
                         due_date=due_date,
                         assignee_account_id=assignee_id,
+                        description=task.content,
                     )
                     repository.update_task_jira_id(db, task.id, issue_key)
                     created += 1
@@ -180,6 +181,8 @@ async def export_jira(
                             fields["duedate"] = due_date
                         if assignee_id:
                             fields["assignee"] = {"accountId": assignee_id}
+                        if task.content:
+                            fields["description"] = _to_adf(task.content)
                         await client.update_issue(task.jira_issue_id, fields)
                         updated += 1
                     except Exception as e:
@@ -235,7 +238,7 @@ async def sync_from_jira(
     jql = f"issueKey in ({', '.join(keys)})"
     
     # 1번의 API 호출로 모든 정보를 가져옴
-    issues = await client.search_by_jql(jql, fields="status,summary,assignee")
+    issues = await client.search_by_jql(jql, fields="status,summary,assignee,duedate,description")
 
     # key -> issue 딕셔너리
     issue_map = {issue['key']: issue for issue in issues}
@@ -256,6 +259,8 @@ async def sync_from_jira(
             jira_title       = fields.get("summary", "")
             jira_assignee    = fields.get("assignee")
             jira_assignee_name = (jira_assignee or {}).get("displayName", "") if jira_assignee else ""
+            jira_due_date_str  = fields.get("duedate")
+            jira_description   = _from_adf(fields.get("description"))
 
             workb_status   = status_maaping.get(jira_status_name, "todo")
             current_status = task.status.value if hasattr(task.status, "value") else task.status
@@ -290,6 +295,29 @@ async def sync_from_jira(
                     "new": jira_assignee_name or "미지정",
                 })
                 repository.update_wbs_task(db, task.id, assignee_name=new_name)
+                task_changed = True
+
+            # 날짜 비교
+            current_due = str(task.due_date) if task.due_date else None
+            jira_due_norm = jira_due_date_str[:10] if jira_due_date_str else None  # YYYY-MM-DD만
+            if jira_due_norm != current_due:
+                changed.append({
+                    "task_id": task.id, "jira_key": task.jira_issue_id,
+                    "field": "due_date", "old": current_due or "없음", "new": jira_due_norm or "없음",
+                })
+                new_date = date.fromisoformat(jira_due_norm) if jira_due_norm else None
+                repository.update_wbs_task(db, task.id, due_date=new_date)
+                task_changed = True
+
+            # 내용 비교
+            if jira_description != (task.content or None):
+                changed.append({
+                    "task_id": task.id, "jira_key": task.jira_issue_id,
+                    "field": "content",
+                    "old": (task.content or "없음")[:30],
+                    "new": (jira_description or "없음")[:30],
+                })
+                repository.update_wbs_task(db, task.id, content=jira_description)
                 task_changed = True
 
             if not task_changed:

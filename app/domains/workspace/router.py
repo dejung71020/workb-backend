@@ -81,12 +81,18 @@ async def list_my_workspaces(
 async def upload_workspace_logo_file(
     workspace_id: int,
     file: UploadFile = File(...),
+    db: Session = Depends(get_db),
     _admin=Depends(require_workspace_admin),
 ) -> dict[str, str]:
     logo_url = await save_local_image(
         file=file,
         directory=Path("storage/teamlogo"),
         stem=f"workspace-{workspace_id}",
+    )
+    update_workspace_service(
+        db,
+        workspace_id,
+        WorkspaceUpdateRequest(logo_url=logo_url),
     )
     return {"logo_url": logo_url}
 

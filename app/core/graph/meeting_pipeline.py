@@ -10,7 +10,7 @@ graph coordinates the persisted backend steps around that service.
 
 from __future__ import annotations
 
-import json
+import asyncio
 import logging
 from datetime import date
 from typing import Any, Literal, TypedDict
@@ -19,10 +19,9 @@ from langgraph.graph import END, START, StateGraph
 from sqlalchemy.orm import Session
 
 from app.domains.action.models import ActionItem, ActionStatus, Priority
-from app.domains.action.mongo_repository import get_meeting_summary
+from app.domains.action.mongo_repository import get_meeting_summary, get_meeting_utterances
 from app.domains.action.services.minutes_builder import build_and_save_minutes
 from app.domains.action.services.wbs_builder import build_wbs_template
-from app.domains.intelligence.repository import save_utterances
 from app.domains.meeting.models import MeetingParticipant
 from app.domains.meeting.service import MeetingLifecycleService
 from app.domains.user.models import User
@@ -32,6 +31,8 @@ from app.utils.redis_utils import r as redis_client
 logger = logging.getLogger(__name__)
 
 PipelineMode = Literal["start", "complete"]
+_MONGO_UTTERANCE_RETRY_INTERVAL_SEC = 1.0
+_MONGO_UTTERANCE_RETRY_COUNT = 15
 
 
 class MeetingPipelineState(TypedDict, total=False):
@@ -76,18 +77,26 @@ async def realtime_diarization_node(state: MeetingPipelineState) -> dict[str, An
 
 
 async def postprocess_diarization_node(state: MeetingPipelineState) -> dict[str, Any]:
-    """Persist final utterances and create the structured meeting summary."""
+    """Use ASR-processed Mongo utterances and create the structured meeting summary."""
     meeting_id = int(state["meeting_id"])
     workspace_id = int(state["workspace_id"])
 
-    utterances = await _collect_redis_utterances(meeting_id)
-    if utterances:
-        await save_utterances(
-            str(meeting_id),
-            {
-                "meeting_id": meeting_id,
-                "utterances": utterances,
-            },
+    # STT/ASR 서버가 종료 후 후처리를 완료한 utterances를 MongoDB에 저장한다.
+    # 파이프라인에서 Redis 값을 다시 저장하면 기존 후처리 결과를 덮어쓸 수 있으므로 읽기만 수행한다.
+    utterances = await _wait_for_postprocessed_utterances(meeting_id)
+    if not utterances:
+        logger.warning(
+            "No postprocessed utterances found in MongoDB: meeting_id=%s",
+            meeting_id,
+        )
+        return _append_error(
+            state,
+            "후처리 발화(MongoDB)가 없어 회의 종료 후처리를 진행할 수 없습니다.",
+        )
+    elif utterances:
+        logger.info(
+            "MongoDB utterances already exist; skip Redis fallback save to avoid overwriting postprocessed diarization. meeting_id=%s",
+            meeting_id,
         )
 
     try:
@@ -127,6 +136,24 @@ async def postprocess_diarization_node(state: MeetingPipelineState) -> dict[str,
         "postprocessed_utterance_count": len(utterances),
         "summary": summary,
     }
+
+
+async def _wait_for_postprocessed_utterances(meeting_id: int) -> list[dict[str, Any]]:
+    """
+    ASR 서버의 MongoDB 저장이 약간 지연될 수 있어 짧은 재시도 윈도우를 둔다.
+    """
+    for attempt in range(1, _MONGO_UTTERANCE_RETRY_COUNT + 1):
+        utterances = get_meeting_utterances(meeting_id)
+        if utterances:
+            if attempt > 1:
+                logger.info(
+                    "Postprocessed utterances loaded after retry: meeting_id=%s attempt=%s",
+                    meeting_id,
+                    attempt,
+                )
+            return utterances
+        await asyncio.sleep(_MONGO_UTTERANCE_RETRY_INTERVAL_SEC)
+    return []
 
 
 async def wbs_node(state: MeetingPipelineState) -> dict[str, Any]:
@@ -224,58 +251,6 @@ def _session() -> Session:
     from app.infra.database.session import SessionLocal
 
     return SessionLocal()
-
-
-async def _collect_redis_utterances(meeting_id: int) -> list[dict[str, Any]]:
-    utterance_key = f"meeting:{meeting_id}:utterances"
-    speaker_key = f"meeting:{meeting_id}:speakers"
-
-    raw_utterances = await redis_client.lrange(utterance_key, 0, -1)
-    raw_speakers = await redis_client.hgetall(speaker_key)
-
-    speaker_map: dict[str, str] = {}
-    for raw_key, raw_value in raw_speakers.items():
-        key = raw_key.decode() if isinstance(raw_key, bytes) else str(raw_key)
-        value = raw_value.decode() if isinstance(raw_value, bytes) else str(raw_value)
-        speaker_map[key] = value
-
-    utterances: list[dict[str, Any]] = []
-    for seq, raw in enumerate(raw_utterances):
-        try:
-            payload = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
-        except (TypeError, json.JSONDecodeError):
-            continue
-
-        content = payload.get("content") or payload.get("text") or ""
-        if not str(content).strip():
-            continue
-
-        speaker_ref = payload.get("speaker_id")
-        mapped_user_id = (
-            speaker_map.get(str(speaker_ref)) if speaker_ref is not None else None
-        )
-        speaker_id = (
-            int(mapped_user_id) if mapped_user_id and mapped_user_id.isdigit() else None
-        )
-        speaker_label = payload.get("speaker") or payload.get("speaker_label")
-        if not speaker_label:
-            speaker_label = f"User {speaker_id}" if speaker_id else "알 수 없음"
-
-        utterances.append(
-            {
-                "seq": seq,
-                "speaker_id": speaker_id,
-                "speaker_label": speaker_label,
-                "timestamp": payload.get("timestamp"),
-                "content": str(content).strip(),
-                "text": str(content).strip(),
-                "start": payload.get("start", 0.0),
-                "end": payload.get("end", 0.0),
-                "confidence": payload.get("confidence"),
-            }
-        )
-
-    return utterances
 
 
 def _persist_action_items_from_summary(
