@@ -66,6 +66,7 @@ class RelationType(str, Enum):
 
     # ── 집계 (terminal) ─────────────────────────────────────────
     # 이 타입에서 출발하는 ONTOLOGY 항목이 없으므로 traverser가 자동 종료
+    HAS_PROFILE = "has_profile"  # User → 프로필 속성 (birth_date, email, gender 등)
     HAS_STATS   = "has_stats"    # User / Meeting / Department → Stats 요약
     HAS_CONTEXT = "has_context"  # WbsTask / Decision → 컨텍스트 요약
 
