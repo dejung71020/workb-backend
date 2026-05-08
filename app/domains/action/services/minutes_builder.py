@@ -10,6 +10,7 @@ from app.domains.notification import service as notification_service
 from app.domains.notification.models import NotificationType
 from app.domains.user.models import User
 from app.utils.time_utils import now_kst
+from app.utils.s3_utils import resolve_minute_photo_url
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,9 @@ async def build_and_save_minutes(
             .order_by(MinutePhoto.taken_at.asc())
             .all()
         )
-        photo_urls = [p.photo_url for p in photos if p.photo_url]
+        photo_urls = [
+            resolve_minute_photo_url(p.photo_url) for p in photos if p.photo_url
+        ]
 
     # ── 프롬프트용 텍스트 변환 ───────────────────────────────────────────
     decisions_text = (

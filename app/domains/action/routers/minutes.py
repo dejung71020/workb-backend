@@ -33,6 +33,7 @@ from app.domains.action.minutes_pipeline import (
 )
 from app.domains.user.dependencies import require_workspace_admin, require_workspace_member
 from app.infra.database.session import get_db
+from app.utils.s3_utils import resolve_minute_photo_url
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -214,7 +215,9 @@ async def preview_minutes_pdf(
             )
 
     photos = action_repo.get_meeting_minute_photos(db, meeting_id)
-    fields.photo_urls = [str(p.photo_url) for p in photos if p.photo_url]
+    fields.photo_urls = [
+        resolve_minute_photo_url(str(p.photo_url)) for p in photos if p.photo_url
+    ]
 
     # ── PDF 생성 ─────────────────────────────────────────────────────
     _PDF_OUTPUT_STORE.mkdir(parents=True, exist_ok=True)
