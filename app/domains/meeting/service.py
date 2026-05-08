@@ -53,11 +53,14 @@ from app.infra.clients.google import GoogleCalendarClient
 from app.domains.notification.models import NotificationType
 from app.domains.notification import service as notification_service
 from app.utils.time_utils import now_kst
+from app.utils.s3_utils import upload_fileobj_to_s3
 
 from pathlib import Path
+from io import BytesIO
 import uuid
 
 STORAGE_ROOT = Path("storage")
+MINUTE_PHOTO_S3_PREFIX = "meetings"  # S3 키 구조: meetings/{meeting_id}/minute_photos/...
 
 
 def _to_kst_naive(dt: datetime) -> datetime:
@@ -480,14 +483,22 @@ class MeetingUpdateService:
         )
 
 
+_MINUTE_PHOTO_CONTENT_TYPES = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+}
+
+
 class MinutePhotoService:
     @staticmethod
-    def _ensure_minute_photo_dir(meeting_id: int) -> Path:
-        meeting_dir = STORAGE_ROOT / "meetings" / str(meeting_id)
-        meeting_dir.mkdir(parents=True, exist_ok=True)
-        photos_dir = meeting_dir / "minute_photos"
-        photos_dir.mkdir(parents=True, exist_ok=True)
-        return photos_dir
+    def _build_s3_key(meeting_id: int, ext: str) -> str:
+        """S3 object key 생성: ``meetings/{meeting_id}/minute_photos/{timestamp}_{uuid}.{ext}``"""
+        filename = (
+            f"{now_kst().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:12]}.{ext}"
+        )
+        return f"{MINUTE_PHOTO_S3_PREFIX}/{meeting_id}/minute_photos/{filename}"
 
     @staticmethod
     def save_captured_photo(
@@ -526,17 +537,18 @@ class MinutePhotoService:
             db.add(minute)
             db.flush()
 
-        photos_dir = MinutePhotoService._ensure_minute_photo_dir(meeting_id)
-        filename = (
-            f"{now_kst().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:12]}.{ext}"
+        s3_key = MinutePhotoService._build_s3_key(meeting_id, ext)
+        content_type = _MINUTE_PHOTO_CONTENT_TYPES.get(ext.lower(), "image/png")
+        upload_fileobj_to_s3(
+            fileobj=BytesIO(image_bytes),
+            key=s3_key,
+            content_type=content_type,
         )
-        file_path = photos_dir / filename
-        file_path.write_bytes(image_bytes)
 
         taken_at_naive = now_kst().replace(tzinfo=None)
         photo = MinutePhoto(
             minute_id=int(minute.id),
-            photo_url=str(file_path),
+            photo_url=s3_key,
             taken_at=taken_at_naive,
             taken_by=taken_by_user_id,
         )
