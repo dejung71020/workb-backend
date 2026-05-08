@@ -115,7 +115,8 @@ async def chatbot_message(
     await repository.save_chat_log(workspace_id, current_user_id, session_id, "user", req.message, "")
     await repository.save_chat_log(
         workspace_id, current_user_id, session_id, "assistant",
-        result["chat_response"], result["function_type"]
+        result["chat_response"], result["function_type"],
+        active_meeting_ids=result.get("active_meeting_ids"),
     )
 
     return ChatbotMessageResponse(
@@ -125,6 +126,7 @@ async def chatbot_message(
         result={
             "sources": result.get("web_sources", []),
             "action_button": result.get("action_button"),
+            "candidate_meetings": result.get("candidate_meetings"),
         },
         timestamp=now_kst()
     )

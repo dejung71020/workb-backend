@@ -5,6 +5,7 @@ from sqlalchemy import text
 from app.core.ontology.schema import EntityType, ExtractionResult
 from app.core.ontology.traverser import OntologyTraverser
 from app.core.ontology.formatter import graph_to_text
+from app.utils.time_utils import now_kst
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +155,7 @@ async def build_ontology_context(
     workspace_id: int,
     llm,
     user_id: int | None = None,
+    active_meeting_ids: list[int] | None = None,
 ) -> str:
     """
     질문 → 온톨로지 컨텍스트 텍스트 생성 메인 진입점.
@@ -176,7 +178,10 @@ async def build_ontology_context(
     # ── Step 1: Structured Output으로 추출 (LLM 1회 호출) ────────
     structured_llm = llm.with_structured_output(ExtractionResult)
 
+    today_str = now_kst().strftime("%Y-%m-%d")
     extraction_prompt = f"""
+    오늘 날짜: {today_str}
+
     다음 질문에서 아래 정보를 추출하세요.
 
     질문: {question}
@@ -246,15 +251,35 @@ async def build_ontology_context(
             "ctx": ctx,
         })
 
-    for ent in result.entities:
-        # LLM이 최소 SQL로 엔티티 PK 해소 (이름·이메일·내용 등 어떤 식별자도 처리)
-        resolved_id = await resolve_seed_with_llm(ent.type, ent.name, workspace_id, llm)
-        seed_entities.append({
-            "id": resolved_id,  # None이면 traverser의 _resolve_entity_id가 sync fallback
-            "type": ent.type,
-            "name": ent.name,
-            "ctx": ctx,
-        })
+    # active_meeting_ids가 있으면 Meeting seed로 직접 주입 (LLM 추출 없이)
+    added_meeting_ids: set[int] = set()
+    if active_meeting_ids:
+        for mid in active_meeting_ids:
+            seed_entities.append({
+                "id": mid,
+                "type": EntityType.MEETING.value,
+                "name": f"Meeting#{mid}",
+                "ctx": ctx,
+            })
+            added_meeting_ids.add(mid)
+
+    import asyncio
+
+    if result.entities:
+        resolved_ids = await asyncio.gather(*[
+            resolve_seed_with_llm(ent.type, ent.name, workspace_id, llm)
+            for ent in result.entities
+        ])
+        for ent, resolved_id in zip(result.entities, resolved_ids):
+            # active_meeting_ids로 이미 추가된 Meeting이면 skip
+            if ent.type == "Meeting" and resolved_id in added_meeting_ids:
+                continue
+            seed_entities.append({
+                "id": resolved_id,
+                "type": ent.type,
+                "name": ent.name,
+                "ctx": ctx,
+            })
 
     added_ws_types: set[str] = set()
     for category in result.workspace_categories:

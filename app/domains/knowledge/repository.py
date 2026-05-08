@@ -22,7 +22,16 @@ async def save_chat_log(
     role: str,
     content: str,
     function_type: str,
+    active_meeting_ids: list[int] | None = None,
 ) -> None:
+    message: dict = {
+        "role": role,
+        "content": content,
+        "function_type": function_type,
+        "timestamp": now_kst(),
+    }
+    if active_meeting_ids:
+        message["active_meeting_ids"] = active_meeting_ids
     await mongo_db["chatbot_logs"].update_one(
         {"session_id": session_id},
         {
@@ -32,14 +41,7 @@ async def save_chat_log(
                 "session_id": session_id,
                 "created_at": now_kst(),
             },
-            "$push": {
-                "messages": {
-                    "role": role,
-                    "content": content,
-                    "function_type": function_type,
-                    "timestamp": now_kst(),
-                }
-            },
+            "$push": {"messages": message},
         },
         upsert=True,
     )
@@ -97,6 +99,20 @@ async def get_chat_history(workspace_id: int, session_id: str) -> list[dict]:
         {"_id": 0, "messages": 1},
     )
     return doc.get("messages", []) if doc else []
+
+
+async def get_active_meeting_ids(workspace_id: int, session_id: str) -> list[int]:
+    """세션의 가장 최근 assistant 메시지에서 active_meeting_ids 복원."""
+    doc = await mongo_db["chatbot_logs"].find_one(
+        {"workspace_id": workspace_id, "session_id": session_id},
+        {"_id": 0, "messages": 1},
+    )
+    if not doc:
+        return []
+    for msg in reversed(doc.get("messages", [])):
+        if msg.get("role") == "assistant" and msg.get("active_meeting_ids"):
+            return msg["active_meeting_ids"]
+    return []
 
 
 # -------------------------------------------------------------
