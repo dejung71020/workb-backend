@@ -276,6 +276,9 @@ def update_workspace_invite_code(
     return workspace
 
 
+_UNSET = object()
+
+
 def update_workspace(
     db: Session,
     workspace_id: int,
@@ -283,7 +286,7 @@ def update_workspace(
     industry: str | None = None,
     default_language: str | None = None,
     summary_style: str | None = None,
-    logo_url: str | None = None,
+    logo_url: str | None | object = _UNSET,
 ) -> Workspace | None:
     """
     워크스페이스 기본 설정을 수정합니다.
@@ -302,7 +305,7 @@ def update_workspace(
         workspace.default_language = default_language
     if summary_style is not None:
         workspace.summary_style = summary_style
-    if logo_url is not None:
+    if logo_url is not _UNSET:
         workspace.logo_url = logo_url
 
     db.commit()

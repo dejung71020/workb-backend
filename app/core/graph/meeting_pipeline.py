@@ -22,7 +22,7 @@ from app.domains.action.models import ActionItem, ActionStatus, Priority
 from app.domains.action.mongo_repository import get_meeting_summary
 from app.domains.action.services.minutes_builder import build_and_save_minutes
 from app.domains.action.services.wbs_builder import build_wbs_template
-from app.domains.intelligence.repository import save_utterances
+from app.domains.intelligence.repository import get_utterances_by_meeting_id, save_utterances
 from app.domains.meeting.models import MeetingParticipant
 from app.domains.meeting.service import MeetingLifecycleService
 from app.domains.user.models import User
@@ -81,13 +81,19 @@ async def postprocess_diarization_node(state: MeetingPipelineState) -> dict[str,
     workspace_id = int(state["workspace_id"])
 
     utterances = await _collect_redis_utterances(meeting_id)
-    if utterances:
+    existing_utterance_doc = await get_utterances_by_meeting_id(str(meeting_id))
+    if utterances and not existing_utterance_doc:
         await save_utterances(
             str(meeting_id),
             {
                 "meeting_id": meeting_id,
                 "utterances": utterances,
             },
+        )
+    elif utterances:
+        logger.info(
+            "MongoDB utterances already exist; skip Redis fallback save to avoid overwriting postprocessed diarization. meeting_id=%s",
+            meeting_id,
         )
 
     try:

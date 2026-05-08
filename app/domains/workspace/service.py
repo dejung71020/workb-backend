@@ -153,15 +153,18 @@ def update_workspace_service(
             detail="워크스페이스를 찾을 수 없습니다.",
         )
 
-    updated_workspace = update_workspace(
-        db=db,
-        workspace_id=workspace_id,
-        name=payload.name,
-        industry=payload.industry,
-        default_language=payload.default_language,
-        summary_style=payload.summary_style,
-        logo_url=payload.logo_url,
-    )
+    update_values = {
+        "db": db,
+        "workspace_id": workspace_id,
+        "name": payload.name,
+        "industry": payload.industry,
+        "default_language": payload.default_language,
+        "summary_style": payload.summary_style,
+    }
+    if "logo_url" in payload.model_fields_set:
+        update_values["logo_url"] = payload.logo_url
+
+    updated_workspace = update_workspace(**update_values)
 
     if not updated_workspace:
         raise HTTPException(
@@ -908,6 +911,7 @@ def list_my_workspaces_service(db: Session, user_id: int) -> WorkspaceListRespon
             id=int(ws.id),
             name=ws.name,
             role=str(role.value if hasattr(role, "value") else role),
+            logo_url=ws.logo_url,
         )
         for ws, role in rows
     ]
