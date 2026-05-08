@@ -5,6 +5,25 @@ from .base import BaseClient
 
 logger = logging.getLogger(__name__)
 
+def _to_adf(text: str) -> dict:
+    return {
+        "type": "doc", "version": 1,
+        "content": [{"type": "paragraph", "content": [{"type": "text", "text": text}]}]
+    }
+
+def _from_adf(adf: dict | None) -> str | None:
+    if not adf:
+        return None
+    parts: list[str] = []
+    def _walk(node: dict) -> None:
+        if node.get("type") == "text":
+            parts.append(node.get("text", ""))
+        for child in node.get("content", []):
+            _walk(child)
+    _walk(adf)
+    return "\n".join(parts).strip() or None
+
+
 class JiraClient(BaseClient):
     """
     OAuth 2.0 Token 기반 cloud client
@@ -98,6 +117,7 @@ class JiraClient(BaseClient):
             priority: str = "Medium",
             due_date: str | None = None,
             assignee_account_id: str | None = None,
+            description: str | None = None,
     ) -> str:
         '''
         issue 자세히 만드는 함수
@@ -129,7 +149,10 @@ class JiraClient(BaseClient):
             fields['assignee'] = {
                 "accountId": assignee_account_id
             }
-        
+
+        if description:
+            fields['description'] = _to_adf(description)
+
         # API 호출
         data = await self._request("POST", "/issue", json={"fields": fields})
 
