@@ -456,7 +456,22 @@ async def knowledge_node(state: SharedState) -> dict:
     # 온톨로지 컨텍스트 프리패치
     from app.core.ontology import build_ontology_context
 
-    ontology_ctx = await build_ontology_context(resolved_question, workspace_id, llm)
+    ontology_ctx = await build_ontology_context(resolved_question, workspace_id, llm, user_id=user_id)
+
+    # ── NL2SQL fallback ───────────────────────────────────────────
+    # 온톨로지가 seed를 찾지 못한 경우(named entity 없는 집계·조건 질문 등)
+    # LLM이 DB 스키마를 보고 SQL을 직접 생성해 실행한 결과를 컨텍스트로 주입.
+    if not ontology_ctx:
+        try:
+            from app.core.nl2sql import nl2sql_query
+            nl2sql_ctx = await nl2sql_query(
+                resolved_question, workspace_id, llm, user_id=user_id
+            )
+            if nl2sql_ctx:
+                ontology_ctx = nl2sql_ctx
+        except Exception:
+            pass
+    # ─────────────────────────────────────────────────────────────
 
     # ── 진단 로그 (문제 파악 후 제거) ────────────────────────────
     import logging as _logging

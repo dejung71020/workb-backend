@@ -1,8 +1,112 @@
 from __future__ import annotations
 import re
+import logging
+from sqlalchemy import text
 from app.core.ontology.schema import EntityType, ExtractionResult
 from app.core.ontology.traverser import OntologyTraverser
 from app.core.ontology.formatter import graph_to_text
+
+logger = logging.getLogger(__name__)
+
+# ──────────────────────────────────────────────────────────────────
+# LLM 기반 seed 해소
+# ──────────────────────────────────────────────────────────────────
+
+# PK 탐색용 최소 스키마 (LLM에 노출)
+_SEED_SCHEMA = """
+users(id, name, email, role)
+  → workspace 범위: JOIN workspace_members wm ON wm.user_id = users.id
+                    WHERE wm.workspace_id = {workspace_id}
+meetings(id, workspace_id, title, scheduled_at)
+wbs_tasks(id, title, epic_id)
+  → workspace 범위: JOIN wbs_epics ep ON ep.id = wbs_tasks.epic_id
+                    JOIN meetings m ON m.id = ep.meeting_id
+                    WHERE m.workspace_id = {workspace_id}
+departments(id, workspace_id, name)
+decisions(id, meeting_id, content)
+  → workspace 범위: JOIN meetings m ON m.id = decisions.meeting_id
+                    WHERE m.workspace_id = {workspace_id}
+""".strip()
+
+_SEED_FORBIDDEN = re.compile(
+    r"\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|GRANT|REVOKE)\b",
+    re.IGNORECASE,
+)
+
+# 자기 참조 키워드 — user_id 직접 주입
+_SELF_REF_TERMS = ["나는", "난 ", "나의", "내가", "나에게", "나한테", "뭘 해야", "내 할 일", "내 태스크", "내 일정"]
+
+
+async def resolve_seed_with_llm(
+    entity_type: str, identifier: str, workspace_id: int, llm
+) -> int | None:
+    """
+    LLM이 최소 SQL을 생성해 엔티티 PK를 해소한다.
+
+    고정된 ilike 패턴 대신 LLM이 식별자 형태(이름/이메일/내용/역할 등)에
+    맞는 컬럼·테이블을 스스로 선택하므로 어떤 식별자도 처리 가능.
+
+    안전 장치:
+      - DML/DDL 차단
+      - workspace_id 격리 검증
+      - 결과는 id 1개만 반환
+    """
+    schema = _SEED_SCHEMA.format(workspace_id=workspace_id)
+
+    prompt = f"""다음 엔티티의 id(PK)를 찾는 SQL SELECT 문을 작성하세요.
+
+엔티티 타입: {entity_type}
+식별자(identifier): {identifier}
+workspace_id: {workspace_id}
+
+{schema}
+
+규칙:
+1. SELECT id 만 조회
+2. LIMIT 1 필수
+3. workspace_id = {workspace_id} 범위 격리 필수
+4. 이름 검색은 LIKE '%{identifier}%', 이메일은 exact match
+5. SQL 코드블록(```sql ... ```) 안에만 작성"""
+
+    try:
+        response = await llm.ainvoke(prompt)
+        sql = _extract_seed_sql(response.content)
+        if not sql:
+            return None
+        if _SEED_FORBIDDEN.search(sql):
+            logger.warning("[Ontology] seed SQL contains forbidden keyword: %s", sql[:100])
+            return None
+        # workspace 격리 확인 — users 단독 조회 시 workspace_members JOIN 필요
+        if "workspace_id" not in sql.lower() and "workspace_members" not in sql.lower():
+            logger.warning("[Ontology] seed SQL missing workspace filter: %s", sql[:100])
+            return None
+        return _execute_seed_sql(sql)
+    except Exception as e:
+        logger.debug("[Ontology] resolve_seed_with_llm failed: %s", e)
+        return None
+
+
+def _extract_seed_sql(content: str) -> str:
+    m = re.search(r"```(?:sql)?\s*(SELECT[\s\S]+?)```", content, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"(SELECT\s[\s\S]+?)(?:;|\Z)", content, re.IGNORECASE)
+    return m.group(1).strip() if m else ""
+
+
+def _execute_seed_sql(sql: str) -> int | None:
+    from app.infra.database.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        result = db.execute(text(sql))
+        row = result.fetchone()
+        return int(row[0]) if row and row[0] is not None else None
+    except Exception as e:
+        logger.debug("[Ontology] seed SQL execute failed: %s", e)
+        return None
+    finally:
+        db.close()
 
 
 # Literal → EntityType 매핑 (schema.py의 WsCategoryLiteral과 1:1 대응)
@@ -49,17 +153,20 @@ async def build_ontology_context(
     question: str,
     workspace_id: int,
     llm,
+    user_id: int | None = None,
 ) -> str:
     """
     질문 → 온톨로지 컨텍스트 텍스트 생성 메인 진입점.
 
     처리 흐름:
     1. llm.with_structured_output(ExtractionResult)로 엔티티 + 카테고리 + 날짜 추출
-    2. ExtractionResult 객체로 seed_entities 구성
-       - 단건 엔티티(User/Meeting/WbsTask/Department/Decision): id=None → traverser에서 이름→PK 해소
+    2. seed_entities 구성:
+       - 자기 참조("나", "내가" 등) + user_id → User seed 직접 주입 (SQL 불필요)
+       - 단건 엔티티: resolve_seed_with_llm()으로 LLM이 최소 SQL 생성 → PK 해소
+         (이름·이메일·역할 등 어떤 식별자도 LLM이 컬럼 선택, ilike 고정 없음)
        - WS_* 카테고리: entity_id = workspace_id (전체 목록 fetch)
     3. _infer_max_depth(question)으로 탐색 깊이 동적 결정
-    4. OntologyTraverser로 그래프 탐색
+    4. OntologyTraverser로 그래프 탐색 (seed PK 이후는 온톨로지가 전담)
     5. graph_to_text()로 LLM 프롬프트용 텍스트 변환 후 반환
 
     반환값: knowledge_node의 system_prompt에 주입되는 컨텍스트 문자열.
@@ -130,9 +237,20 @@ async def build_ontology_context(
     # ── Step 2: seed_entities 구성 ────────────────────────────────
     seed_entities: list[dict] = []
 
-    for ent in result.entities:
+    # 자기 참조("나", "내가", ...) → user_id를 직접 seed로 주입
+    if user_id and any(term in question for term in _SELF_REF_TERMS):
         seed_entities.append({
-            "id": None,
+            "id": user_id,
+            "type": EntityType.USER.value,
+            "name": "나",
+            "ctx": ctx,
+        })
+
+    for ent in result.entities:
+        # LLM이 최소 SQL로 엔티티 PK 해소 (이름·이메일·내용 등 어떤 식별자도 처리)
+        resolved_id = await resolve_seed_with_llm(ent.type, ent.name, workspace_id, llm)
+        seed_entities.append({
+            "id": resolved_id,  # None이면 traverser의 _resolve_entity_id가 sync fallback
             "type": ent.type,
             "name": ent.name,
             "ctx": ctx,

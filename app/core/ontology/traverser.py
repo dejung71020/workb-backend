@@ -78,7 +78,14 @@ def _resolve_entity_id(
         if entity_type == EntityType.USER:
             from app.domains.user.models import User
 
+            # 1차: 이름 ilike 검색
             row = db.query(User.id).filter(User.name.ilike(f"%{norm}%")).first()
+            if row:
+                return row.id
+
+            # 2차: 이메일 exact 매칭 (추출된 name이 이메일 형식인 경우)
+            if "@" in norm:
+                row = db.query(User.id).filter(User.email == norm).first()
             return row.id if row else None
 
         if entity_type == EntityType.MEETING:

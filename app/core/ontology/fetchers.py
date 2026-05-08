@@ -131,6 +131,57 @@ def fetch_user_department(
         db.close()
 
 
+def fetch_user_profile(
+    user_id: int, workspace_id: int, ctx: dict | None = None
+) -> list[dict]:
+    """
+    User → 프로필 속성 (terminal node).
+
+    name / email / birth_date / gender / phone_number / role 등
+    users 테이블 직접 컬럼을 반환한다.
+
+    "조수민의 별자리", "이메일 주소가 뭐야" 같이 User 자체 속성을
+    묻는 질문에 온톨로지 컨텍스트로 답변 가능하게 한다.
+    """
+    from app.domains.user.models import User
+    from app.domains.workspace.models import WorkspaceMember
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(
+                User.id,
+                User.name,
+                User.email,
+                User.birth_date,
+                User.gender,
+                User.phone_number,
+                WorkspaceMember.role,
+            )
+            .join(WorkspaceMember, User.id == WorkspaceMember.user_id)
+            .filter(
+                User.id == user_id,
+                WorkspaceMember.workspace_id == workspace_id,
+            )
+            .first()
+        )
+        if not row:
+            return []
+        return [{
+            "type": "UserProfile",
+            "name": row.name,
+            "email": row.email,
+            "role": row.role.value if row.role else None,
+            "birth_date": row.birth_date.strftime("%Y-%m-%d") if row.birth_date else None,
+            "gender": row.gender,
+            "phone_number": row.phone_number,
+        }]
+    except Exception:
+        return []
+    finally:
+        db.close()
+
+
 def fetch_user_stats(
     user_id: int, workspace_id: int, ctx: dict | None = None
 ) -> list[dict]:
@@ -186,6 +237,61 @@ def fetch_user_stats(
 # ──────────────────────────────────────────────────────────────────
 # [순방향] Meeting 기점 fetch 함수
 # ──────────────────────────────────────────────────────────────────
+
+def fetch_meeting_profile(
+    meeting_id: int, workspace_id: int, ctx: dict | None = None
+) -> list[dict]:
+    """
+    Meeting → 회의 자체 속성 (terminal node).
+
+    title / meeting_type / room_name / started_at / ended_at / created_by 등
+    meetings 테이블 직접 컬럼을 반환한다.
+
+    "이 회의 어디서 했어?", "몇 시에 끝났어?", "어떤 종류 회의야?" 같이
+    회의 자체 속성을 묻는 질문에 온톨로지 컨텍스트로 답변 가능하게 한다.
+    """
+    from app.domains.meeting.models import Meeting
+    from app.domains.user.models import User
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(
+                Meeting.id,
+                Meeting.title,
+                Meeting.meeting_type,
+                Meeting.room_name,
+                Meeting.status,
+                Meeting.scheduled_at,
+                Meeting.started_at,
+                Meeting.ended_at,
+                User.name.label("created_by_name"),
+            )
+            .outerjoin(User, Meeting.created_by == User.id)
+            .filter(
+                Meeting.id == meeting_id,
+                Meeting.workspace_id == workspace_id,
+            )
+            .first()
+        )
+        if not row:
+            return []
+        return [{
+            "type": "MeetingProfile",
+            "title": row.title,
+            "meeting_type": row.meeting_type,
+            "room_name": row.room_name,
+            "status": row.status.value if row.status else None,
+            "scheduled_at": row.scheduled_at.strftime("%Y-%m-%d %H:%M") if row.scheduled_at else None,
+            "started_at": row.started_at.strftime("%Y-%m-%d %H:%M") if row.started_at else None,
+            "ended_at": row.ended_at.strftime("%Y-%m-%d %H:%M") if row.ended_at else None,
+            "created_by": row.created_by_name,
+        }]
+    except Exception:
+        return []
+    finally:
+        db.close()
+
 
 def fetch_meeting_decisions(
     meeting_id: int, workspace_id: int, ctx: dict | None = None
@@ -972,6 +1078,15 @@ ONTOLOGY: list[Relation] = [
 
     # ── User 기점 순방향 ─────────────────────────────────────────
     Relation(
+        type=RelationType.HAS_PROFILE,
+        from_entity=EntityType.USER,
+        to_entity=EntityType.USER,  # terminal: UserProfile 타입 반환 → 추가 탐색 없음
+        fetch_fn=fetch_user_profile,
+        description="사용자 프로필 정보",
+        infer_at_depth=1,
+        weight=1.6,  # stats(0.8)보다 높게 — 별자리/이메일/성별 질문에 먼저 노출
+    ),
+    Relation(
         type=RelationType.PARTICIPATED_IN,
         from_entity=EntityType.USER,
         to_entity=EntityType.MEETING,
@@ -1009,6 +1124,15 @@ ONTOLOGY: list[Relation] = [
     ),
 
     # ── Meeting 기점 순방향 ──────────────────────────────────────
+    Relation(
+        type=RelationType.HAS_PROFILE,
+        from_entity=EntityType.MEETING,
+        to_entity=EntityType.MEETING,  # terminal: MeetingProfile 타입 반환
+        fetch_fn=fetch_meeting_profile,
+        description="회의 기본 정보",
+        infer_at_depth=1,
+        weight=1.6,
+    ),
     # infer_at_depth=1: Meeting이 직접 seed일 때도 탐색
     Relation(
         type=RelationType.HAS_DECISION,
