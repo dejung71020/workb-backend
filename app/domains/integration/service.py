@@ -109,78 +109,46 @@ async def test_integration(db: Session, workspace_id: int, service: ServiceType)
     integration = repository.get_integration(db, workspace_id, service)
     if not integration or not integration.is_connected or not integration.access_token:
         return {
-            "status": "disconnected",
+            "status": "disconnected", 
             "message": "연동되지 않았습니다."
         }
 
-    # 1 단계 : token_expires_at 으로 만료 체크
-    expires_at = integration.token_expires_at
-    if expires_at:
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=KST)
-        if expires_at < now_kst():
-            return {
-                "status": "expired",
-                "message": "토큰이 만료되었습니다. 재연동이 필요합니다."
-            }
-
-    # 2 단계 : API ping test
     try:
         http = await ClientSessionManager.get_client()
 
         if service == ServiceType.slack:
+            expires_at = integration.token_expires_at
+            if expires_at:
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=KST)
+                if expires_at < now_kst():
+                    return {"status": "expired", "message": "토큰이 만료되었습니다. 재연동이 필요합니다."}
             res = await http.get(
                 "https://slack.com/api/auth.test",
-                headers={
-                    "Authorization": f"Bearer {integration.access_token}",
-                }
+                headers={"Authorization": f"Bearer {integration.access_token}"},
             )
             if not res.json().get("ok"):
-                return {
-                    "status": "revoked",
-                    "message": "Slack 권한이 해제되었습니다. 재연동이 필요합니다."
-                }
-            
-        elif service == ServiceType.google_calendar:
-            try:
-                token = await get_valid_google_token(db, workspace_id)
-                res = await http.get(
-                    "https://www.googleapis.com/oauth2/v3/tokeninfo",
-                    params={"access_token": token},
-                )
-                if res.status_code != 200:
-                    return {
-                        "status": "revoked",
-                        "message": "Google Calendar 권한이 해제되었습니다. 재연동이 필요합니다."
-                    }
-            except Exception:
-                return {
-                    "status": "revoked",
-                    "message": "Google Calendar 연결이 끊겼습니다. 재연동이 필요합니다."
-                }
-        
-        elif service == ServiceType.jira:
-            try:
-                token = await get_valid_jira_token(db, workspace_id)
-                cloud_id = get_jira_cloud_id(db, workspace_id)
-                jira = JiraClient(token, cloud_id)
-                await jira._request("GET", "/myself")
-            except Exception:
-                return {
-                    "status": "revoked",
-                    "message": "JIRA 권한이 해제되었습니다. 재연동이 필요합니다."
-                }
+                return {"status": "revoked", "message": "Slack 권한이 해제되었습니다. 재연동이 필요합니다."}
 
-        return {
-            "status": "ok",
-            "message": "연결 정상"
-        }
+        elif service == ServiceType.google_calendar:
+            token = await get_valid_google_token(db, workspace_id)
+            res = await http.get(
+                "https://www.googleapis.com/oauth2/v3/tokeninfo",
+                params={"access_token": token},
+            )
+            if res.status_code != 200:
+                return {"status": "revoked", "message": "Google Calendar 권한이 해제되었습니다. 재연동이 필요합니다."}
+
+        elif service == ServiceType.jira:
+            token = await get_valid_jira_token(db, workspace_id)
+            cloud_id = get_jira_cloud_id(db, workspace_id)
+            jira = JiraClient(token, cloud_id)
+            await jira._request("GET", "/myself")
+
+        return {"status": "ok", "message": "정상 연결되어 있습니다."}
 
     except Exception:
-        return {
-            "status": "error",
-            "message": "연결 확인 중 오류"
-        }
+        return {"status": "revoked", "message": "연결이 끊겼습니다. 재연동이 필요합니다."}
 
 
 
