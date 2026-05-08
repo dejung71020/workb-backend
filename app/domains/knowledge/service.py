@@ -571,8 +571,12 @@ async def process_meeting_end(meeting_id: int, workspace_id: int) -> None:
 
     # Phase 2: LLM call — no DB session held
     llm = ChatOpenAI(model="gpt-4o-mini", api_key=settings.OPENAI_API_KEY)
+    today_str = now_kst().strftime("%Y-%m-%d")
     prompt = f"""
     다음 회의 발화에서 구조화된 정보를 추출하세요.
+
+    오늘 날짜: {today_str}
+    due_date 계산 시 이 날짜를 기준으로 상대적 표현("다음 주까지", "3일 안에" 등)을 절대 날짜로 변환하세요.
 
     [발화 내용]
     {transcript_text}
