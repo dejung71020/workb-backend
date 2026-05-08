@@ -34,6 +34,9 @@ motor==3.7.0
 # Cacheß
 redis==7.4.0
 
+# AWS S3
+boto3==1.35.49
+
 # Utils & Formatting
 python-dotenv==1.2.2
 httpx==0.28.1

@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     # 10. 개발·QA 전용 기능
     WAV_SIM_ENABLED: bool = False  # WAV 업로드로 회의 시뮬레이션 (운영에서는 False)
 
+    # 11. AWS S3
+    AWS_ACCESS_KEY_ID: Optional[str] = None
+    AWS_SECRET_ACCESS_KEY: Optional[str] = None
+    AWS_REGION: str = "ap-northeast-2"
+    AWS_S3_BUCKET: Optional[str] = None
+    AWS_S3_PRESIGNED_EXPIRES: int = 3600  # Presigned URL 기본 만료(초)
+
     @field_validator("DEBUG", mode="before")
     @classmethod
     def parse_debug(cls, value):
