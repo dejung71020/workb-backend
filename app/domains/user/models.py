@@ -138,7 +138,6 @@ class UserDeviceSetting(Base):
         ForeignKey("workspaces.id"),
         nullable=True,
     )
-    is_main_device: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     selected_mic_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     selected_camera_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     mic_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

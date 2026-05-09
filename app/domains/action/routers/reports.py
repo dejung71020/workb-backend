@@ -4,7 +4,7 @@ import json
 import markdown as md_lib
 from urllib.parse import quote
 from fastapi import APIRouter, Depends, BackgroundTasks, Query, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.infra.database.session import get_db
@@ -15,6 +15,7 @@ from app.domains.action.schemas import (
 )
 from app.domains.action.services import report_builder
 from app.domains.user.dependencies import require_workspace_admin, require_workspace_member
+from app.utils.s3_utils import download_file_bytes_from_s3, extract_s3_key_from_url, generate_presigned_url
 
 router = APIRouter()
 
@@ -24,6 +25,30 @@ _GENERATORS = {
     "excel":    report_builder.generate_excel,
     "wbs":      report_builder.generate_wbs,
 }
+
+
+def _resolve_report_thumbnail_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.startswith(("http://", "https://")):
+        key = extract_s3_key_from_url(text)
+        if key:
+            return generate_presigned_url(key)
+        return text
+    return generate_presigned_url(text)
+
+
+def _to_report_response(report) -> ReportResponse:
+    return ReportResponse(
+        id=int(report.id),
+        format=report.format.value if hasattr(report.format, "value") else str(report.format),
+        title=str(report.title),
+        thumbnail_url=_resolve_report_thumbnail_url(report.thumbnail_url),
+        updated_at=report.updated_at,
+    )
 
 @router.post("/reports/generate", response_model=ExportResponse)
 async def generate_report(
@@ -53,7 +78,7 @@ def get_reports(
     db: Session = Depends(get_db),
     _member=Depends(require_workspace_member),
 ):
-    return repository.get_reports(db, meeting_id)
+    return [_to_report_response(report) for report in repository.get_reports(db, meeting_id)]
 
 
 @router.get("/reports/{report_id}", response_model=ReportResponse)
@@ -67,7 +92,7 @@ def get_report(
     report = repository.get_report(db, report_id)
     if not report or report.meeting_id != meeting_id:
         raise HTTPException(status_code=404, detail="보고서를 찾을 수 없습니다.")
-    return report
+    return _to_report_response(report)
 
 
 @router.get("/reports/{report_id}/view", response_class=HTMLResponse)
@@ -155,9 +180,21 @@ def download_report(
     if report.format == ReportFormat.excel:
         if not report.file_url:
             raise HTTPException(status_code=404, detail="파일이 아직 생성되지 않았습니다.")
-        return FileResponse(
-            report.file_url,
-            media_type="application/vnd.openxmlformats-officedocument.spre adsheetml.sheet",
+        file_url = str(report.file_url)
+        if file_url.startswith(("http://", "https://")):
+            return RedirectResponse(url=file_url, status_code=307)
+
+        if file_url.startswith(("/", "storage/", "storage\\")):
+            return FileResponse(
+                file_url,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": disposition(f"{report.title}.xlsx")},
+            )
+
+        excel_bytes = download_file_bytes_from_s3(file_url)
+        return StreamingResponse(
+            io.BytesIO(excel_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition": disposition(f"{report.title}.xlsx")},
         )
 
@@ -199,4 +236,4 @@ def patch_report(
         raise HTTPException(status_code=404, detail="보고서를 찾을 수 없습니다.")
     if report.format == ReportFormat.excel:
         raise HTTPException(status_code=400, detail="Excel 보고서는 수정할 수 없습니다.")
-    return repository.update_report(db, report_id, body.content)
+    return _to_report_response(repository.update_report(db, report_id, body.content))

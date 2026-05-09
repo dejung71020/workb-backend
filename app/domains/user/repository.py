@@ -293,7 +293,6 @@ def upsert_user_device_setting(
     db: Session,
     user_id: int,
     workspace_id: int | None,
-    is_main_device: bool,
     selected_mic_id: str | None,
     selected_camera_id: str | None,
     mic_enabled: bool,
@@ -312,7 +311,6 @@ def upsert_user_device_setting(
         db.add(setting)
 
     setting.workspace_id = workspace_id
-    setting.is_main_device = is_main_device
     setting.selected_mic_id = selected_mic_id
     setting.selected_camera_id = selected_camera_id
     setting.mic_enabled = mic_enabled

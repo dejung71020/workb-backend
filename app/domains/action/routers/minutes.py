@@ -4,13 +4,13 @@
 """
 import asyncio
 import base64
+import io
 import logging
-from pathlib import Path
 from typing import Optional
 
 import markdown
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.domains.action import repository as action_repo
@@ -33,12 +33,13 @@ from app.domains.action.minutes_pipeline import (
 )
 from app.domains.user.dependencies import require_workspace_admin, require_workspace_member
 from app.infra.database.session import get_db
-from app.utils.s3_utils import resolve_minute_photo_url
+from app.utils.s3_utils import download_file_bytes_from_s3, resolve_minute_photo_url, upload_fileobj_to_s3
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-_PDF_OUTPUT_STORE = Path("storage/minutes_generated")
+def _minutes_pdf_s3_key(meeting_id: int) -> str:
+    return f"meetings/{meeting_id}/minutes_generated/{meeting_id}.pdf"
 
 
 # --------------------------------------------------------------------------- #
@@ -220,9 +221,6 @@ async def preview_minutes_pdf(
     ]
 
     # ── PDF 생성 ─────────────────────────────────────────────────────
-    _PDF_OUTPUT_STORE.mkdir(parents=True, exist_ok=True)
-    output_pdf = _PDF_OUTPUT_STORE / f"{meeting_id}.pdf"
-
     loop = asyncio.get_event_loop()
     pdf_bytes: bytes
 
@@ -241,7 +239,11 @@ async def preview_minutes_pdf(
     )
 
     try:
-        output_pdf.write_bytes(pdf_bytes)
+        upload_fileobj_to_s3(
+            fileobj=io.BytesIO(pdf_bytes),
+            key=_minutes_pdf_s3_key(meeting_id),
+            content_type="application/pdf",
+        )
         preview_pngs = await loop.run_in_executor(
             None,
             lambda: pdf_renderer.preview_from_pdf_bytes(pdf_bytes, [0], dpi=150),
@@ -273,14 +275,17 @@ async def download_minutes_pdf(
     _member=Depends(require_workspace_member),
 ):
     """생성된 회의록 PDF를 다운로드합니다."""
-    pdf_path = _PDF_OUTPUT_STORE / f"{meeting_id}.pdf"
-    if not pdf_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="생성된 PDF가 없습니다. 먼저 미리보기를 생성해주세요.",
-        )
-    return FileResponse(
-        path=str(pdf_path),
+    try:
+        pdf_bytes = download_file_bytes_from_s3(_minutes_pdf_s3_key(meeting_id))
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(
+                status_code=404,
+                detail="생성된 PDF가 없습니다. 먼저 미리보기를 생성해주세요.",
+            ) from exc
+        raise
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
         media_type="application/pdf",
-        filename=f"minutes_{meeting_id}.pdf",
+        headers={"Content-Disposition": f'attachment; filename="minutes_{meeting_id}.pdf"'},
     )

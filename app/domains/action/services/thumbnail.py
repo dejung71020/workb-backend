@@ -1,8 +1,8 @@
 # app/domains/action/services/thumbnail.py
-from pathlib import Path
+import io
 from PIL import Image,ImageDraw, ImageFont
 
-def generate_text_thumbnail(content: str, save_path: str) -> None:
+def generate_text_thumbnail_bytes(content: str) -> bytes:
     lines = [line.lstrip("#").strip() for line in content.split("\n") if line.strip()][:15]
 
     # 400x225 크기의 빈 이미지 생성 WebP 최적화 사이즈
@@ -22,10 +22,11 @@ def generate_text_thumbnail(content: str, save_path: str) -> None:
         if y > H - 10:
             break
     
-    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-    img.save(save_path, "WEBP", quality=75)
+    output = io.BytesIO()
+    img.save(output, "WEBP", quality=75)
+    return output.getvalue()
 
-def generate_format_thumbnail(format_name: str, save_path: str) -> None:
+def generate_format_thumbnail_bytes(format_name: str) -> bytes:
     colors = {
         "excel":    (33, 115, 70),
         'wbs':      (37, 99, 235),
@@ -51,6 +52,9 @@ def generate_format_thumbnail(format_name: str, save_path: str) -> None:
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
     draw.text(((W - tw) // 2, (H - th) //2), label, fill=(255, 255, 255), font=font)
 
-    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-    img.save(save_path, "WEBP", quality=75)
+    output = io.BytesIO()
+    img.save(output, "WEBP", quality=75)
+    return output.getvalue()
+
+
 

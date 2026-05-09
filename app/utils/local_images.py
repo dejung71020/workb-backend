@@ -1,7 +1,8 @@
 from pathlib import Path
-from time import time
+from io import BytesIO
 
 from fastapi import HTTPException, UploadFile, status
+from app.utils.s3_utils import upload_fileobj_to_s3
 
 MAX_LOCAL_IMAGE_SIZE = 1024 * 1024
 IMAGE_EXTENSIONS = {
@@ -31,11 +32,11 @@ async def save_local_image(file: UploadFile, directory: Path, stem: str) -> str:
             detail="이미지는 1MB 이하 파일을 사용해 주세요.",
         )
 
-    directory.mkdir(parents=True, exist_ok=True)
-    for existing in directory.glob(f"{stem}.*"):
-        existing.unlink(missing_ok=True)
-
     extension = IMAGE_EXTENSIONS[file.content_type]
-    path = directory / f"{stem}{extension}"
-    path.write_bytes(content)
-    return f"/storage/{directory.name}/{path.name}?v={int(time())}"
+    key = f"{directory.name}/{stem}{extension}"
+    upload_fileobj_to_s3(
+        fileobj=BytesIO(content),
+        key=key,
+        content_type=file.content_type,
+    )
+    return key

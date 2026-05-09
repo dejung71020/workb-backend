@@ -3,6 +3,7 @@ ReportLab 기반 회의록 PDF 생성 — Playwright 미설치 시 폴백.
 """
 import io
 import logging
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -11,7 +12,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_FONT_STORAGE_DIR = Path("storage/fonts")
+_FONT_STORAGE_DIR = Path(tempfile.gettempdir()) / "workb-fonts"
 
 _FONT_REGULAR = "NanumGothic"
 _FONT_BOLD = "NanumGothicBold"
@@ -55,7 +56,7 @@ def _ensure_fonts() -> tuple[str, str]:
                 _FONT_REGISTERED = True
                 return _FONT_REGULAR, _FONT_BOLD
             except Exception as exc:
-                logger.warning("storage/fonts/ 폰트 등록 실패: %s", exc)
+                logger.warning("임시 폰트 디렉터리 등록 실패: %s", exc)
 
         for reg_name, sys_reg, sys_bold in _SYSTEM_FONT_CANDIDATES:
             if not Path(sys_reg).exists():

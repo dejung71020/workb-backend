@@ -1,22 +1,25 @@
 # app\domains\vision\service.py
 import asyncio, os
-from pathlib import Path
+from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
 
 from app.domains.vision.agent_utils import (
     analyze_image, convert_pptx_to_images, analyze_ppt_slide_image
 )
 from app.domains.vision import repository
+from app.utils.s3_utils import upload_fileobj_to_s3
 from app.utils.time_utils import now_kst
 
 def _save_capture_image(meeting_id: int, image_bytes: bytes) -> str:
-    """캡처 이미지를 로컬에 저장하고 file_url 반환"""
+    """캡처 이미지를 S3에 저장하고 object key 반환"""
     ts = now_kst().strftime("%Y%m%d_%H%M%S_%f")
-    dir_path = Path(f"storage/meetings/{meeting_id}/captures")
-    dir_path.mkdir(parents=True, exist_ok=True)
-    file_path = dir_path / f"{ts}.png"
-    file_path.write_bytes(image_bytes)
-    return str(file_path)
+    key = f"meetings/{meeting_id}/captures/{ts}.png"
+    upload_fileobj_to_s3(
+        fileobj=BytesIO(image_bytes),
+        key=key,
+        content_type="image/png",
+    )
+    return key
 
 async def analyze_screen_share(image_bytes: bytes, meeting_id: int, seq: int | None) -> dict:
     file_url = _save_capture_image(meeting_id, image_bytes)

@@ -60,6 +60,7 @@ from app.domains.workspace.service import (
 )
 from app.domains.workspace.deps import require_workspace_admin, require_workspace_member
 from app.utils.local_images import save_local_image
+from app.utils.s3_utils import generate_presigned_url
 
 
 router = APIRouter()
@@ -84,17 +85,17 @@ async def upload_workspace_logo_file(
     db: Session = Depends(get_db),
     _admin=Depends(require_workspace_admin),
 ) -> dict[str, str]:
-    logo_url = await save_local_image(
+    logo_key = await save_local_image(
         file=file,
-        directory=Path("storage/teamlogo"),
+        directory=Path("teamlogo"),
         stem=f"workspace-{workspace_id}",
     )
     update_workspace_service(
         db,
         workspace_id,
-        WorkspaceUpdateRequest(logo_url=logo_url),
+        WorkspaceUpdateRequest(logo_url=logo_key),
     )
-    return {"logo_url": logo_url}
+    return {"logo_url": generate_presigned_url(logo_key)}
 
 
 @router.post("/join", response_model=WorkspaceJoinResponse, status_code=status.HTTP_200_OK)

@@ -1,6 +1,6 @@
 # app/domains/action/services/report_builder.py
+import io
 import json
-from pathlib import Path
 from sqlalchemy.orm import Session
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -12,23 +12,18 @@ from app.domains.action.models import ReportFormat
 from app.domains.action.mongo_repository import get_meeting_summary
 from app.domains.action.services import thumbnail as thumb
 from app.domains.action.services.wbs_builder import build_wbs_template
+from app.utils.s3_utils import upload_fileobj_to_s3
 
-STORAGE_ROOT = Path("storage")
+def _thumb_key(meeting_id: int, suffix: str) -> str:
+    return f"meetings/{meeting_id}/thumb/thumb_{suffix}.webp"
 
 # ── 색상 상수 ─────────────────────────────────────────────────────────────────
 _PRIMARY   = "5668F3"  # 헤더 배경
 _SECONDARY = "EEF0FE"  # 섹션 배경
 _BORDER_C  = "D0D5F5"  # 테두리
 
-def _thumb_path(meeting_id: int, suffix: str) -> Path:
-    p = STORAGE_ROOT / "meetings" / str(meeting_id) / "thumb"
-    p.mkdir(parents=True, exist_ok=True)
-    return Path(("/" + str(p / f"thumb_{suffix}.webp")).replace("\\", "/"))
-
-def _report_file_path(meeting_id: int, report_id: int, ext: str) -> Path:
-    p = STORAGE_ROOT / "meetings" / str(meeting_id) / "reports"
-    p.mkdir(parents=True, exist_ok=True)
-    return p / f"{report_id}.{ext}"
+def _report_file_key(meeting_id: int, report_id: int, ext: str) -> str:
+    return f"meetings/{meeting_id}/reports/{report_id}.{ext}"
 
 # ── Excel 스타일 헬퍼 ─────────────────────────────────────────────────────────
 def _thin_border() -> Border:
@@ -218,15 +213,20 @@ def generate_markdown(db: Session, meeting_id: int, user_id: int):
         raise ValueError("회의록이 없습니다.")
 
     meeting    = repository.get_meeting(db, meeting_id)
-    thumb_path = _thumb_path(meeting_id, "md")
-    thumb.generate_text_thumbnail(minute.content, str(thumb_path))
+    thumb_bytes = thumb.generate_text_thumbnail_bytes(minute.content)
+    thumb_key = _thumb_key(meeting_id, "md")
+    upload_fileobj_to_s3(
+        fileobj=io.BytesIO(thumb_bytes),
+        key=thumb_key,
+        content_type="image/webp",
+    )
 
     return repository.save_report(
         db, meeting_id, user_id,
         format=ReportFormat.markdown,
         title=f"{meeting.title} 회의록",
         content=minute.content,
-        thumbnail_url=str(thumb_path),
+        thumbnail_url=thumb_key,
     )
 
 
@@ -238,8 +238,13 @@ def generate_html(db: Session, meeting_id: int, user_id: int):
     summary = get_meeting_summary(meeting_id)
     meeting = repository.get_meeting(db, meeting_id)
 
-    thumb_path = _thumb_path(meeting_id, "html")
-    thumb.generate_text_thumbnail(minute.content, str(thumb_path))
+    thumb_bytes = thumb.generate_text_thumbnail_bytes(minute.content)
+    thumb_key = _thumb_key(meeting_id, "html")
+    upload_fileobj_to_s3(
+        fileobj=io.BytesIO(thumb_bytes),
+        key=thumb_key,
+        content_type="image/webp",
+    )
 
     # HTML은 다운로드 시 즉시 생성 — content 컬럼에 HTML 저장
     html = _build_html(meeting.title, summary, minute.content)
@@ -251,7 +256,7 @@ def generate_html(db: Session, meeting_id: int, user_id: int):
         format=ReportFormat.html,
         title=f"{meeting.title} HTML 보고서",
         content=html,
-        thumbnail_url=str(thumb_path),
+        thumbnail_url=thumb_key,
     )
 
 
@@ -267,8 +272,8 @@ def generate_excel(db: Session, meeting_id: int, user_id: int):
         title=f"{meeting.title} Excel 보고서",
     )
 
-    file_path  = _report_file_path(meeting_id, report.id, "xlsx")
-    thumb_path = _thumb_path(meeting_id, "excel")
+    file_key = _report_file_key(meeting_id, report.id, "xlsx")
+    thumb_key = _thumb_key(meeting_id, "excel")
 
     wb       = openpyxl.Workbook()
     overview = summary.get("overview", {})
@@ -322,11 +327,24 @@ def generate_excel(db: Session, meeting_id: int, user_id: int):
     for i, p in enumerate(summary.get("pending_items", []), 3):
         _apply_row(ws4, i, [p.get("content",""), "O" if p.get("carried_over") else "X"], i % 2 == 0)
 
-    wb.save(str(file_path))
-    thumb.generate_format_thumbnail("excel", str(thumb_path))
+    excel_buf = io.BytesIO()
+    wb.save(excel_buf)
+    excel_buf.seek(0)
+    upload_fileobj_to_s3(
+        fileobj=excel_buf,
+        key=file_key,
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
-    report.file_url      = str(file_path)
-    report.thumbnail_url = str(thumb_path)
+    thumb_bytes = thumb.generate_format_thumbnail_bytes("excel")
+    upload_fileobj_to_s3(
+        fileobj=io.BytesIO(thumb_bytes),
+        key=thumb_key,
+        content_type="image/webp",
+    )
+
+    report.file_url = file_key
+    report.thumbnail_url = thumb_key
     db.commit()
     db.refresh(report)
     return report
@@ -336,13 +354,18 @@ async def generate_wbs(db: Session, meeting_id: int, user_id: int):
     wbs     = await build_wbs_template(db, meeting_id)
     meeting = repository.get_meeting(db, meeting_id)
 
-    thumb_path = _thumb_path(meeting_id, "wbs")
-    thumb.generate_format_thumbnail("wbs", str(thumb_path))
+    thumb_bytes = thumb.generate_format_thumbnail_bytes("wbs")
+    thumb_key = _thumb_key(meeting_id, "wbs")
+    upload_fileobj_to_s3(
+        fileobj=io.BytesIO(thumb_bytes),
+        key=thumb_key,
+        content_type="image/webp",
+    )
 
     return repository.save_report(
         db, meeting_id, user_id,
         format=ReportFormat.wbs,
         title=f"{meeting.title} WBS",
         content=json.dumps(wbs, ensure_ascii=False),
-        thumbnail_url=str(thumb_path),
+        thumbnail_url=thumb_key,
     )
