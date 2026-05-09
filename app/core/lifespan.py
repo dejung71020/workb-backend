@@ -64,6 +64,9 @@ def _ensure_user_profile_columns() -> None:
     if "gender" not in existing_columns:
         statements.append("ALTER TABLE users ADD COLUMN gender VARCHAR(20) NULL")
 
+    if "profile_image_url" not in existing_columns:
+        statements.append("ALTER TABLE users ADD COLUMN profile_image_url VARCHAR(500) NULL")
+
     if not statements:
         return
 

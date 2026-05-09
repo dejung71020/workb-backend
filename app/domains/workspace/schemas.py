@@ -182,6 +182,7 @@ class WorkspaceMemberResponse(BaseModel):
     birth_date: date | None = None
     age: int | None = None
     gender: Gender | None = None
+    profile_image_url: str | None = None
 
 
 class WorkspaceMemberListResponse(BaseModel):
