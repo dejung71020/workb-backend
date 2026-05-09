@@ -103,6 +103,20 @@ def _normalize_workspace_logo_key(value: str | None) -> str | None:
     return text
 
 
+def _resolve_profile_image_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.startswith(("http://", "https://")):
+        key = extract_s3_key_from_url(text)
+        if key:
+            return generate_presigned_url(key)
+        return text
+    return generate_presigned_url(text)
+
+
 def _generate_invite_code() -> str:
     """
     워크스페이스 초대코드를 생성합니다.
@@ -449,6 +463,7 @@ def get_workspace_members_service(
                 birth_date=user.birth_date,
                 age=_calculate_age(user.birth_date),
                 gender=user.gender,
+                profile_image_url=_resolve_profile_image_url(user.profile_image_url),
             )
             for membership, user in member_rows
         ]

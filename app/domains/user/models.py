@@ -73,6 +73,11 @@ class User(Base):
         nullable=True,
     )
 
+    profile_image_url: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+
     # 사용자 역할입니다.
     # 현재는 admin / member / viewer 값을 문자열로 저장하는 구조를 사용합니다.
     # 이후 권한 분기나 관리자 기능 접근 제어에 활용합니다.

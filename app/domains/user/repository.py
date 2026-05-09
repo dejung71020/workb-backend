@@ -165,6 +165,21 @@ def update_user_profile(
     return user
 
 
+def update_user_profile_image(
+    db: Session,
+    user_id: int,
+    profile_image_url: str | None,
+) -> User | None:
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return None
+
+    user.profile_image_url = profile_image_url
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 def deactivate_user_account(db: Session, user_id: int) -> User | None:
     """
     회원 탈퇴 처리용으로 사용자 계정을 비활성화하고 워크스페이스 연결을 끊습니다.

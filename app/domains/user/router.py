@@ -66,11 +66,11 @@ from app.domains.user.service import (
     signup_admin_service,
     signup_member_service,
     update_my_profile_service,
+    update_my_profile_image_service,
     update_my_device_settings_service,
     withdraw_my_account_service,
 )
 from app.utils.local_images import save_local_image
-from app.utils.s3_utils import generate_presigned_url
 
 
 router = APIRouter()
@@ -79,6 +79,7 @@ router = APIRouter()
 @router.post("/me/profile-image", status_code=status.HTTP_200_OK)
 async def upload_my_profile_image(
     file: UploadFile = File(...),
+    db: Session = Depends(get_db),
     current_user_id: int = Depends(get_current_user_id),
 ) -> dict[str, str]:
     image_key = await save_local_image(
@@ -86,7 +87,12 @@ async def upload_my_profile_image(
         directory=Path("profile"),
         stem=f"user-{current_user_id}",
     )
-    return {"image_url": generate_presigned_url(image_key)}
+    image_url = update_my_profile_image_service(
+        db=db,
+        current_user_id=current_user_id,
+        profile_image_key=image_key,
+    )
+    return {"image_url": image_url}
 
 
 @router.get(

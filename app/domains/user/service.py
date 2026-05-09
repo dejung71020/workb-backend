@@ -46,6 +46,7 @@ from app.domains.user.repository import (
     get_user_by_social_identity,
     update_user_social_identity,
     update_user_profile,
+    update_user_profile_image,
     update_user_password,
     upsert_user_device_setting,
 )
@@ -85,6 +86,7 @@ from app.domains.user.schemas import (
 )
 from app.domains.user.models import SocialProvider, User
 from app.infra.clients.session_manager import ClientSessionManager
+from app.utils.s3_utils import extract_s3_key_from_url, generate_presigned_url
 
 _MEMBER_ROLE_LABEL_KO = {
     MemberRole.admin: "관리자",
@@ -127,6 +129,20 @@ def _decode_oauth_state(state: str) -> dict[str, str]:
     return {"provider": provider, "role": role}
 
 
+def _resolve_profile_image_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.startswith(("http://", "https://")):
+        key = extract_s3_key_from_url(text)
+        if key:
+            return generate_presigned_url(key)
+        return text
+    return generate_presigned_url(text)
+
+
 def _access_token_claims(user: User) -> dict[str, str | int | None]:
     """
     프론트가 로그인 직후 localStorage에 사용자 정보를 채울 수 있도록
@@ -141,6 +157,7 @@ def _access_token_claims(user: User) -> dict[str, str | int | None]:
         "age": _calculate_age(user.birth_date),
         "phone_number": user.phone_number,
         "gender": user.gender,
+        "profile_image_url": _resolve_profile_image_url(user.profile_image_url),
     }
 
 
@@ -250,7 +267,26 @@ def _user_profile_response(user: User) -> UserProfileResponse:
         age=_calculate_age(user.birth_date),
         phone_number=user.phone_number,
         gender=user.gender,
+        profile_image_url=_resolve_profile_image_url(user.profile_image_url),
     )
+
+
+def update_my_profile_image_service(
+    db: Session,
+    current_user_id: int,
+    profile_image_key: str,
+) -> str:
+    user = update_user_profile_image(
+        db=db,
+        user_id=current_user_id,
+        profile_image_url=profile_image_key,
+    )
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+    return _resolve_profile_image_url(user.profile_image_url) or ""
 
 
 def _device_settings_response(
@@ -345,6 +381,7 @@ def signup_admin_service(db: Session, payload: AdminSignupRequest) -> AdminSignu
         age=_calculate_age(user.birth_date),
         phone_number=user.phone_number,
         gender=user.gender,
+        profile_image_url=_resolve_profile_image_url(user.profile_image_url),
     )
 
 
@@ -438,6 +475,7 @@ def signup_member_service(db: Session, payload: MemberSignupRequest) -> UserResp
         age=_calculate_age(user.birth_date),
         phone_number=user.phone_number,
         gender=user.gender,
+        profile_image_url=_resolve_profile_image_url(user.profile_image_url),
     )
 
 

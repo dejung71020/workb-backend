@@ -335,6 +335,7 @@ class UserResponse(BaseModel):
     age: int | None = None
     phone_number: str | None = None
     gender: Gender | None = None
+    profile_image_url: str | None = None
 
 
 class UserProfileResponse(UserResponse):
