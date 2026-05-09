@@ -55,11 +55,9 @@ from app.domains.notification import service as notification_service
 from app.utils.time_utils import now_kst
 from app.utils.s3_utils import upload_fileobj_to_s3
 
-from pathlib import Path
 from io import BytesIO
 import uuid
 
-STORAGE_ROOT = Path("storage")
 MINUTE_PHOTO_S3_PREFIX = "meetings"  # S3 키 구조: meetings/{meeting_id}/minute_photos/...
 
 

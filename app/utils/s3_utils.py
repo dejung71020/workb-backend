@@ -15,6 +15,7 @@ import mimetypes
 import uuid
 from pathlib import Path
 from typing import BinaryIO, Optional
+from urllib.parse import unquote, urlparse
 
 import boto3
 from botocore.client import Config as BotoConfig
@@ -112,6 +113,40 @@ def upload_fileobj_to_s3(
             detail="S3 업로드 중 오류가 발생했습니다.",
         ) from exc
     return key
+
+
+def download_file_bytes_from_s3(
+    key: str,
+    bucket: Optional[str] = None,
+) -> bytes:
+    """S3 object key를 읽어 bytes로 반환한다."""
+    client = _get_s3_client()
+    target_bucket = bucket or settings.AWS_S3_BUCKET
+    try:
+        response = client.get_object(Bucket=target_bucket, Key=key)
+        body = response.get("Body")
+        if body is None:
+            raise KeyError("Body not found")
+        data = body.read()
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        if code in {"NoSuchKey", "404"}:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="파일을 찾을 수 없습니다.",
+            ) from exc
+        logger.exception("S3 다운로드 실패: bucket=%s key=%s", target_bucket, key)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="S3 다운로드 중 오류가 발생했습니다.",
+        ) from exc
+    except (BotoCoreError, KeyError, AttributeError) as exc:
+        logger.exception("S3 다운로드 실패: bucket=%s key=%s", target_bucket, key)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="S3 다운로드 중 오류가 발생했습니다.",
+        ) from exc
+    return data
 
 
 async def upload_upload_file_to_s3(
@@ -213,3 +248,25 @@ def generate_presigned_url(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Presigned URL 생성 중 오류가 발생했습니다.",
         ) from exc
+
+
+def extract_s3_key_from_url(value: str) -> str | None:
+    """S3 URL에서 object key를 추출합니다. S3 URL이 아니면 None을 반환합니다."""
+    if not value:
+        return None
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    host = parsed.netloc.lower()
+    if "amazonaws.com" not in host:
+        return None
+    path = parsed.path.lstrip("/")
+    if not path:
+        return None
+    # path-style URL(s3.amazonaws.com/bucket/key) 지원
+    if host.startswith("s3.") or host == "s3.amazonaws.com":
+        parts = path.split("/", 1)
+        if len(parts) == 2:
+            return unquote(parts[1])
+        return None
+    return unquote(path)

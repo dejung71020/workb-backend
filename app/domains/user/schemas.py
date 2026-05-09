@@ -292,7 +292,6 @@ class DeviceSettingsRequest(BaseModel):
     로그인한 사용자의 장비 설정 저장 요청입니다.
     브라우저에서 조회한 deviceId는 기기/브라우저마다 달라질 수 있으므로 문자열로 저장합니다.
     """
-    is_main_device: bool = True
     selected_mic_id: str | None = Field(default=None, max_length=255)
     selected_camera_id: str | None = Field(default=None, max_length=255)
     mic_enabled: bool = True

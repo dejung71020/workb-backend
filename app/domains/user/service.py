@@ -256,7 +256,6 @@ def _user_profile_response(user: User) -> UserProfileResponse:
 def _device_settings_response(
     user_id: int,
     workspace_id: int | None,
-    is_main_device: bool = True,
     selected_mic_id: str | None = None,
     selected_camera_id: str | None = None,
     mic_enabled: bool = True,
@@ -265,7 +264,6 @@ def _device_settings_response(
     return DeviceSettingsResponse(
         user_id=user_id,
         workspace_id=workspace_id,
-        is_main_device=is_main_device,
         selected_mic_id=selected_mic_id,
         selected_camera_id=selected_camera_id,
         mic_enabled=mic_enabled,
@@ -858,7 +856,6 @@ def get_my_device_settings_service(
     return _device_settings_response(
         user_id=user.id,
         workspace_id=setting.workspace_id,
-        is_main_device=setting.is_main_device,
         selected_mic_id=setting.selected_mic_id,
         selected_camera_id=setting.selected_camera_id,
         mic_enabled=setting.mic_enabled,
@@ -882,7 +879,6 @@ def update_my_device_settings_service(
         db=db,
         user_id=user.id,
         workspace_id=user.workspace_id,
-        is_main_device=payload.is_main_device,
         selected_mic_id=payload.selected_mic_id,
         selected_camera_id=payload.selected_camera_id,
         mic_enabled=payload.mic_enabled,
@@ -892,7 +888,6 @@ def update_my_device_settings_service(
     return _device_settings_response(
         user_id=user.id,
         workspace_id=setting.workspace_id,
-        is_main_device=setting.is_main_device,
         selected_mic_id=setting.selected_mic_id,
         selected_camera_id=setting.selected_camera_id,
         mic_enabled=setting.mic_enabled,

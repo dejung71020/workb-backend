@@ -74,6 +74,33 @@ from app.domains.workspace.schemas import (
     WorkspaceResponse,
     WorkspaceUpdateRequest,
 )
+from app.utils.s3_utils import extract_s3_key_from_url, generate_presigned_url
+
+
+def _resolve_workspace_logo_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    # DB에는 key를 저장하고 응답에서만 presigned URL로 변환
+    if text.startswith(("http://", "https://")):
+        key = extract_s3_key_from_url(text)
+        if key:
+            return generate_presigned_url(key)
+        return text
+    return generate_presigned_url(text)
+
+
+def _normalize_workspace_logo_key(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.startswith(("http://", "https://")):
+        return extract_s3_key_from_url(text) or text
+    return text
 
 
 def _generate_invite_code() -> str:
@@ -134,7 +161,7 @@ def get_workspace_service(db: Session, workspace_id: int) -> WorkspaceResponse:
         industry=workspace.industry,
         default_language=workspace.default_language,
         summary_style=workspace.summary_style,
-        logo_url=workspace.logo_url,
+        logo_url=_resolve_workspace_logo_url(workspace.logo_url),
     )
 
 
@@ -162,7 +189,7 @@ def update_workspace_service(
         "summary_style": payload.summary_style,
     }
     if "logo_url" in payload.model_fields_set:
-        update_values["logo_url"] = payload.logo_url
+        update_values["logo_url"] = _normalize_workspace_logo_key(payload.logo_url)
 
     updated_workspace = update_workspace(**update_values)
 
@@ -179,7 +206,7 @@ def update_workspace_service(
         industry=updated_workspace.industry,
         default_language=updated_workspace.default_language,
         summary_style=updated_workspace.summary_style,
-        logo_url=updated_workspace.logo_url,
+        logo_url=_resolve_workspace_logo_url(updated_workspace.logo_url),
     )
 
 
@@ -911,7 +938,7 @@ def list_my_workspaces_service(db: Session, user_id: int) -> WorkspaceListRespon
             id=int(ws.id),
             name=ws.name,
             role=str(role.value if hasattr(role, "value") else role),
-            logo_url=ws.logo_url,
+            logo_url=_resolve_workspace_logo_url(ws.logo_url),
         )
         for ws, role in rows
     ]

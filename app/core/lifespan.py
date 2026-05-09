@@ -73,13 +73,13 @@ def _ensure_user_profile_columns() -> None:
 
 
 async def _prefetch_fonts() -> None:
-    """앱 시작 시 PDF 생성에 필요한 한글 폰트를 storage/fonts/ 에 미리 다운로드합니다."""
+    """앱 시작 시 PDF 생성용 한글 폰트를 임시 디렉터리에 미리 준비합니다."""
     try:
         from app.domains.action.minutes_pipeline.pdf_renderer import prefetch_fonts
         loop = asyncio.get_event_loop()
         ok = await loop.run_in_executor(None, prefetch_fonts)
         if ok:
-            print("[폰트] NanumGothic 다운로드/확인 완료 → storage/fonts/")
+            print("[폰트] NanumGothic 다운로드/확인 완료 → tmp/workb-fonts")
         else:
             print("[폰트] NanumGothic 다운로드 실패 — 시스템 폰트 또는 Helvetica 사용")
     except Exception as exc:

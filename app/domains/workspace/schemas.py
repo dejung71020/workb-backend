@@ -106,7 +106,7 @@ class WorkspaceUpdateRequest(BaseModel):
     industry: str | None = Field(default=None, max_length=100)
     default_language: str | None = Field(default=None, max_length=20)
     summary_style: str | None = Field(default=None, max_length=50)
-    logo_url: str | None = Field(default=None, max_length=255)
+    logo_url: str | None = Field(default=None, max_length=2048)
 
 
 class InviteCodeValidateRequest(BaseModel):

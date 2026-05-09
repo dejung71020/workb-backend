@@ -3,6 +3,8 @@
 Playwright 미설치 시 fallback_renderer(reportlab)로 자동 폴백.
 """
 import logging
+import ssl
+import tempfile
 import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -12,7 +14,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_FONT_STORAGE_DIR = Path("storage/fonts")
+_FONT_STORAGE_DIR = Path(tempfile.gettempdir()) / "workb-fonts"
 
 _FONT_DOWNLOAD_SPECS: list[tuple[str, str, list[str]]] = [
     (
@@ -34,9 +36,19 @@ _FONT_DOWNLOAD_SPECS: list[tuple[str, str, list[str]]] = [
 ]
 
 
+def _build_ssl_context() -> ssl.SSLContext:
+    """가능하면 certifi 번들을 사용하고, 없으면 시스템 CA를 사용합니다."""
+    try:
+        import certifi  # type: ignore
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
 def prefetch_fonts() -> bool:
+    """PDF 폰트를 캐시 디렉터리에 미리 다운로드합니다."""
     _FONT_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     any_success = False
+    ssl_ctx = _build_ssl_context()
     for _name, filename, urls in _FONT_DOWNLOAD_SPECS:
         dest = _FONT_STORAGE_DIR / filename
         if dest.exists() and dest.stat().st_size > 10_000:
@@ -47,13 +59,15 @@ def prefetch_fonts() -> bool:
                 req = urllib.request.Request(
                     url, headers={"User-Agent": "workb-backend/1.0 (font-downloader)"}
                 )
-                with urllib.request.urlopen(req, timeout=30) as resp:
+                with urllib.request.urlopen(req, timeout=30, context=ssl_ctx) as resp:
                     data = resp.read()
                 if len(data) > 10_000:
                     dest.write_bytes(data)
                     logger.info("폰트 다운로드 완료: %s (%d bytes)", dest, len(data))
                     any_success = True
                     break
+            except ssl.SSLError as exc:
+                logger.warning("폰트 다운로드 SSL 실패 (%s): %s", url, exc)
             except Exception as exc:
                 logger.warning("폰트 다운로드 실패 (%s): %s", url, exc)
     return any_success
