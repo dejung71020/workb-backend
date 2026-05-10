@@ -25,11 +25,12 @@ class MinutesPdfPreviewRequest(BaseModel):
     field_values: Optional[dict] = None
 
 class MinutesPdfPreviewResponse(BaseModel):
-    preview_b64:  str
-    field_coords: dict = {}
-    field_values: dict = {}
-    pdf_width:    float = 595.0
-    pdf_height:   float = 842.0
+    preview_b64:   str
+    preview_pages: List[str] = []
+    field_coords:  dict = {}
+    field_values:  dict = {}
+    pdf_width:     float = 595.0
+    pdf_height:    float = 842.0
 
 # =================================================================
 # 보고서

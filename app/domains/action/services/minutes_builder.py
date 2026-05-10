@@ -14,6 +14,26 @@ from app.utils.s3_utils import resolve_minute_photo_url
 
 logger = logging.getLogger(__name__)
 
+# LLM 입력 상한 (발화록이 길 때). 나머지 프롬프트·응답 여유를 남긴다.
+_MAX_TRANSCRIPT_CHARS = 28_000
+
+
+def _truncate_transcript(text: str, max_chars: int = _MAX_TRANSCRIPT_CHARS) -> str:
+    if len(text) <= max_chars:
+        return text
+    head_n = (max_chars * 2) // 3
+    tail_n = max_chars - head_n - 80
+    if tail_n < 500:
+        tail_n = 500
+    head = text[:head_n]
+    tail = text[-tail_n:]
+    omitted = len(text) - head_n - tail_n
+    return (
+        f"{head}\n\n"
+        f"... (중간 발화 약 {omitted}자 생략) ...\n\n"
+        f"{tail}"
+    )
+
 
 def parse_meeting_minute_summary(raw_summary: str | None) -> dict | None:
     """meeting_minutes.summary(text)를 회의록 포맷 dict로 변환합니다."""
@@ -45,6 +65,7 @@ async def build_and_save_minutes(
     from app.core.config import settings
     from app.domains.action.models import WbsEpic, WbsTask, ActionItem
     from app.domains.action import minutes_repository as minutes_repo
+    from app.domains.action import mongo_repository as mongo_repo
 
     meeting = db.query(Meeting).filter(Meeting.id == meeting_id).one_or_none()
     if not meeting:
@@ -80,6 +101,11 @@ async def build_and_save_minutes(
         .order_by(Decision.detected_at)
         .all()
     )
+    decision_speaker_ids = [d.speaker_id for d in decisions if d.speaker_id]
+    decision_speakers: dict[int, str] = {}
+    if decision_speaker_ids:
+        for u in db.query(User).filter(User.id.in_(decision_speaker_ids)).all():
+            decision_speakers[u.id] = u.name or ""
 
     # ── WBS 에픽/태스크 ──────────────────────────────────────────────────
     epics = (
@@ -130,22 +156,105 @@ async def build_and_save_minutes(
             resolve_minute_photo_url(p.photo_url) for p in photos if p.photo_url
         ]
 
+    # ── 회의 종료 파이프라인이 meeting_minutes.summary에 넣은 JSON ─────────
+    pipeline_summary_lines: list[str] = []
+    if existing_minute and (existing_minute.summary or "").strip():
+        try:
+            pipe = json.loads(existing_minute.summary)
+            if isinstance(pipe, dict):
+                if pipe.get("title"):
+                    pipeline_summary_lines.append(
+                        f"- 핵심 주제(자동 추출): {pipe['title']}"
+                    )
+                for i, kp in enumerate(pipe.get("key_points") or [], 1):
+                    if str(kp).strip():
+                        pipeline_summary_lines.append(f"  {i}. {kp}")
+                flags = pipe.get("hallucination_flags") or []
+                if flags:
+                    pipeline_summary_lines.append("- 검토 플래그(근거 약함으로 표시된 항목):")
+                    for f in flags[:10]:
+                        pipeline_summary_lines.append(f"  · {f}")
+        except json.JSONDecodeError:
+            pipeline_summary_lines.append(
+                f"- (원문): {(existing_minute.summary or '')[:800]}"
+            )
+
+    pipeline_summary_text = (
+        "\n".join(pipeline_summary_lines) if pipeline_summary_lines else "(없음)"
+    )
+
+    # ── Mongo 발화록 (회의록 논의·개요의 사실 근거) ─────────────────────────
+    utterances: list[dict] = []
+    try:
+        utterances = mongo_repo.get_meeting_utterances(meeting_id)
+    except Exception:
+        logger.warning(
+            "Mongo utterances 조회 실패 (meeting_id=%s), 발화록 없이 진행",
+            meeting_id,
+            exc_info=True,
+        )
+    transcript_raw = "\n".join(
+        f"[{u.get('speaker_label', '?')}] {(u.get('content') or '').strip()}"
+        for u in utterances
+        if (u.get("content") or "").strip()
+    )
+    has_transcript = bool(transcript_raw.strip())
+
+    # 발화가 전혀 없으면 LLM·일시/참석자만 있는 가짜 개요 양식을 쓰지 않는다.
+    if not has_transcript:
+        logger.info(
+            "Mongo 발화가 없어 LLM 회의록 생성을 건너뜁니다. 진행 기록 없음 본문만 저장합니다. meeting_id=%s",
+            meeting_id,
+        )
+        content = _build_no_transcript_minutes()
+        now = now_kst()
+        if existing_minute:
+            existing_minute.content = content
+            existing_minute.updated_at = now
+            db.commit()
+            db.refresh(existing_minute)
+            return existing_minute
+        minute = MeetingMinute(
+            meeting_id=meeting_id,
+            content=content,
+            status=MinuteStatus.draft,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(minute)
+        db.commit()
+        db.refresh(minute)
+        # 실질 회의록이 없을 때는 '생성 완료' 알림을 보내지 않음
+        return minute
+
+    transcript_text = _truncate_transcript(transcript_raw)
+
     # ── 프롬프트용 텍스트 변환 ───────────────────────────────────────────
+    # is_confirmed는 UI 검토 전 기본 False인 경우가 많아, 문구만으로는 합의 여부를 나타내지 않음
     decisions_text = (
         "\n".join(
-            f"- {d.content} ({'확정' if d.is_confirmed else '미확정'})"
+            f"- {d.content} [is_confirmed={str(d.is_confirmed).lower()}]"
+            + (
+                f" (발화자: {decision_speakers.get(int(d.speaker_id), '')})"
+                if d.speaker_id
+                else ""
+            )
             for d in decisions
         )
         or "(없음)"
     )
+    epic_by_id = {e.id: e for e in epics}
     epics_text = (
-        "\n".join(f"- {e.title}" for e in epics) or "(없음)"
+        "\n".join(f"- [{e.id}] {e.title} (order={e.order_index})" for e in epics)
+        or "(없음)"
     )
     tasks_text = (
         "\n".join(
-            f"- [{t.assignee_name or '미정'}] {t.title}"
-            f" / {t.status.value} / {t.progress}%"
-            f" / ~{t.due_date.isoformat() if t.due_date else '미정'}"
+            f"- [에픽: {epic_by_id.get(t.epic_id).title if epic_by_id.get(t.epic_id) else '?'}] "
+            f"[{t.assignee_name or '미정'}] {t.title}"
+            f" / 우선순위 {t.priority.value} / 진행 {t.progress}% / 상태 {t.status.value}"
+            f" / 기한 ~{t.due_date.isoformat() if t.due_date else '미정'}"
+            + (f" / 상세: {t.content.strip()[:400]}" if (t.content or "").strip() else "")
             for t in tasks
         )
         or "(없음)"
@@ -155,43 +264,76 @@ async def build_and_save_minutes(
             f"- {action_assignees.get(a.assignee_id, '미정') if a.assignee_id else '미정'}:"
             f" {a.content}"
             f" (~{a.due_date.isoformat() if a.due_date else '미정'})"
-            f" [{a.status.value}]"
+            f" [상태 {a.status.value}]"
+            + (f" [우선순위 {a.priority.value}]" if a.priority else "")
             for a in action_items_rows
         )
         or "(없음)"
     )
 
+    dept_author_hint = ""
+    if dept_name or creator_name:
+        dept_author_hint = f"부서: {dept_name or '-'} / 회의 생성자(작성자 참고): {creator_name or '-'}"
+
     # ── LLM 호출 ─────────────────────────────────────────────────────────
     llm = ChatOpenAI(model="gpt-4o-mini", api_key=settings.OPENAI_API_KEY)
 
-    prompt = f"""다음 회의 데이터를 바탕으로 회의록 JSON을 작성하세요.
+    prompt = f"""당신은 사내 회의록 작성자입니다. 아래 자료만 근거로 JSON 한 덩어리만 출력하세요. (설명·마크다운·코드펜스 금지)
+
+## 합의·확정 표기 우선순위 (매우 중요)
+워크벤치 **회의 노트(/notes) 화면 요약**은 아래 `[회의 핵심 논점 — meeting_minutes.summary]`의 key_points와 동일 출처이며, 사용자가 보는 "회의에서 합의된 내용"입니다.
+1) **key_points**와 **발화록**에 확정·합의·담당·일정이 명확하면, 회의록(`overview_summary`, `discussion_items`, `decisions`)에도 **그에 맞게 확정된 결과로 서술**하세요.
+2) MySQL `decisions` 각 줄 끝의 `[is_confirmed=false]`는 **UI에서 확정 버튼을 아직 누르지 않은 기술적 플래그**일 뿐이며, **key_points·발화와 모순되면 절대 이유로 삼아 "미확정이다"라고 뒤집지 마세요.**
+3) key_points·발화에 근거가 없고 정말로 보류만 언급된 항목만 `pending_items`나 완곡한 미결 표현을 쓰세요.
+
+## 입력 데이터 구분
+1. **[회의 핵심 논점 — meeting_minutes.summary]** — 노트 페이지 요약과 동일. **최우선 참고.**
+2. **발화록** — 사실 검증·구체 표현.
+3. **MySQL decisions / wbs_tasks / action_items** — 반드시 빠짐없이 반영할 **주제·담당·일정**의 원천. 문장 톤(확정 vs 미확정)은 위 우선순위를 따름.
 
 [회의 제목] {meeting.title}
-[회의 일시] {datetime_str}
-[참석자] {', '.join(attendee_names) or '(없음)'}
+[회의 일시] {datetime_str}  (JSON의 meetings[0].date는 반드시 "{date_str}" 형식 YYYY-MM-DD)
+[참석자] {", ".join(attendee_names) or "(없음)"}
+[조직·작성자 참고] {dept_author_hint or "(없음)"}
 
-[결정 사항]
+[회의 핵심 논점 — meeting_minutes.summary — 노트 /notes 요약과 동일 출처]
+{pipeline_summary_text}
+
+[MySQL decisions — 내용은 모두 반영. is_confirmed는 위 우선순위 참고용]
 {decisions_text}
 
-[WBS 에픽]
+[MySQL wbs_epics]
 {epics_text}
 
-[WBS 태스크]
+[MySQL wbs_tasks]
 {tasks_text}
 
-[액션 아이템]
+[MySQL action_items]
 {action_items_text}
 
-반드시 아래 JSON 형식으로만 답변하세요.
+[발화록 Mongo utterances — 최대 약 {_MAX_TRANSCRIPT_CHARS}자, 길면 앞·뒤 유지]
+{transcript_text}
+
+## 출력 규칙
+- JSON만 출력. 앞뒤에 다른 문자 금지.
+- `meetings[0]`: title은 회의 제목과 동일, date는 "{date_str}", attendees는 참석자 이름 배열(위 순서 유지 권장).
+- `overview_summary`: 2~4문장, 한국어 공손체(~습니다/~했습니다).
+- `agenda_items`: 회의에서 다룬 안건을 짧은 명사구 배열(없으면 key_points·발화·태스크 제목에서 유추, 빈 배열 금지는 아님).
+- `discussion_items`: topic+content 쌍. DB 결정·태스크·액션을 **다시 나열만** 하지 말고, **무엇을 왜 논의했는지** 발화·**key_points**에 기반해 서술.
+- `decisions`: [MySQL decisions]의 **모든 결정 주제**를 빠짐없이 담되, 문장은 **key_points·발화의 합의 수준**에 맞추세요. key_points에 확정으로 적힌 내용을 "미확정이다"로 바꾸는 것은 **금지**입니다.
+- `action_items`: [MySQL action_items]가 비어 있어도 [MySQL wbs_tasks]에서 기한·담당이 있으면 후보로 옮겨 적어도 됩니다. 이미 action_items에 있으면 그대로 반영. assignee는 실명, deadline은 YYYY-MM-DD 또는 null.
+- `pending_items`: 미결·보류·추가 확인 필요 사항만. 없으면 [].
+
+반드시 아래 키를 가진 JSON 단일 객체로만 답변하세요.
 
 {{
-    "meetings": [{{"title": "{meeting.title}", "date": "{date_str}", "attendees": {json.dumps(attendee_names, ensure_ascii=False)}}}],
-    "overview_summary": "전체 회의 내용 요약 (2~4문장)",
-    "agenda_items": ["안건1", "안건2", ...],
-    "discussion_items": [{{"topic": "주제명", "content": "구체적으로 논의된 내용"}}],
-    "decisions": ["결정 사항 (결론/근거 포함)", ...],
-    "action_items": [{{"assignee": "담당자 또는 null", "content": "할 일", "deadline": "기한 또는 null"}}],
-    "pending_items": [{{"content": "미결 사항 내용"}}]
+    "meetings": [{{"title": {json.dumps(meeting.title, ensure_ascii=False)}, "date": "{date_str}", "attendees": {json.dumps(attendee_names, ensure_ascii=False)}}}],
+    "overview_summary": "…",
+    "agenda_items": ["…"],
+    "discussion_items": [{{"topic": "…", "content": "…"}}],
+    "decisions": ["…"],
+    "action_items": [{{"assignee": "… 또는 null", "content": "…", "deadline": "YYYY-MM-DD 또는 null"}}],
+    "pending_items": [{{"content": "…"}}]
 }}"""
 
     try:
@@ -266,6 +408,19 @@ def _as_dict(item: object, text_key: str = "content") -> dict:
     return {text_key: str(item)}
 
 
+def _build_no_transcript_minutes() -> str:
+    """
+    Mongo 발화·전사가 없을 때 회의록 본문.
+    일시/참석자만 적힌 '가짜 개요'를 만들지 않는다.
+    """
+    return (
+        "## 회의 진행 기록 없음\n\n"
+        "녹음·전사된 발화 데이터가 없습니다. **실질적으로 진행된 회의가 없거나**, "
+        "음성이 수집되지 않았을 수 있습니다.\n\n"
+        "회의실에 입장만 한 뒤 바로 종료한 경우 등에도 이 안내가 표시될 수 있습니다.\n"
+    )
+
+
 def _build_default_minutes(db: Session, meeting_id: int) -> str:
     """DB 정보만으로 기본 양식을 생성합니다. LLM·요약 불필요."""
     meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
@@ -301,11 +456,22 @@ def _build_default_minutes(db: Session, meeting_id: int) -> str:
 
 def ensure_minutes(db: Session, meeting_id: int) -> MeetingMinute:
     """기존 회의록을 반환하거나, 없으면 기본 양식으로 생성 후 반환합니다."""
+    from app.domains.action import mongo_repository as mongo_repo
+
     existing = db.query(MeetingMinute).filter(MeetingMinute.meeting_id == meeting_id).first()
     if existing:
         return existing
 
-    content = _build_default_minutes(db, meeting_id)
+    try:
+        utterances = mongo_repo.get_meeting_utterances(meeting_id)
+    except Exception:
+        utterances = []
+    has_transcript = any((u.get("content") or "").strip() for u in utterances)
+    content = (
+        _build_default_minutes(db, meeting_id)
+        if has_transcript
+        else _build_no_transcript_minutes()
+    )
     minute = MeetingMinute(
         meeting_id=meeting_id,
         content=content,
@@ -350,15 +516,17 @@ def _format_minutes(summary: dict) -> str:
 
     discussion_items = summary.get("discussion_items", []) or []
     if discussion_items:
-        lines += ["## 논의 사항"]
+        lines += ["## 논의 사항", ""]
         for raw in discussion_items:
             item = _as_dict(raw, "content")
             topic = str(item.get("topic", "")).strip()
             content = str(item.get("content", "")).strip()
             if topic:
                 lines.append(f"### {topic}")
+                lines.append("")   # heading 뒤 빈줄 → Python-Markdown이 다음 단락과 구분
             if content:
                 lines.append(content)
+                lines.append("")   # 내용 뒤 빈줄 → 다음 heading 전 단락 분리
         lines.append("")
 
     decisions = summary.get("decisions", []) or []

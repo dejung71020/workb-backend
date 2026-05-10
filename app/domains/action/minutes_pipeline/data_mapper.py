@@ -1,19 +1,23 @@
 """
 회의 데이터 → MinuteFields 변환.
 MongoDB 요약 / DB 마크다운 / 클라이언트 직접 전달 3가지 소스를 단일 모델로 정규화한다.
-DB 조회 없음 — 호출자가 필요한 데이터를 주입한다.
 """
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 _SECTION_FIELD_MAP: dict[str, str] = {
     "회의안건": "agenda_items", "회의 안건": "agenda_items", "안건": "agenda_items",
     "회의내용": "discussion_content", "회의 내용": "discussion_content",
     "논의내용": "discussion_content", "논의 내용": "discussion_content",
     "논의 사항": "discussion_content", "논의사항": "discussion_content",
+    # minutes_builder._format_minutes / _build_default_minutes 가 쓰는 헤더
+    "개요": "discussion_content",
+    "제목": "discussion_content",
     "결정사항": "decisions", "결정 사항": "decisions",
     "특이사항": "special_notes", "특이 사항": "special_notes",
     "미결사항": "special_notes", "미결 사항": "special_notes",
+    "미결/특이 사항": "special_notes",
     "비고": "special_notes",
     "액션아이템": "action_items", "액션 아이템": "action_items",
 }
@@ -41,7 +45,7 @@ class MinuteFields:
     special_notes: str = ""
     photo_urls: list[str] = field(default_factory=list)
 
-    def ensure_min_decision_rows(self, min_rows: int = 4) -> None:
+    def ensure_min_decision_rows(self, min_rows: int = 3) -> None:
         while len(self.decision_rows) < min_rows:
             self.decision_rows.append("")
 
@@ -62,7 +66,6 @@ class MinuteFields:
             "decisions": decisions,
             "action_items": self.action_items,
             "special_notes": self.special_notes,
-            "photo_count": str(len(self.photo_urls)),
         }
 
 
@@ -194,6 +197,18 @@ def from_markdown_content(
             val = "\n".join(cur_lines).strip()
             if cur_key == "decisions":
                 f.decision_rows = [ln for ln in val.split("\n") if ln.strip()]
+            elif cur_key == "discussion_content":
+                # 여러 섹션(개요 → 논의 사항 등)이 같은 필드를 쓸 때 빈 섹션이 앞내용을 지우지 않게 한다.
+                if val:
+                    if f.discussion_content.strip():
+                        f.discussion_content = (
+                            f.discussion_content.strip() + "\n\n" + val
+                        )
+                    else:
+                        f.discussion_content = val
+            elif cur_key in ("action_items", "special_notes", "agenda_items"):
+                if val or not getattr(f, cur_key, "").strip():
+                    setattr(f, cur_key, val)
             elif hasattr(f, cur_key):
                 setattr(f, cur_key, val)
 
@@ -280,3 +295,45 @@ def from_explicit(field_values: dict) -> MinuteFields:
 
     f.ensure_min_decision_rows()
     return f
+
+
+def enrich_minute_fields_from_db(
+    fields: MinuteFields,
+    db: Any,
+    meeting_id: int,
+) -> MinuteFields:
+    """회의일시·부서·작성자·참석자가 비어 있으면 MySQL meetings / participants 로 보강."""
+    from app.domains.action import repository as action_repo
+    from app.domains.action import minutes_repository as minutes_repo
+    from app.domains.meeting.models import MeetingParticipant
+    from app.domains.user.models import User
+
+    meeting_row = action_repo.get_meeting(db, meeting_id)
+    if not meeting_row:
+        return fields
+    if not fields.datetime.strip():
+        dt_obj = meeting_row.started_at or meeting_row.scheduled_at
+        if dt_obj:
+            fields.datetime = dt_obj.strftime("%Y년 %m월 %d일 %H:%M")
+    if not fields.dept.strip() or not fields.author.strip():
+        user = action_repo.get_user(db, meeting_row.created_by)
+        if user:
+            if not fields.dept.strip():
+                fields.dept = minutes_repo.get_dept_name(
+                    db, user, int(meeting_row.workspace_id)
+                )
+            if not fields.author.strip():
+                fields.author = user.name
+    if not fields.attendees.strip():
+        names = [
+            n
+            for (n,) in db.query(User.name)
+            .join(MeetingParticipant, MeetingParticipant.user_id == User.id)
+            .filter(MeetingParticipant.meeting_id == meeting_id)
+            .order_by(MeetingParticipant.id)
+            .all()
+            if n
+        ]
+        if names:
+            fields.attendees = ", ".join(names)
+    return fields

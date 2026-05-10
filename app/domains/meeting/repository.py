@@ -20,14 +20,21 @@ class MeetingHistoryRepository:
         size: int,
         participant_user_id: int | None = None,
         on_date: DateType | None = None,
+        status_filter: str = "all",
     ) -> tuple[int, list[tuple[Meeting, MeetingMinute | None]]]:
         q = (
             db.query(Meeting, MeetingMinute)
             .outerjoin(MeetingMinute, MeetingMinute.meeting_id == Meeting.id)
             .filter(Meeting.workspace_id == workspace_id)
-            # 히스토리 화면: 예정(scheduled)·완료(done)만 — 진행 중은 홈/라이브에서 다룸
-            .filter(Meeting.status != MeetingStatus.in_progress)
         )
+
+        # 상태 필터: scheduled=예정만, done=완료만, all=둘 다(진행 중 항상 제외)
+        if status_filter == "scheduled":
+            q = q.filter(Meeting.status == MeetingStatus.scheduled)
+        elif status_filter == "done":
+            q = q.filter(Meeting.status == MeetingStatus.done)
+        else:
+            q = q.filter(Meeting.status != MeetingStatus.in_progress)
 
         if participant_user_id is not None:
             participant_meeting_ids = db.query(MeetingParticipant.meeting_id).filter(
@@ -58,10 +65,16 @@ class MeetingHistoryRepository:
 
         total = q.with_entities(func.count(Meeting.id)).scalar() or 0
 
+
         rows = (
             # MySQL does not support "NULLS LAST" syntax.
-            # Push NULL scheduled_at to the end, then sort by datetime desc.
-            q.order_by(Meeting.scheduled_at.is_(None), desc(Meeting.scheduled_at))
+            # Match home-dashboard sort: ended_at desc (NULLs last) → started_at desc (NULLs last).
+            q.order_by(
+                Meeting.ended_at.is_(None),
+                desc(Meeting.ended_at),
+                Meeting.started_at.is_(None),
+                desc(Meeting.started_at),
+            )
             .offset((page - 1) * size)
             .limit(size)
             .all()
