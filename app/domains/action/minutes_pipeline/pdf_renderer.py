@@ -83,28 +83,29 @@ def _get_font_urls() -> tuple[str, str]:
     return reg_url, bold_url
 
 
+_MD_EXTENSIONS = ["tables", "nl2br", "fenced_code"]
+
+import re as _re
+_LIST_MARKER_RE = _re.compile(r'^(\s*)[-*+] ')
+
+def _strip_list_markers(text: str) -> str:
+    """각 줄 앞의 마크다운 리스트 마커(- * +)를 제거한다."""
+    return '\n'.join(
+        _LIST_MARKER_RE.sub(r'\1', line) for line in text.split('\n')
+    )
+
+_TEMPLATE_MAP: dict[str, str] = {
+    "classic": "meeting_minutes.html",
+    "modern": "meeting_minutes_v2.html",
+}
+
+
 def _md_to_html(text: str) -> str:
     """마크다운 텍스트를 HTML로 변환한다."""
     if not text:
         return ""
     import markdown as _md
-    return _md.markdown(text, extensions=["tables", "nl2br"])
-
-
-def _md_to_html_row(text: str) -> str:
-    """결정사항 행용: 앞의 리스트 마커(- / * / 1.)를 제거하고 인라인 마크다운만 변환한다."""
-    if not text:
-        return ""
-    import re
-    t = text.strip()
-    t = re.sub(r"^[-*]\s+", "", t)
-    t = re.sub(r"^\d+\.\s+", "", t)
-    import markdown as _md
-    html = _md.markdown(t, extensions=["nl2br"])
-    # 단일 <p> 래핑 제거
-    if html.startswith("<p>") and html.endswith("</p>") and html.count("<p>") == 1:
-        html = html[3:-4]
-    return html
+    return _md.markdown(text, extensions=_MD_EXTENSIONS)
 
 
 def _to_renderable_image_url(raw: str) -> str:
@@ -121,32 +122,55 @@ def _to_renderable_image_url(raw: str) -> str:
         return v
 
 
-def render(fields: "MinuteFields") -> bytes:
+def render(
+    fields: "MinuteFields",
+    *,
+    db=None,
+    meeting_id: int | None = None,
+    template_name: str = "classic",
+) -> bytes:
     """
     기본 Jinja2 HTML → Playwright → PDF 렌더링.
     Playwright 미설치 시 fallback_renderer로 자동 폴백.
+    template_name: "classic"(기본 테이블형) | "modern"(섹션형)
     """
+    if db is not None and meeting_id is not None:
+        from app.domains.action.minutes_pipeline import data_mapper as dm
+
+        fields = dm.enrich_minute_fields_from_db(fields, db, meeting_id)
+
     try:
         from jinja2 import Environment, FileSystemLoader
         from playwright.sync_api import sync_playwright
     except ImportError:
         logger.warning("playwright 또는 jinja2 미설치 — reportlab 폴백")
         from app.domains.action.minutes_pipeline import fallback_renderer
-        return fallback_renderer.render(fields)
+        return fallback_renderer.render(fields, db=db, meeting_id=meeting_id)
 
     reg_url, bold_url = _get_font_urls()
+
+    # action_items 문자열을 줄 단위로 분리해 결정사항과 동일한 row 구조로 렌더링
+    _action_lines = [r for r in _strip_list_markers(fields.action_items).split("\n") if (r or "").strip()]
+    while len(_action_lines) < 3:
+        _action_lines.append("")
+    action_rows = [_md_to_html(r) if (r or "").strip() else "" for r in _action_lines]
+
+    _author_full = " ".join(p for p in [fields.dept.strip(), fields.author.strip()] if p)
 
     ctx = dict(
         reg_font_url=reg_url,
         bold_font_url=bold_url,
-        datetime=fields.datetime,
-        dept=fields.dept,
-        author=fields.author,
-        attendees=fields.attendees,
+        datetime=_md_to_html(fields.datetime),
+        author_full=_md_to_html(_author_full),
+        attendees=_md_to_html(fields.attendees),
         agenda_items=_md_to_html(fields.agenda_items),
         discussion_content=_md_to_html(fields.discussion_content),
-        decision_rows=[_md_to_html_row(r) for r in fields.decision_rows],
-        action_items=_md_to_html(fields.action_items),
+        decision_rows=[
+            _md_to_html(_strip_list_markers(r)) if (r or "").strip() else ""
+            for r in fields.decision_rows
+        ],
+        action_rows=action_rows,
+        action_items=_md_to_html(_strip_list_markers(fields.action_items)),
         special_notes=_md_to_html(fields.special_notes),
         photo_urls=[_to_renderable_image_url(u) for u in fields.photo_urls if u],
     )
@@ -155,7 +179,8 @@ def render(fields: "MinuteFields") -> bytes:
         Path(__file__).parent.parent / "templates"
     )
     env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=False)
-    html_str = env.get_template("meeting_minutes.html").render(**ctx)
+    template_file = _TEMPLATE_MAP.get(template_name, "meeting_minutes.html")
+    html_str = env.get_template(template_file).render(**ctx)
 
     try:
         with sync_playwright() as pw:
@@ -178,7 +203,7 @@ def render(fields: "MinuteFields") -> bytes:
     except Exception as exc:
         logger.warning("Playwright PDF 렌더링 실패 — reportlab 폴백: %s", exc)
         from app.domains.action.minutes_pipeline import fallback_renderer
-        return fallback_renderer.render(fields)
+        return fallback_renderer.render(fields, db=db, meeting_id=meeting_id)
 
 
 def preview_from_pdf_bytes(

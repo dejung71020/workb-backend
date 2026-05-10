@@ -1,6 +1,6 @@
 import logging
 from datetime import date
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status, UploadFile, File
 from sqlalchemy.orm import Session
@@ -94,18 +94,23 @@ def get_workspace_meetings_history(
     ),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    status: Literal["all", "scheduled", "done"] = Query(
+        "all",
+        description="상태 필터: all=전체(예정+완료), scheduled=예정만, done=완료만 (진행 중은 항상 제외)",
+    ),
 ):
     """
     회의 히스토리 검색:
 
     - meetings.title OR meeting_minutes.content/summary (outer join)
-    - scheduled_at 최신순
+    - ended_at → started_at 내림차순 (홈 대시보드와 동일 정렬)
     - page/size 페이징
     - participant_user_id: 선택 시 해당 참석자가 포함된 회의만
     - date: YYYY-MM-DD, 해당 일자에 일정이 걸린 회의만
+    - status: all(기본) | scheduled | done — in_progress는 항상 제외
     """
     return MeetingHistoryService.get_history(
-        db, workspace_id, keyword, page, size, participant_user_id, history_date
+        db, workspace_id, keyword, page, size, participant_user_id, history_date, status
     )
 
 

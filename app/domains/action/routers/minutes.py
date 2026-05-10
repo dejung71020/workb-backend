@@ -43,32 +43,6 @@ def _minutes_pdf_s3_key(meeting_id: int) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# 헬퍼                                                                         #
-# --------------------------------------------------------------------------- #
-
-def _enrich_fields_from_db(
-    fields: data_mapper.MinuteFields,
-    db: Session,
-    meeting_id: int,
-) -> data_mapper.MinuteFields:
-    meeting_row = action_repo.get_meeting(db, meeting_id)
-    if not meeting_row:
-        return fields
-    if not fields.datetime:
-        dt_obj = meeting_row.started_at or meeting_row.scheduled_at
-        if dt_obj:
-            fields.datetime = dt_obj.strftime("%Y년 %m월 %d일 %H:%M")
-    if not fields.dept or not fields.author:
-        user = action_repo.get_user(db, meeting_row.created_by)
-        if user:
-            if not fields.dept:
-                fields.dept = minutes_repo.get_dept_name(db, user, int(meeting_row.workspace_id))
-            if not fields.author:
-                fields.author = user.name
-    return fields
-
-
-# --------------------------------------------------------------------------- #
 # 회의록 생성 (마크다운 텍스트)                                                #
 # --------------------------------------------------------------------------- #
 
@@ -139,7 +113,9 @@ async def view_minutes(
     minute = action_repo.get_meeting_minute(db, meeting_id)
     if not minute or not minute.content:
         raise HTTPException(status_code=404, detail="회의록이 없습니다.")
-    html_body = markdown.markdown(minute.content, extensions=["tables", "fenced_code"])
+    html_body = markdown.markdown(
+        minute.content, extensions=["tables", "nl2br", "fenced_code"]
+    )
     return f"<html><body style='max-width:800px;margin:auto;padding:2rem'>{html_body}</body></html>"
 
 
@@ -180,7 +156,6 @@ async def preview_minutes_pdf(
     # ── 회의 데이터 수집 ─────────────────────────────────────────────
     if body and body.field_values:
         fields = data_mapper.from_explicit(body.field_values)
-        fields = _enrich_fields_from_db(fields, db, meeting_id)
     else:
         minute = action_repo.get_meeting_minute(db, meeting_id)
         if not minute:
@@ -215,6 +190,8 @@ async def preview_minutes_pdf(
                 dept_name=dept_name,
             )
 
+    fields = data_mapper.enrich_minute_fields_from_db(fields, db, meeting_id)
+
     photos = action_repo.get_meeting_minute_photos(db, meeting_id)
     fields.photo_urls = [
         resolve_minute_photo_url(str(p.photo_url)) for p in photos if p.photo_url
@@ -225,18 +202,16 @@ async def preview_minutes_pdf(
     pdf_bytes: bytes
 
     try:
-        logger.info("PDF 생성 시작 (meeting_id=%d, render_mode=html)", meeting_id)
+        logger.info("PDF 생성 시작 (meeting_id=%d)", meeting_id)
         pdf_bytes = await loop.run_in_executor(
-            None, lambda: pdf_renderer.render(fields)
+            None,
+            lambda f=fields, d=db, mid=meeting_id: pdf_renderer.render(f, db=d, meeting_id=mid),
         )
     except Exception as exc:
         logger.error("PDF 생성 오류 (meeting_id=%d): %s", meeting_id, exc)
         raise HTTPException(status_code=500, detail=f"PDF 생성에 실패했습니다: {exc}") from exc
 
-    logger.info(
-        "PDF 생성 완료 (meeting_id=%d, render_mode=html)",
-        meeting_id,
-    )
+    logger.info("PDF 생성 완료 (meeting_id=%d)", meeting_id)
 
     try:
         upload_fileobj_to_s3(
@@ -246,17 +221,18 @@ async def preview_minutes_pdf(
         )
         preview_pngs = await loop.run_in_executor(
             None,
-            lambda: pdf_renderer.preview_from_pdf_bytes(pdf_bytes, [0], dpi=150),
+            lambda: pdf_renderer.preview_from_pdf_bytes(pdf_bytes, dpi=150),
         )
     except Exception as exc:
         logger.error("PDF 저장/미리보기 오류 (meeting_id=%d): %s", meeting_id, exc)
         raise HTTPException(status_code=500, detail=f"PDF 생성에 실패했습니다: {exc}") from exc
 
     pdf_width, pdf_height = pdf_renderer.get_pdf_page_size(pdf_bytes)
-    preview_b64 = base64.b64encode(preview_pngs[0]).decode()
+    preview_pages = [base64.b64encode(p).decode() for p in preview_pngs]
 
     return MinutesPdfPreviewResponse(
-        preview_b64=preview_b64,
+        preview_b64=preview_pages[0] if preview_pages else "",
+        preview_pages=preview_pages,
         field_coords={},
         field_values=fields.to_field_values(),
         pdf_width=pdf_width,

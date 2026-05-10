@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 import json as _json
 
 from app.utils.time_utils import KST
+from app.domains.action import mongo_repository as mongo_repo
 from app.domains.meeting.models import (
     DiarizationMethod,
     Meeting,
@@ -717,6 +718,7 @@ class MeetingHistoryService:
         size: int,
         participant_user_id: int | None = None,
         on_date: date | None = None,
+        status_filter: str = "all",
     ) -> MeetingHistoryResponse:
         page = max(int(page), 1)
         size = max(min(int(size), 100), 1)
@@ -729,6 +731,7 @@ class MeetingHistoryService:
             size=size,
             participant_user_id=participant_user_id,
             on_date=on_date,
+            status_filter=status_filter,
         )
 
         m_ids = [int(m.id) for m, _ in rows]
@@ -806,8 +809,17 @@ class MeetingDetailService:
             .first()
         )
 
+        # 발화(전사)가 없으면 key_points 요약도 사실 근거가 없을 수 있어 노출하지 않는다.
+        try:
+            utterance_rows = mongo_repo.get_meeting_utterances(meeting_id)
+        except Exception:
+            utterance_rows = []
+        has_transcript = any(
+            (u.get("content") or "").strip() for u in utterance_rows
+        )
+
         summary_text = None
-        if minute and minute.summary:
+        if minute and minute.summary and has_transcript:
             try:
                 parsed = _json.loads(minute.summary)
                 key_points = parsed.get("key_points", [])
